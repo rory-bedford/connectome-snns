@@ -19,10 +19,11 @@
   - `uv ruff format .` (format)
 
 
+
 ## Key Patterns & Conventions
 - Follow modular design: keep data processing, model definition, and training logic in separate files.
 - Use Google-style docstrings for all functions and classes to ensure research reproducibility and clarity.
-- Prefer configuration-driven workflows (see `config/`).
+- Static typing is used frequently throughout the codebase; annotate functions and variables with type hints.
 
 ## Workflows
 - Notebooks in `notebooks/` are used for exploratory analysis and prototyping.
