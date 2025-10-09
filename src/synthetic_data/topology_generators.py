@@ -12,13 +12,17 @@ Typical workflow:
 import numpy as np
 from numpy.typing import NDArray
 
+# Type aliases for clarity
+IntArray = NDArray[np.int_]
+BoolArray = NDArray[np.bool_]
+
 
 def sparse_graph_generator(
     n_nodes: int,
     p: float,
     p_exc: float = 0.8,
     seed: int | None = None,
-) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
+) -> tuple[IntArray, IntArray]:
     """
     Generate a sparse random graph using the Erdos-Renyi model with neuron types.
 
@@ -32,7 +36,7 @@ def sparse_graph_generator(
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
-        tuple[NDArray[np.int_], NDArray[np.int_]]: A tuple containing:
+        tuple[IntArray, IntArray]: A tuple containing:
             - Signed adjacency matrix of shape (n_nodes, n_nodes) with +1/-1 values.
             - Neuron types array of shape (n_nodes,) with +1 (excitatory) or -1 (inhibitory).
     """
@@ -58,7 +62,7 @@ def dense_graph_generator(
     n_nodes: int,
     p_exc: float = 0.8,
     seed: int | None = None,
-) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
+) -> tuple[IntArray, IntArray]:
     """
     Generate a fully connected (dense) graph with neuron types.
 
@@ -71,7 +75,7 @@ def dense_graph_generator(
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
-        tuple[NDArray[np.int_], NDArray[np.int_]]: A tuple containing:
+        tuple[IntArray, IntArray]: A tuple containing:
             - Signed adjacency matrix of shape (n_nodes, n_nodes) with +1/-1 values.
             - Neuron types array of shape (n_nodes,) with +1 (excitatory) or -1 (inhibitory).
     """
@@ -100,7 +104,7 @@ def assembly_generator(
     p_between: float,
     p_exc: float = 0.8,
     seed: int | None = None,
-) -> tuple[NDArray[np.int_], NDArray[np.int_]]:
+) -> tuple[IntArray, IntArray]:
     """
     Generate a graph with assembly structure and neuron types.
 
@@ -118,7 +122,7 @@ def assembly_generator(
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
-        tuple[NDArray[np.int_], NDArray[np.int_]]: A tuple containing:
+        tuple[IntArray, IntArray]: A tuple containing:
             - Signed adjacency matrix of shape (n_nodes, n_nodes) with +1/-1 values.
             - Neuron types array of shape (n_nodes,) with +1 (excitatory) or -1 (inhibitory).
     """

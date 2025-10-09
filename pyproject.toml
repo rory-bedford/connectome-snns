@@ -5,8 +5,14 @@ description = "Research code modellnig connectome-constrained neural network dyn
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.7",
     "numpy>=2.3.3",
 ]
+
+[build-system]
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 cpu = [
