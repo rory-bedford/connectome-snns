@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Research code modellnig connectome-constrained neural network dynamics with PyTorch"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.3.3",
+]
 
 [project.optional-dependencies]
 cpu = [
@@ -43,3 +45,8 @@ explicit = true
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+]
