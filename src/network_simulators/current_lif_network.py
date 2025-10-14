@@ -34,28 +34,25 @@ class CurrentLIFNetwork(nn.Module):
         # Load all parameters from CSV
         params = load_params_from_csv(csv_path)
 
-        # Extract shape information before conversion
-        self.n_neurons = neuron_types.shape[0]
-        if feedforward_weights is not None:
-            self.n_inputs = feedforward_weights.shape[0]
-
         # Basic assertions
         assert neuron_types.ndim == 1
         assert recurrent_weights.ndim == 2
         assert recurrent_weights.shape[0] == recurrent_weights.shape[1]
         assert neuron_types.shape[0] == recurrent_weights.shape[0]
+
         if feedforward_weights is not None:
             assert feedforward_weights.ndim == 2
-            assert feedforward_weights.shape[1] == self.n_neurons
-        assert np.all((neuron_types == 1) | (neuron_types == -1))
+            assert feedforward_weights.shape[1] == neuron_types.shape[0]
 
-        exc_indices = torch.where(torch.from_numpy(neuron_types) == 1)[0]
-        inh_indices = torch.where(torch.from_numpy(neuron_types) == -1)[0]
+        # Extract indices before registering them
+        exc_indices = torch.from_numpy(np.where(neuron_types == 1)[0]).long()
+        inh_indices = torch.from_numpy(np.where(neuron_types == -1)[0]).long()
 
         # Register network structure
+        self.register_buffer("neuron_types", torch.from_numpy(neuron_types).long())
         self.register_buffer("exc_indices", exc_indices)
         self.register_buffer("inh_indices", inh_indices)
-        self.register_buffer("n_neurons", torch.tensor(self.n_neurons))
+        self.register_buffer("n_neurons", torch.tensor(neuron_types.shape[0]))
         self.register_buffer(
             "recurrent_weights", torch.from_numpy(recurrent_weights).float()
         )
@@ -63,7 +60,7 @@ class CurrentLIFNetwork(nn.Module):
             self.register_buffer(
                 "feedforward_weights", torch.from_numpy(feedforward_weights).float()
             )
-            self.register_buffer("n_inputs", torch.tensor(self.n_inputs))
+            self.register_buffer("n_inputs", torch.tensor(feedforward_weights.shape[0]))
         else:
             self.feedforward_weights = None
             self.n_inputs = None
@@ -88,8 +85,8 @@ class CurrentLIFNetwork(nn.Module):
 
     def initialise_parameters(
         self,
-        E_weight: float = 1.0,
-        I_weight: float = 1.0,
+        E_weight: float,
+        I_weight: float,
     ):
         """
         Initialize optimisable parameters.
@@ -131,28 +128,44 @@ class CurrentLIFNetwork(nn.Module):
     def forward(
         self,
         n_steps: int,
+        inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
         initial_I: FloatArray | None = None,
-        inputs: FloatArray | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate the network for a given number of time steps.
 
         Args:
             n_steps (int): Number of time steps to simulate.
+            inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batches, n_neurons). Defaults to zeros.
             initial_I (FloatArray | None): Initial synaptic currents of shape (batches, n_neurons). Defaults to zeros.
-            inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
 
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Spike trains, voltages, and currents.
         """
 
-        # Create default initial conditions if not provided
+        # Default initial states to zero if not provided
         if initial_v is None:
-            initial_v = torch.zeros((1, self.n_neurons), dtype=torch.float32)
+            initial_v = torch.zeros(
+                (1, self.n_neurons), dtype=torch.float32, device=self.device
+            )
+        else:
+            initial_v = torch.as_tensor(
+                initial_v, dtype=torch.float32, device=self.device
+            )
+
         if initial_I is None:
-            initial_I = torch.zeros((1, self.n_neurons), dtype=torch.float32)
+            initial_I = torch.zeros(
+                (1, self.n_neurons), dtype=torch.float32, device=self.device
+            )
+        else:
+            initial_I = torch.as_tensor(
+                initial_I, dtype=torch.float32, device=self.device
+            )
+
+        if inputs is not None:
+            inputs = torch.as_tensor(inputs, dtype=torch.float32, device=self.device)
 
         batch_size = initial_v.shape[0]
 
@@ -176,8 +189,8 @@ class CurrentLIFNetwork(nn.Module):
         v_inh = initial_v[:, self.inh_indices]
         I_exc = initial_I[:, self.exc_indices]
         I_inh = initial_I[:, self.inh_indices]
-        s_inh = torch.zeros((batch_size, self.I_inh.shape[0]), device=self.device)
-        s_exc = torch.zeros((batch_size, self.I_exc.shape[0]), device=self.device)
+        s_inh = torch.zeros((batch_size, len(self.inh_indices)), device=self.device)
+        s_exc = torch.zeros((batch_size, len(self.exc_indices)), device=self.device)
 
         # Preallocate output tensors
         all_v = torch.zeros((batch_size, n_steps, self.n_neurons), device=self.device)
@@ -186,20 +199,26 @@ class CurrentLIFNetwork(nn.Module):
 
         # Run simulation
         for t in range(n_steps):
-            # Update membrane potentials
+            # Update membrane potentials (without reset)
             v_exc = (
                 self.U_rest_exc  # Resting potential
                 + (v_exc - self.U_rest_exc) * self.beta_exc  # Leak
                 + I_exc * self.R_exc * (1 - self.beta_exc)  # Input current
-                + s_exc * (v_exc - self.U_rest_exc)  # Reset
             )
 
             v_inh = (
                 self.U_rest_inh  # Resting potential
                 + (v_inh - self.U_rest_inh) * self.beta_inh  # Leak
                 + I_inh * self.R_inh * (1 - self.beta_inh)  # Input current
-                + s_inh * (v_inh - self.U_rest_inh)  # Reset
             )
+
+            # Generate spikes based on threshold
+            s_exc = (v_exc >= self.theta_exc).float()
+            s_inh = (v_inh >= self.theta_inh).float()
+
+            # Reset neurons that spiked
+            v_exc = v_exc * (1 - s_exc) + self.U_rest_exc * s_exc
+            v_inh = v_inh * (1 - s_inh) + self.U_rest_inh * s_inh
 
             # Update synaptic currents
             I_exc = (
@@ -236,10 +255,6 @@ class CurrentLIFNetwork(nn.Module):
                     I_inh
                     + inputs[:, t, :] @ self.feedforward_weights[:, self.inh_indices]
                 )
-
-            # Generate spikes
-            s_exc = (v_exc >= self.theta_exc).float()
-            s_inh = (v_inh >= self.theta_inh).float()
 
             # Store results
             all_v[:, t, self.exc_indices] = v_exc
