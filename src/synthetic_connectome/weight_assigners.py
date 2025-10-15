@@ -6,9 +6,9 @@ Separate parameters can be specified for excitatory vs inhibitory connections.
 
 Typical workflow:
     >>> from src.utils.topology_generators import sparse_graph_generator
-    >>> connectivity_graph, neuron_types = sparse_graph_generator(n_nodes=100, p=0.1)
-    >>> weights = assign_weights_lognormal(connectivity_graph, neuron_types, E_mean=0.0, E_std=1.0,
-    ...                                     I_mean=0.5, I_std=0.8)
+    >>> connectivity_graph, neuron_types = sparse_graph_generator(num_neurons=100, p=0.1)
+    >>> weights = assign_weights_lognormal(connectivity_graph, neuron_types, w_mu_E=0.0, w_sigma_E=1.0,
+    ...                                     w_mu_I=0.5, w_sigma_I=0.8)
 """
 
 import numpy as np
@@ -22,10 +22,10 @@ FloatArray = NDArray[np.float64]
 def assign_weights_lognormal(
     connectivity_graph: IntArray,
     neuron_types: IntArray,
-    E_mean: float = 0.0,
-    E_std: float = 1.0,
-    I_mean: float = 0.0,
-    I_std: float = 1.0,
+    w_mu_E: float = 0.0,
+    w_sigma_E: float = 1.0,
+    w_mu_I: float = 0.0,
+    w_sigma_I: float = 1.0,
     seed: int | None = None,
 ) -> FloatArray:
     """
@@ -38,10 +38,10 @@ def assign_weights_lognormal(
     Args:
         connectivity_graph (IntArray): Signed adjacency matrix with +1/-1 values for edges.
         neuron_types (IntArray): Neuron types array with +1 (excitatory) or -1 (inhibitory).
-        E_mean (float): Mean of underlying normal for excitatory connections. Defaults to 0.0.
-        E_std (float): Std of underlying normal for excitatory connections. Defaults to 1.0.
-        I_mean (float): Mean of underlying normal for inhibitory connections. Defaults to 0.0.
-        I_std (float): Std of underlying normal for inhibitory connections. Defaults to 1.0.
+        w_mu_E (float): Mean of underlying normal for excitatory connections. Defaults to 0.0.
+        w_sigma_E (float): Std of underlying normal for excitatory connections. Defaults to 1.0.
+        w_mu_I (float): Mean of underlying normal for inhibitory connections. Defaults to 0.0.
+        w_sigma_I (float): Std of underlying normal for inhibitory connections. Defaults to 1.0.
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
@@ -65,12 +65,12 @@ def assign_weights_lognormal(
 
     # Generate weights for excitatory connections
     if n_E_edges > 0:
-        E_weights = rng.lognormal(E_mean, E_std, size=n_E_edges)
+        E_weights = rng.lognormal(w_mu_E, w_sigma_E, size=n_E_edges)
         W[E_edges] = E_weights
 
     # Generate weights for inhibitory connections (negative)
     if n_I_edges > 0:
-        I_weights = rng.lognormal(I_mean, I_std, size=n_I_edges)
+        I_weights = rng.lognormal(w_mu_I, w_sigma_I, size=n_I_edges)
         W[I_edges] = -I_weights
 
     return W

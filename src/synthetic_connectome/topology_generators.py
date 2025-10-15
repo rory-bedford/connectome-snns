@@ -4,12 +4,12 @@ This module provides functions to generate binary adjacency matrices with
 excitatory (+1) and inhibitory (-1) neuron types following Dale's law.
 
 Typical workflow:
-    >>> adj, types = sparse_graph_generator(n_nodes=100, p=0.1, p_exc=0.8)
+    >>> adj, types = sparse_graph_generator(num_neurons=100, p=0.1, p_E=0.8)
     >>> # adj is a signed adjacency matrix with +1/-1 values
     >>> # types is an array of neuron types (+1 or -1)
 
     >>> # For feedforward connections:
-    >>> adj, types = sparse_graph_generator(n_nodes=(100, 50), p=0.1, p_exc=0.8)
+    >>> adj, types = sparse_graph_generator(num_neurons=(100, 50), p=0.1, p_E=0.8)
     >>> # adj is a (100, 50) matrix, types has shape (100,)
 """
 
@@ -22,9 +22,9 @@ BoolArray = NDArray[np.bool_]
 
 
 def sparse_graph_generator(
-    n_nodes: int | tuple[int, int],
+    num_neurons: int | tuple[int, int],
     p: float,
-    p_exc: float,
+    p_E: float,
     seed: int | None = None,
 ) -> tuple[IntArray, IntArray]:
     """
@@ -34,11 +34,11 @@ def sparse_graph_generator(
     Neurons are assigned as excitatory (+1) or inhibitory (-1) following Dale's law.
 
     Args:
-        n_nodes (int | tuple[int, int]): Number of nodes in the graph. If int, creates
-            a square (n_nodes, n_nodes) matrix. If tuple (n_source, n_target), creates
+        num_neurons (int | tuple[int, int]): Number of nodes in the graph. If int, creates
+            a square (num_neurons, num_neurons) matrix. If tuple (n_source, n_target), creates
             a rectangular (n_source, n_target) matrix for feedforward connections.
         p (float): Probability of edge creation between any two nodes.
-        p_exc (float): Proportion of excitatory neurons.
+        p_E (float): Proportion of excitatory neurons.
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
@@ -48,11 +48,11 @@ def sparse_graph_generator(
     """
     rng = np.random.default_rng(seed)
 
-    # Parse n_nodes into source and target dimensions
-    if isinstance(n_nodes, int):
-        n_source = n_target = n_nodes
+    # Parse num_neurons into source and target dimensions
+    if isinstance(num_neurons, int):
+        n_source = n_target = num_neurons
     else:
-        n_source, n_target = n_nodes
+        n_source, n_target = num_neurons
 
     # Generate binary adjacency matrix
     adjacency = rng.random((n_source, n_target)) < p
@@ -63,7 +63,7 @@ def sparse_graph_generator(
 
     # Assign neuron types to source neurons
     neuron_types = np.ones(n_source, dtype=np.int_)
-    n_inh = int(n_source * (1 - p_exc))
+    n_inh = int(n_source * (1 - p_E))
     inh_idx = rng.choice(n_source, size=n_inh, replace=False)
     neuron_types[inh_idx] = -1
 
@@ -74,8 +74,8 @@ def sparse_graph_generator(
 
 
 def dense_graph_generator(
-    n_nodes: int | tuple[int, int],
-    p_exc: float,
+    num_neurons: int | tuple[int, int],
+    p_E: float,
     seed: int | None = None,
 ) -> tuple[IntArray, IntArray]:
     """
@@ -85,10 +85,10 @@ def dense_graph_generator(
     excitatory (+1) or inhibitory (-1) following Dale's law.
 
     Args:
-        n_nodes (int | tuple[int, int]): Number of nodes in the graph. If int, creates
-            a square (n_nodes, n_nodes) matrix. If tuple (n_source, n_target), creates
+        num_neurons (int | tuple[int, int]): Number of nodes in the graph. If int, creates
+            a square (num_neurons, num_neurons) matrix. If tuple (n_source, n_target), creates
             a rectangular (n_source, n_target) matrix for feedforward connections.
-        p_exc (float): Proportion of excitatory neurons.
+        p_E (float): Proportion of excitatory neurons.
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
@@ -98,11 +98,11 @@ def dense_graph_generator(
     """
     rng = np.random.default_rng(seed)
 
-    # Parse n_nodes into source and target dimensions
-    if isinstance(n_nodes, int):
-        n_source = n_target = n_nodes
+    # Parse num_neurons into source and target dimensions
+    if isinstance(num_neurons, int):
+        n_source = n_target = num_neurons
     else:
-        n_source, n_target = n_nodes
+        n_source, n_target = num_neurons
 
     # Generate fully connected adjacency matrix
     adjacency = np.ones((n_source, n_target), dtype=np.bool_)
@@ -113,7 +113,7 @@ def dense_graph_generator(
 
     # Assign neuron types to source neurons
     neuron_types = np.ones(n_source, dtype=np.int_)
-    n_inh = int(n_source * (1 - p_exc))
+    n_inh = int(n_source * (1 - p_E))
     inh_idx = rng.choice(n_source, size=n_inh, replace=False)
     neuron_types[inh_idx] = -1
 
@@ -124,11 +124,11 @@ def dense_graph_generator(
 
 
 def assembly_generator(
-    n_nodes: int | tuple[int, int],
-    n_assemblies: int,
+    num_neurons: int | tuple[int, int],
+    num_assemblies: int,
     p_within: float,
     p_between: float,
-    p_exc: float,
+    p_E: float,
     seed: int | None = None,
 ) -> tuple[IntArray, IntArray]:
     """
@@ -143,13 +143,13 @@ def assembly_generator(
     source neurons. Target neurons do not have assembly structure.
 
     Args:
-        n_nodes (int | tuple[int, int]): Number of nodes in the graph. If int, creates
-            a square (n_nodes, n_nodes) matrix. If tuple (n_source, n_target), creates
+        num_neurons (int | tuple[int, int]): Number of nodes in the graph. If int, creates
+            a square (num_neurons, num_neurons) matrix. If tuple (n_source, n_target), creates
             a rectangular (n_source, n_target) matrix for feedforward connections.
-        n_assemblies (int): Number of assemblies to create (only applies to source neurons).
+        num_assemblies (int): Number of assemblies to create (only applies to source neurons).
         p_within (float): Probability of connection within the same assembly.
         p_between (float): Probability of connection between different assemblies.
-        p_exc (float): Proportion of excitatory neurons.
+        p_E (float): Proportion of excitatory neurons.
         seed (int | None): Random seed for reproducibility. Defaults to None.
 
     Returns:
@@ -157,19 +157,19 @@ def assembly_generator(
             - Signed adjacency matrix of shape (n_source, n_target) with +1/-1 values.
             - Neuron types array of shape (n_source,) with +1 (excitatory) or -1 (inhibitory).
     """
-    # Parse n_nodes into source and target dimensions
-    if isinstance(n_nodes, int):
-        n_source = n_target = n_nodes
+    # Parse num_neurons into source and target dimensions
+    if isinstance(num_neurons, int):
+        n_source = n_target = num_neurons
     else:
-        n_source, n_target = n_nodes
+        n_source, n_target = num_neurons
 
-    if n_assemblies > n_source:
+    if num_assemblies > n_source:
         raise ValueError("Number of assemblies cannot exceed number of source nodes.")
 
     rng = np.random.default_rng(seed)
 
     # Assign source nodes to assemblies (roughly equal sizes)
-    assembly_assignments = np.array_split(np.arange(n_source), n_assemblies)
+    assembly_assignments = np.array_split(np.arange(n_source), num_assemblies)
 
     # Initialize adjacency matrix
     adjacency = np.zeros((n_source, n_target), dtype=np.bool_)
@@ -195,7 +195,7 @@ def assembly_generator(
                 )
             else:
                 # For feedforward, assign target nodes to assemblies based on index
-                assembly_j = j * n_assemblies // n_target
+                assembly_j = j * num_assemblies // n_target
 
             # Choose probability based on whether nodes are in same assembly
             p = p_within if assembly_i == assembly_j else p_between
@@ -206,7 +206,7 @@ def assembly_generator(
 
     # Assign neuron types to source neurons
     neuron_types = np.ones(n_source, dtype=np.int_)
-    n_inh = int(n_source * (1 - p_exc))
+    n_inh = int(n_source * (1 - p_E))
     inh_idx = rng.choice(n_source, size=n_inh, replace=False)
     neuron_types[inh_idx] = -1
 
