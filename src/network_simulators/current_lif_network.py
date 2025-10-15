@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from numpy.typing import NDArray
 from pathlib import Path
+from tqdm import tqdm
 from network_simulators.current_lif_io import load_params_from_csv, export_params_to_csv
 
 # Type aliases for clarity
@@ -92,8 +93,8 @@ class CurrentLIFNetwork(nn.Module):
         Initialize optimisable parameters.
 
         Args:
-            E_weight (float): Scaling factor for excitatory weights (pA/voxel). Defaults to 1.0.
-            I_weight (float): Scaling factor for inhibitory weights (pA/voxel). Defaults to 1.0.
+            E_weight (float): Scaling factor for excitatory weights (pA/voxel).
+            I_weight (float): Scaling factor for inhibitory weights (pA/voxel).
         """
         assert E_weight > 0, "E_weight must be positive"
         assert I_weight > 0, "I_weight must be positive"
@@ -198,31 +199,31 @@ class CurrentLIFNetwork(nn.Module):
         all_s = torch.zeros((batch_size, n_steps, self.n_neurons), device=self.device)
 
         # Run simulation
-        for t in range(n_steps):
+        for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Update membrane potentials (without reset)
             v_exc = (
-                self.U_rest_exc  # Resting potential
-                + (v_exc - self.U_rest_exc) * self.beta_exc  # Leak
-                + I_exc * self.R_exc * (1 - self.beta_exc)  # Input current
+                self.U_rest_E  # Resting potential
+                + (v_exc - self.U_rest_E) * self.beta_E  # Leak
+                + I_exc * self.R_E * (1 - self.beta_E)  # Input current
             )
 
             v_inh = (
-                self.U_rest_inh  # Resting potential
-                + (v_inh - self.U_rest_inh) * self.beta_inh  # Leak
-                + I_inh * self.R_inh * (1 - self.beta_inh)  # Input current
+                self.U_rest_I  # Resting potential
+                + (v_inh - self.U_rest_I) * self.beta_I  # Leak
+                + I_inh * self.R_I * (1 - self.beta_I)  # Input current
             )
 
             # Generate spikes based on threshold
-            s_exc = (v_exc >= self.theta_exc).float()
-            s_inh = (v_inh >= self.theta_inh).float()
+            s_exc = (v_exc >= self.theta_E).float()
+            s_inh = (v_inh >= self.theta_I).float()
 
             # Reset neurons that spiked
-            v_exc = v_exc * (1 - s_exc) + self.U_rest_exc * s_exc
-            v_inh = v_inh * (1 - s_inh) + self.U_rest_inh * s_inh
+            v_exc = v_exc * (1 - s_exc) + self.U_rest_E * s_exc
+            v_inh = v_inh * (1 - s_inh) + self.U_rest_I * s_inh
 
             # Update synaptic currents
             I_exc = (
-                I_exc * self.alpha_exc  # Decay
+                I_exc * self.alpha_E  # Decay
                 + s_exc
                 @ self.scaled_recurrent_weights[
                     self.exc_indices[:, None], self.exc_indices
@@ -234,7 +235,7 @@ class CurrentLIFNetwork(nn.Module):
             )
 
             I_inh = (
-                I_inh * self.alpha_inh  # Decay
+                I_inh * self.alpha_I  # Decay
                 + s_exc
                 @ self.scaled_recurrent_weights[
                     self.exc_indices[:, None], self.inh_indices

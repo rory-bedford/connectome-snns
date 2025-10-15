@@ -21,3 +21,7 @@ uv sync --extra gpu
 
 For development purposes, we use a pre-commit hook that runs the [ruff](https://docs.astral.sh/ruff/) linter and formatter to ensure code quality and consistency before each commit.
 For this to work please run `uv run pre-commit install` after cloning the repository.
+
+## Notebooks
+
+We recommend running the Jupyter notebooks to repeat these experiments. See the README in the notebooks/ folder for an overview of what's there.

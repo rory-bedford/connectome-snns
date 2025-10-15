@@ -16,25 +16,25 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
         Dictionary of parameter names to torch tensors
     """
     params = pd.read_csv(csv_path, comment="#")
-    param_dict = dict(zip(params["parameter"], params["value"]))
+    param_dict = dict(zip(params["symbol"], params["value"]))
 
     # Validate that all required parameters are present
     required_params = [
-        "simulation_timestep",
-        "membrane_time_constant_exc",
-        "membrane_time_constant_inh",
-        "synaptic_time_constant_exc",
-        "synaptic_time_constant_inh",
-        "membrane_resistance_exc",
-        "membrane_resistance_inh",
-        "resting_potential_exc",
-        "resting_potential_inh",
-        "spike_threshold_exc",
-        "spike_threshold_inh",
-        "reset_potential_exc",
-        "reset_potential_inh",
-        "refractory_period_exc",
-        "refractory_period_inh",
+        "delta_t",
+        "tau_mem_E",
+        "tau_mem_I",
+        "tau_syn_E",
+        "tau_syn_I",
+        "R_E",
+        "R_I",
+        "U_rest_E",
+        "U_rest_I",
+        "theta_E",
+        "theta_I",
+        "U_reset_E",
+        "U_reset_I",
+        "tau_ref_E",
+        "tau_ref_I",
     ]
 
     missing_params = [p for p in required_params if p not in param_dict]
@@ -61,28 +61,28 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
 
     # Convert to tensors with proper units (ms -> s where needed)
     processed = {
-        "dt": torch.tensor(param_dict["simulation_timestep"] * 1e-3),
-        "tau_mem_exc": torch.tensor(param_dict["membrane_time_constant_exc"] * 1e-3),
-        "tau_mem_inh": torch.tensor(param_dict["membrane_time_constant_inh"] * 1e-3),
-        "tau_syn_exc": torch.tensor(param_dict["synaptic_time_constant_exc"] * 1e-3),
-        "tau_syn_inh": torch.tensor(param_dict["synaptic_time_constant_inh"] * 1e-3),
-        "R_exc": torch.tensor(param_dict["membrane_resistance_exc"]),
-        "R_inh": torch.tensor(param_dict["membrane_resistance_inh"]),
-        "U_rest_exc": torch.tensor(param_dict["resting_potential_exc"]),
-        "U_rest_inh": torch.tensor(param_dict["resting_potential_inh"]),
-        "theta_exc": torch.tensor(param_dict["spike_threshold_exc"]),
-        "theta_inh": torch.tensor(param_dict["spike_threshold_inh"]),
-        "U_reset_exc": torch.tensor(param_dict["reset_potential_exc"]),
-        "U_reset_inh": torch.tensor(param_dict["reset_potential_inh"]),
-        "tau_ref_exc": torch.tensor(param_dict["refractory_period_exc"] * 1e-3),
-        "tau_ref_inh": torch.tensor(param_dict["refractory_period_inh"] * 1e-3),
+        "dt": torch.tensor(param_dict["delta_t"] * 1e-3),
+        "tau_mem_E": torch.tensor(param_dict["tau_mem_E"] * 1e-3),
+        "tau_mem_I": torch.tensor(param_dict["tau_mem_I"] * 1e-3),
+        "tau_syn_E": torch.tensor(param_dict["tau_syn_E"] * 1e-3),
+        "tau_syn_I": torch.tensor(param_dict["tau_syn_I"] * 1e-3),
+        "R_E": torch.tensor(param_dict["R_E"]),
+        "R_I": torch.tensor(param_dict["R_I"]),
+        "U_rest_E": torch.tensor(param_dict["U_rest_E"]),
+        "U_rest_I": torch.tensor(param_dict["U_rest_I"]),
+        "theta_E": torch.tensor(param_dict["theta_E"]),
+        "theta_I": torch.tensor(param_dict["theta_I"]),
+        "U_reset_E": torch.tensor(param_dict["U_reset_E"]),
+        "U_reset_I": torch.tensor(param_dict["U_reset_I"]),
+        "tau_ref_E": torch.tensor(param_dict["tau_ref_E"] * 1e-3),
+        "tau_ref_I": torch.tensor(param_dict["tau_ref_I"] * 1e-3),
     }
 
     # Precompute decay factors
-    processed["alpha_exc"] = torch.exp(-processed["dt"] / processed["tau_syn_exc"])
-    processed["alpha_inh"] = torch.exp(-processed["dt"] / processed["tau_syn_inh"])
-    processed["beta_exc"] = torch.exp(-processed["dt"] / processed["tau_mem_exc"])
-    processed["beta_inh"] = torch.exp(-processed["dt"] / processed["tau_mem_inh"])
+    processed["alpha_E"] = torch.exp(-processed["dt"] / processed["tau_syn_E"])
+    processed["alpha_I"] = torch.exp(-processed["dt"] / processed["tau_syn_I"])
+    processed["beta_E"] = torch.exp(-processed["dt"] / processed["tau_mem_E"])
+    processed["beta_I"] = torch.exp(-processed["dt"] / processed["tau_mem_I"])
 
     return processed
 
@@ -99,55 +99,95 @@ def export_params_to_csv(network, csv_path: str | Path):
 
     # Build list of parameter rows
     rows = [
-        ["simulation_timestep", "delta_t", network.dt.item() * 1e3, "ms"],
+        ["delta_t", "ms", "Time resolution of the simulation", network.dt.item() * 1e3],
         [
-            "membrane_time_constant_exc",
-            "tau_mem_exc",
-            network.tau_mem_exc.item() * 1e3,
+            "tau_mem_E",
             "ms",
+            "Membrane time constant for excitatory neurons",
+            network.tau_mem_E.item() * 1e3,
         ],
         [
-            "membrane_time_constant_inh",
-            "tau_mem_inh",
-            network.tau_mem_inh.item() * 1e3,
+            "tau_mem_I",
             "ms",
+            "Membrane time constant for inhibitory neurons",
+            network.tau_mem_I.item() * 1e3,
         ],
         [
-            "synaptic_time_constant_exc",
-            "tau_syn_exc",
-            network.tau_syn_exc.item() * 1e3,
+            "tau_syn_E",
             "ms",
+            "Synaptic time constant for excitatory connections",
+            network.tau_syn_E.item() * 1e3,
         ],
         [
-            "synaptic_time_constant_inh",
-            "tau_syn_inh",
-            network.tau_syn_inh.item() * 1e3,
+            "tau_syn_I",
             "ms",
-        ],
-        ["membrane_resistance_exc", "R_exc", network.R_exc.item(), "MOhm"],
-        ["membrane_resistance_inh", "R_inh", network.R_inh.item(), "MOhm"],
-        ["resting_potential_exc", "U_rest_exc", network.U_rest_exc.item(), "mV"],
-        ["resting_potential_inh", "U_rest_inh", network.U_rest_inh.item(), "mV"],
-        ["spike_threshold_exc", "theta_exc", network.theta_exc.item(), "mV"],
-        ["spike_threshold_inh", "theta_inh", network.theta_inh.item(), "mV"],
-        ["reset_potential_exc", "U_reset_exc", network.U_reset_exc.item(), "mV"],
-        ["reset_potential_inh", "U_reset_inh", network.U_reset_inh.item(), "mV"],
-        [
-            "refractory_period_exc",
-            "tau_ref_exc",
-            network.tau_ref_exc.item() * 1e3,
-            "ms",
+            "Synaptic time constant for inhibitory connections",
+            network.tau_syn_I.item() * 1e3,
         ],
         [
-            "refractory_period_inh",
-            "tau_ref_inh",
-            network.tau_ref_inh.item() * 1e3,
+            "R_E",
+            "MOhm",
+            "Membrane resistance for excitatory neurons",
+            network.R_E.item(),
+        ],
+        [
+            "R_I",
+            "MOhm",
+            "Membrane resistance for inhibitory neurons",
+            network.R_I.item(),
+        ],
+        [
+            "U_rest_E",
+            "mV",
+            "Resting membrane potential for excitatory neurons",
+            network.U_rest_E.item(),
+        ],
+        [
+            "U_rest_I",
+            "mV",
+            "Resting membrane potential for inhibitory neurons",
+            network.U_rest_I.item(),
+        ],
+        [
+            "theta_E",
+            "mV",
+            "Spike threshold voltage for excitatory neurons",
+            network.theta_E.item(),
+        ],
+        [
+            "theta_I",
+            "mV",
+            "Spike threshold voltage for inhibitory neurons",
+            network.theta_I.item(),
+        ],
+        [
+            "U_reset_E",
+            "mV",
+            "Reset voltage after spike for excitatory neurons",
+            network.U_reset_E.item(),
+        ],
+        [
+            "U_reset_I",
+            "mV",
+            "Reset voltage after spike for inhibitory neurons",
+            network.U_reset_I.item(),
+        ],
+        [
+            "tau_ref_E",
             "ms",
+            "Refractory period for excitatory neurons",
+            network.tau_ref_E.item() * 1e3,
+        ],
+        [
+            "tau_ref_I",
+            "ms",
+            "Refractory period for inhibitory neurons",
+            network.tau_ref_I.item() * 1e3,
         ],
     ]
 
     # Create DataFrame
-    df = pd.DataFrame(rows, columns=["parameter", "symbol", "value", "unit"])
+    df = pd.DataFrame(rows, columns=["symbol", "unit", "description", "value"])
 
     # Write with comment header
     with open(csv_path, "w") as f:
