@@ -33,8 +33,6 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
         "theta_I",
         "U_reset_E",
         "U_reset_I",
-        "tau_ref_E",
-        "tau_ref_I",
     ]
 
     missing_params = [p for p in required_params if p not in param_dict]
@@ -74,8 +72,6 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
         "theta_I": torch.tensor(param_dict["theta_I"]),
         "U_reset_E": torch.tensor(param_dict["U_reset_E"]),
         "U_reset_I": torch.tensor(param_dict["U_reset_I"]),
-        "tau_ref_E": torch.tensor(param_dict["tau_ref_E"] * 1e-3),
-        "tau_ref_I": torch.tensor(param_dict["tau_ref_I"] * 1e-3),
     }
 
     # Precompute decay factors
@@ -171,18 +167,6 @@ def export_params_to_csv(network, csv_path: str | Path):
             "mV",
             "Reset voltage after spike for inhibitory neurons",
             network.U_reset_I.item(),
-        ],
-        [
-            "tau_ref_E",
-            "ms",
-            "Refractory period for excitatory neurons",
-            network.tau_ref_E.item() * 1e3,
-        ],
-        [
-            "tau_ref_I",
-            "ms",
-            "Refractory period for inhibitory neurons",
-            network.tau_ref_I.item() * 1e3,
         ],
     ]
 

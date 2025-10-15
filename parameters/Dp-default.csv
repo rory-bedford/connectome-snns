@@ -29,7 +29,6 @@ R_E,MOhm,Membrane resistance for excitatory neurons,740.74
 U_rest_E,mV,Resting membrane potential for excitatory neurons,-60
 theta_E,mV,Spike threshold voltage for excitatory neurons,-38
 U_reset_E,mV,Reset voltage after spike for excitatory neurons,-60
-tau_ref_E,ms,Refractory period for excitatory neurons,8
 # Neuron physiology parameters (inhibitory)
 tau_mem_I,ms,Membrane time constant for inhibitory neurons,50
 tau_syn_I,ms,Synaptic time constant for inhibitory connections,10
@@ -37,7 +36,6 @@ R_I,MOhm,Membrane resistance for inhibitory neurons,1111.11
 U_rest_I,mV,Resting membrane potential for inhibitory neurons,-60
 theta_I,mV,Spike threshold voltage for inhibitory neurons,-45
 U_reset_I,mV,Reset voltage after spike for inhibitory neurons,-60
-tau_ref_I,ms,Refractory period for inhibitory neurons,8
 # Optimisable parameters
 scaling_factor_E,pA/voxel,Scaling factor for excitatory weights,1e-2
 scaling_factor_I,pA/voxel,Scaling factor for inhibitory weights,1e-2

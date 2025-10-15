@@ -218,8 +218,8 @@ class CurrentLIFNetwork(nn.Module):
             s_inh = (v_inh >= self.theta_I).float()
 
             # Reset neurons that spiked
-            v_exc = v_exc * (1 - s_exc) + self.U_rest_E * s_exc
-            v_inh = v_inh * (1 - s_inh) + self.U_rest_I * s_inh
+            v_exc = v_exc * (1 - s_exc) + self.U_reset_E * s_exc
+            v_inh = v_inh * (1 - s_inh) + self.U_reset_I * s_inh
 
             # Update synaptic currents
             I_exc = (
