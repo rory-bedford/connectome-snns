@@ -288,10 +288,10 @@ pip install -e .
 ### 4. Run the experiment
 ```bash
 # Using the executable wrapper (recommended)
-./run_experiment {self.output_dir / "experiment.toml"}
+./run_experiment {(self.output_dir / "experiment.toml").absolute()}
 
 # Or using uv directly
-uv run python run_experiment.py {self.output_dir / "experiment.toml"}
+uv run python run_experiment.py {(self.output_dir / "experiment.toml").absolute()}
 ```
 
 **Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
