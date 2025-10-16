@@ -110,7 +110,9 @@ def plot_membrane_voltages(
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.show()
+        plt.close()
+    else:
+        plt.show()
 
 
 def plot_synaptic_currents(
@@ -237,4 +239,6 @@ def plot_synaptic_currents(
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.show()
+        plt.close()
+    else:
+        plt.show()

@@ -19,6 +19,8 @@ import toml
 import json
 import shutil
 import inspect
+import atexit
+import traceback
 from pathlib import Path
 from datetime import datetime
 
@@ -46,6 +48,9 @@ class ExperimentTracker:
         self.start_time = None
         self.git_info = None
         self.calling_script = None
+        self.output_dir = None
+        self.completed_successfully = False
+        self.initial_metadata = None
 
     def _load_config(self):
         """Load experiment configuration from TOML file."""
@@ -146,8 +151,8 @@ class ExperimentTracker:
         if not csv_path.exists():
             raise FileNotFoundError(f"Parameters CSV not found: {csv_path}")
 
-    def _create_metadata(self, end_time):
-        """Create metadata dictionary for the experiment."""
+    def _create_initial_metadata(self):
+        """Create initial metadata at experiment start."""
         return {
             "script": self.config["script"],
             "description": self.config.get("description", ""),
@@ -157,9 +162,16 @@ class ExperimentTracker:
             "git_branch": self.git_info["branch"],
             "git_remote_url": self.git_info["remote_url"],
             "start_time": self.start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "duration_seconds": (end_time - self.start_time).total_seconds(),
+            "status": "running",
         }
+
+    def _finalize_metadata(self, end_time, success=True):
+        """Finalize metadata with end time and status."""
+        metadata = self.initial_metadata.copy()
+        metadata["end_time"] = end_time.isoformat()
+        metadata["duration_seconds"] = (end_time - self.start_time).total_seconds()
+        metadata["status"] = "completed" if success else "failed"
+        return metadata
 
     def _log_metadata(self, metadata, log_file):
         """Append metadata to log file."""
@@ -171,6 +183,35 @@ class ExperimentTracker:
             f.write(json.dumps(metadata) + "\n")
 
         print(f"✓ Logged metadata to: {log_file}")
+
+    def _handle_failure(self):
+        """Handle experiment failure by logging error and saving partial results."""
+        if self.completed_successfully or self.output_dir is None:
+            return
+
+        end_time = datetime.now()
+
+        # Get exception information
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        if exc_type is not None:
+            error_trace = "".join(
+                traceback.format_exception(exc_type, exc_value, exc_tb)
+            )
+
+            # Save error trace to log.err in output directory
+            error_file = self.output_dir / "log.err"
+            error_file.write_text(error_trace)
+            print(f"✗ Error trace saved to: {error_file}")
+
+            # Log failed experiment to central log
+            metadata = self._finalize_metadata(end_time, success=False)
+            metadata["error_file"] = str(error_file)
+            log_file = Path(self.config["log_file"])
+
+            # Quietly log without printing (already printed error)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a") as f:
+                f.write(json.dumps(metadata) + "\n")
 
     def _create_readme(self, metadata):
         """Generate a README for the experiment output folder."""
@@ -212,9 +253,10 @@ To reproduce this experiment:
         # Validate configuration
         self._validate_config()
 
-        print(f"\n{'=' * 60}")
-        print("Starting Experiment Tracking")
-        print(f"{'=' * 60}\n")
+        title = "Starting Experiment Tracking"
+        print(f"\n{'=' * len(title)}")
+        print(title)
+        print(f"{'=' * len(title)}\n")
         print(f"Script: {self.calling_script or self.config['script']}")
         print(f"Parameters: {self.config['parameters_csv']}")
         print(f"Output: {self.config['output_dir']}")
@@ -243,12 +285,24 @@ To reproduce this experiment:
         shutil.copy2(csv_path, dest_csv)
         print(f"✓ Copied parameters CSV to: {dest_csv}")
 
-        # Record start time
+        # Record start time and output directory
         self.start_time = datetime.now()
+        self.output_dir = output_dir
 
-        print(f"\n{'=' * 60}")
-        print("Experiment tracking initialized. Run your code now.")
-        print(f"{'=' * 60}\n")
+        # Create and save initial metadata
+        self.initial_metadata = self._create_initial_metadata()
+        metadata_file = output_dir / "metadata.json"
+        with open(metadata_file, "w") as f:
+            json.dump(self.initial_metadata, f, indent=2)
+        print(f"✓ Saved initial metadata to: {metadata_file}")
+
+        # Register error handler to run on unexpected exit
+        atexit.register(self._handle_failure)
+
+        title = "Experiment tracking initialized. Run your code now."
+        print(f"\n{'=' * len(title)}")
+        print(title)
+        print(f"{'=' * len(title)}\n")
 
         # Return paths for the script to use
         return output_dir, csv_path
@@ -261,25 +315,28 @@ To reproduce this experiment:
         if self.start_time is None:
             raise RuntimeError("Must call start() before end()")
 
+        # Mark as successfully completed (prevents error handler from running)
+        self.completed_successfully = True
+
         end_time = datetime.now()
 
-        print(f"\n{'=' * 60}")
-        print("Finalizing Experiment Tracking")
-        print(f"{'=' * 60}\n")
+        title = "Finalizing Experiment Tracking"
+        print(f"\n{'=' * len(title)}")
+        print(title)
+        print(f"{'=' * len(title)}\n")
 
-        # Create metadata
-        metadata = self._create_metadata(end_time)
+        # Finalize metadata with success status
+        metadata = self._finalize_metadata(end_time, success=True)
 
-        # Save metadata to output folder
-        output_dir = Path(self.config["output_dir"])
-        metadata_file = output_dir / "metadata.json"
+        # Update metadata file in output folder
+        metadata_file = self.output_dir / "metadata.json"
         with open(metadata_file, "w") as f:
             json.dump(metadata, f, indent=2)
-        print(f"✓ Saved metadata to: {metadata_file}")
+        print(f"✓ Updated metadata: {metadata_file}")
 
         # Create README
         readme_content = self._create_readme(metadata)
-        readme_file = output_dir / "README.md"
+        readme_file = self.output_dir / "README.md"
         with open(readme_file, "w") as f:
             f.write(readme_content)
         print(f"✓ Generated README: {readme_file}")
@@ -288,7 +345,8 @@ To reproduce this experiment:
         log_file = Path(self.config["log_file"])
         self._log_metadata(metadata, log_file)
 
-        print(f"\n{'=' * 60}")
-        print(f"Experiment complete! Results saved to: {output_dir}")
+        title = f"Experiment complete! Results saved to: {self.output_dir}"
+        print(f"\n{'=' * len(title)}")
+        print(title)
         print(f"Duration: {metadata['duration_seconds']:.2f} seconds")
-        print(f"{'=' * 60}\n")
+        print(f"{'=' * len(title)}\n")

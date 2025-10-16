@@ -104,7 +104,7 @@ def main():
     ax.set_yticks([])
 
     plt.savefig(output_dir / "01_assembly_graph.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
 
     # Assign Synaptic Weights
     # Assign log-normal weights to connectivity graph
@@ -153,7 +153,7 @@ def main():
     plt.savefig(
         output_dir / "02_weighted_connectivity.png", dpi=300, bbox_inches="tight"
     )
-    plt.show()
+    plt.close()
 
     # Plot histogram of total synaptic input to each neuron
     synaptic_inputs = weights.sum(axis=0)
@@ -178,7 +178,7 @@ def main():
     plt.savefig(
         output_dir / "03_synaptic_input_histogram.png", dpi=300, bbox_inches="tight"
     )
-    plt.show()
+    plt.close()
 
     # Create network inputs
     # Generate Poisson spike trains for mitral cells
@@ -201,7 +201,7 @@ def main():
     ax.set_xlim(0, duration * 1e-3 * fraction)
     plt.tight_layout()
     plt.savefig(output_dir / "04_mitral_cell_spikes.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
 
     # Generate feedforward connectivity graph and mask inhibitory targets
     feedforward_connectivity_graph, _ = topology_generators.sparse_graph_generator(
@@ -255,7 +255,7 @@ def main():
     plt.savefig(
         output_dir / "05_feedforward_connectivity.png", dpi=300, bbox_inches="tight"
     )
-    plt.show()
+    plt.close()
 
     # Initialize LIF network model and run simulation
     model = CurrentLIFNetwork(
@@ -293,7 +293,7 @@ def main():
     ax.set_xlim(0, duration * 1e-3 * fraction)
     plt.tight_layout()
     plt.savefig(output_dir / "06_dp_network_spikes.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
 
     # Compute and plot firing rates for all neurons
     # Calculate firing rates (spikes per second)
@@ -352,7 +352,7 @@ def main():
     plt.savefig(
         output_dir / "07_firing_rate_distribution.png", dpi=300, bbox_inches="tight"
     )
-    plt.show()
+    plt.close()
 
     # Visualize membrane voltages for the first 10 neurons
     plot_membrane_voltages(
