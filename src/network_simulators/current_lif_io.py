@@ -59,7 +59,6 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
 
     # Convert to tensors with proper units (ms -> s where needed)
     processed = {
-        "dt": torch.tensor(param_dict["delta_t"] * 1e-3),
         "tau_mem_E": torch.tensor(param_dict["tau_mem_E"] * 1e-3),
         "tau_mem_I": torch.tensor(param_dict["tau_mem_I"] * 1e-3),
         "tau_syn_E": torch.tensor(param_dict["tau_syn_E"] * 1e-3),
@@ -73,12 +72,6 @@ def load_params_from_csv(csv_path: str | Path) -> dict[str, torch.Tensor]:
         "U_reset_E": torch.tensor(param_dict["U_reset_E"]),
         "U_reset_I": torch.tensor(param_dict["U_reset_I"]),
     }
-
-    # Precompute decay factors
-    processed["alpha_E"] = torch.exp(-processed["dt"] / processed["tau_syn_E"])
-    processed["alpha_I"] = torch.exp(-processed["dt"] / processed["tau_syn_I"])
-    processed["beta_E"] = torch.exp(-processed["dt"] / processed["tau_mem_E"])
-    processed["beta_I"] = torch.exp(-processed["dt"] / processed["tau_mem_I"])
 
     return processed
 
@@ -95,7 +88,6 @@ def export_params_to_csv(network, csv_path: str | Path):
 
     # Build list of parameter rows
     rows = [
-        ["delta_t", "ms", "Time resolution of the simulation", network.dt.item() * 1e3],
         [
             "tau_mem_E",
             "ms",

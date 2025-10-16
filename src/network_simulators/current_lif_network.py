@@ -129,6 +129,7 @@ class CurrentLIFNetwork(nn.Module):
     def forward(
         self,
         n_steps: int,
+        delta_t: float,
         inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
         initial_I_exc: FloatArray | None = None,
@@ -139,6 +140,7 @@ class CurrentLIFNetwork(nn.Module):
 
         Args:
             n_steps (int): Number of time steps to simulate.
+            delta_t (float): Time step duration in milliseconds.
             inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batches, n_neurons). Defaults to resting potentials.
             initial_I_exc (FloatArray | None): Initial excitatory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
@@ -166,7 +168,20 @@ class CurrentLIFNetwork(nn.Module):
             Spike generation and reset:
                 s[t] = 1 if V[t] >= theta, else 0
                 If s[t] = 1: V[t] = U_reset
+
+            Decay factors:
+                alpha_E = exp(-dt / tau_syn_E)
+                alpha_I = exp(-dt / tau_syn_I)
+                beta_E = exp(-dt / tau_mem_E)
+                beta_I = exp(-dt / tau_mem_I)
         """
+
+        # Convert delta_t from ms to seconds and compute decay factors
+        dt = torch.tensor(delta_t * 1e-3, dtype=torch.float32, device=self.device)
+        alpha_E = torch.exp(-dt / self.tau_syn_E)
+        alpha_I = torch.exp(-dt / self.tau_syn_I)
+        beta_E = torch.exp(-dt / self.tau_mem_E)
+        beta_I = torch.exp(-dt / self.tau_mem_I)
 
         # Default initial membrane potentials to resting potential if not provided
         if initial_v is None:
@@ -259,14 +274,14 @@ class CurrentLIFNetwork(nn.Module):
             # Update membrane potentials (without reset)
             v_exc = (
                 self.U_rest_E  # Resting potential
-                + (v_exc - self.U_rest_E) * self.beta_E  # Leak
-                + I_to_exc * self.R_E * (1 - self.beta_E)  # Input current
+                + (v_exc - self.U_rest_E) * beta_E  # Leak
+                + I_to_exc * self.R_E * (1 - beta_E)  # Input current
             )
 
             v_inh = (
                 self.U_rest_I  # Resting potential
-                + (v_inh - self.U_rest_I) * self.beta_I  # Leak
-                + I_to_inh * self.R_I * (1 - self.beta_I)  # Input current
+                + (v_inh - self.U_rest_I) * beta_I  # Leak
+                + I_to_inh * self.R_I * (1 - beta_I)  # Input current
             )
 
             # Generate spikes based on threshold
@@ -280,13 +295,13 @@ class CurrentLIFNetwork(nn.Module):
             # Update synaptic currents by synapse type (presynaptic neuron type)
             # Excitatory synaptic currents decay with alpha_E
             I_exc = (
-                I_exc * self.alpha_E  # Decay with excitatory synapse time constant
+                I_exc * alpha_E  # Decay with excitatory synapse time constant
                 + s_exc @ self.scaled_recurrent_weights[self.exc_indices, :]  # E→all
             )
 
             # Inhibitory synaptic currents decay with alpha_I
             I_inh = (
-                I_inh * self.alpha_I  # Decay with inhibitory synapse time constant
+                I_inh * alpha_I  # Decay with inhibitory synapse time constant
                 + s_inh @ self.scaled_recurrent_weights[self.inh_indices, :]  # I→all
             )
 
