@@ -4,13 +4,13 @@ Reproducibility module for running experiments with tracked parameters and metad
 Usage in your scripts:
     from utils.reproducibility import ExperimentTracker
 
-    tracker = ExperimentTracker("experiment.toml")
-    output_dir, params_csv = tracker.start()
+    tracker = ExperimentTracker()
 
-    # Your code here...
-    # Use output_dir and params_csv as needed
+    with tracker:
+        output_dir, params_csv = tracker.output_dir, tracker.params_csv
 
-    tracker.end()
+        # Your code here...
+        # Errors are automatically caught and logged
 """
 
 import subprocess
@@ -19,7 +19,6 @@ import toml
 import json
 import shutil
 import inspect
-import atexit
 import traceback
 from pathlib import Path
 from datetime import datetime
@@ -51,6 +50,23 @@ class ExperimentTracker:
         self.output_dir = None
         self.completed_successfully = False
         self.initial_metadata = None
+        self.params_csv = None
+
+    def __enter__(self):
+        """Context manager entry - start tracking."""
+        self._start_tracking()
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        """Context manager exit - handle success or failure."""
+        if exc_type is None:
+            # No exception - successful completion
+            self._end_tracking_success()
+        else:
+            # Exception occurred - handle failure
+            self._end_tracking_failure(exc_type, exc_value, exc_tb)
+            # Return False to re-raise the exception
+            return False
 
     def _load_config(self):
         """Load experiment configuration from TOML file."""
@@ -184,50 +200,43 @@ class ExperimentTracker:
 
         print(f"✓ Logged metadata to: {log_file}")
 
-    def _handle_failure(self):
+    def _end_tracking_failure(self, exc_type, exc_value, exc_tb):
         """Handle experiment failure by logging error and saving partial results."""
-        if self.completed_successfully or self.output_dir is None:
-            return
-
         end_time = datetime.now()
 
-        # Get exception information
-        exc_type, exc_value, exc_tb = sys.exc_info()
-        if exc_type is not None:
-            error_trace = "".join(
-                traceback.format_exception(exc_type, exc_value, exc_tb)
-            )
+        # Format error trace
+        error_trace = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
-            # Save error trace to log.err in output directory
-            error_file = self.output_dir / "log.err"
-            error_file.write_text(error_trace)
-            print(f"✗ Error trace saved to: {error_file}")
+        # Save error trace to log.err in output directory
+        error_file = self.output_dir / "log.err"
+        error_file.write_text(error_trace)
+        print(f"\n✗ Error trace saved to: {error_file}")
 
-            # Update metadata with failure status
-            metadata = self._finalize_metadata(end_time, success=False)
-            metadata["error_file"] = str(error_file)
+        # Update metadata with failure status
+        metadata = self._finalize_metadata(end_time, success=False)
+        metadata["error_file"] = str(error_file)
 
-            # Update metadata.json in output directory
-            metadata_file = self.output_dir / "metadata.json"
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f, indent=2)
+        # Update metadata.json in output directory
+        metadata_file = self.output_dir / "metadata.json"
+        with open(metadata_file, "w") as f:
+            json.dump(metadata, f, indent=2)
 
-            # Create README in output directory
-            readme_content = self._create_readme(metadata)
-            readme_file = self.output_dir / "README.md"
-            with open(readme_file, "w") as f:
-                f.write(readme_content)
+        # Create README in output directory
+        readme_content = self._create_readme(metadata)
+        readme_file = self.output_dir / "README.md"
+        with open(readme_file, "w") as f:
+            f.write(readme_content)
 
-            # Log failed experiment to central log
-            log_file = Path(self.config["log_file"])
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(log_file, "a") as f:
-                f.write(json.dumps(metadata) + "\n")
+        # Log failed experiment to central log
+        log_file = Path(self.config["log_file"])
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a") as f:
+            f.write(json.dumps(metadata) + "\n")
 
-            print(
-                f"✗ Experiment failed. Partial results and error log saved to: {self.output_dir}"
-            )
-            print(f"✗ Failure logged to: {log_file}")
+        print(
+            f"✗ Experiment failed. Partial results and error log saved to: {self.output_dir}"
+        )
+        print(f"✗ Failure logged to: {log_file}\n")
 
     def _create_readme(self, metadata):
         """Generate a README for the experiment output folder."""
@@ -275,13 +284,8 @@ To reproduce this experiment:
 """
         return readme
 
-    def start(self):
-        """
-        Start tracking the experiment. Call this at the beginning of your script.
-
-        Returns:
-            tuple: (output_dir, parameters_csv) as Path objects
-        """
+    def _start_tracking(self):
+        """Start tracking the experiment (called by context manager)."""
         # Validate configuration
         self._validate_config()
 
@@ -317,6 +321,9 @@ To reproduce this experiment:
         shutil.copy2(csv_path, dest_csv)
         print(f"✓ Copied parameters CSV to: {dest_csv}")
 
+        # Store params_csv for easy access
+        self.params_csv = csv_path
+
         # Record start time and output directory
         self.start_time = datetime.now()
         self.output_dir = output_dir
@@ -328,35 +335,13 @@ To reproduce this experiment:
             json.dump(self.initial_metadata, f, indent=2)
         print(f"✓ Saved initial metadata to: {metadata_file}")
 
-        # Create initial README
-        readme_content = self._create_readme(self.initial_metadata)
-        readme_file = output_dir / "README.md"
-        with open(readme_file, "w") as f:
-            f.write(readme_content)
-        print(f"✓ Created README: {readme_file}")
-
-        # Register error handler to run on unexpected exit
-        atexit.register(self._handle_failure)
-
         title = "Experiment tracking initialized. Run your code now."
         print(f"\n{'=' * len(title)}")
         print(title)
         print(f"{'=' * len(title)}\n")
 
-        # Return paths for the script to use
-        return output_dir, csv_path
-
-    def end(self):
-        """
-        End tracking the experiment. Call this at the end of your script.
-        Saves metadata, creates README, and logs to central log directory.
-        """
-        if self.start_time is None:
-            raise RuntimeError("Must call start() before end()")
-
-        # Mark as successfully completed (prevents error handler from running)
-        self.completed_successfully = True
-
+    def _end_tracking_success(self):
+        """End tracking for successful experiment completion."""
         end_time = datetime.now()
 
         title = "Finalizing Experiment Tracking"
