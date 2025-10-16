@@ -243,6 +243,13 @@ class ExperimentTracker:
         status = metadata.get("status", "unknown")
         status_emoji = "✓" if status == "completed" else "✗"
 
+        # Extract repo name from URL
+        repo_url = metadata["git_remote_url"]
+        if repo_url.endswith(".git"):
+            repo_name = repo_url.split("/")[-1][:-4]
+        else:
+            repo_name = repo_url.split("/")[-1]
+
         readme = f"""# Experiment Run - {status_emoji} {status.upper()}
 
 ## Description
@@ -278,10 +285,46 @@ Parameters loaded from: `{metadata["parameters_csv"]}`
 See `parameters.csv` in this directory for the exact parameters used.
 
 ## Reproducibility
-To reproduce this experiment:
-1. Check out commit: `git checkout {metadata["git_commit"]}`
-2. Run the script with the same parameters
+
+To reproduce this experiment exactly:
+
+### 1. Clone the repository
+```bash
+git clone {metadata["git_remote_url"]}
+cd {repo_name}
+```
+
+### 2. Check out the exact commit
+```bash
+git checkout {metadata["git_commit"]}
+```
+
+### 3. Set up the Python environment
+```bash
+# Using uv (recommended)
+uv sync --extra cpu  # or --extra gpu
+
+# Or using pip
+pip install -e .
+```
+
+### 4. Run the experiment
+```bash
+# Using the experiment config in this directory
+python {metadata["script"]}
+```
+
+**Note**: The `experiment.toml` file in this directory has been configured with absolute paths to the data files also stored here. You can use it to re-run with these exact parameters by setting it as your config file.
+
+## Files in This Directory
+- `parameters.csv` - Exact parameters used for this run
+- `experiment.toml` - Configuration file (with paths updated to this directory)
+- `metadata.json` - Machine-readable metadata
+- `README.md` - This file
 """
+        if status == "failed":
+            readme += "- `log.err` - Error traceback from failed run\n"
+
         return readme
 
     def _start_tracking(self):
@@ -321,6 +364,21 @@ To reproduce this experiment:
         shutil.copy2(csv_path, dest_csv)
         print(f"✓ Copied parameters CSV to: {dest_csv}")
 
+        # Copy and modify experiment.toml to output folder
+        dest_toml = output_dir / "experiment.toml"
+        modified_config = self.config.copy()
+        # Update paths to point to copied files in output directory
+        modified_config["parameters_csv"] = str(
+            (output_dir / "parameters.csv").resolve()
+        )
+        modified_config["output_dir"] = str(output_dir.resolve())
+        # Keep log_file absolute as-is
+        modified_config["log_file"] = str(Path(self.config["log_file"]).resolve())
+        # Keep script relative to repo root
+        with open(dest_toml, "w") as f:
+            toml.dump(modified_config, f)
+        print(f"✓ Copied experiment config to: {dest_toml}")
+
         # Store params_csv for easy access
         self.params_csv = csv_path
 
@@ -335,7 +393,7 @@ To reproduce this experiment:
             json.dump(self.initial_metadata, f, indent=2)
         print(f"✓ Saved initial metadata to: {metadata_file}")
 
-        title = "Experiment tracking initialized. Run your code now."
+        title = "Experiment tracking initialized. Running your code now."
         print(f"\n{'=' * len(title)}")
         print(title)
         print(f"{'=' * len(title)}\n")
