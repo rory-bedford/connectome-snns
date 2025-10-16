@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# Executable wrapper for running experiments with uv.
+#
+# Usage:
+#   ./run                     # Uses default experiment.toml
+#   ./run path/to/config.toml # Uses specified config file
+
+set -e
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Change to the script directory to ensure relative paths work
+cd "$SCRIPT_DIR"
+
+# Run the Python experiment script with uv
+if [ $# -eq 0 ]; then
+    # No arguments provided, use default
+    uv run python run_experiment.py
+else
+    # Pass the first argument (config path) to the Python script
+    uv run python run_experiment.py "$1"
+fi
