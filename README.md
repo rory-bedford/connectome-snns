@@ -24,4 +24,4 @@ For this to work please run `uv run pre-commit install` after cloning the reposi
 
 ## Notebooks
 
-We recommend running the Jupyter notebooks to repeat these experiments. See the README in the notebooks/ folder for an overview of what's there.
+Interactive Jupyter notebooks demonstrating key experiments and analyses are available in the [`notebooks/`](notebooks/) directory. See the [notebooks README](notebooks/README.md) for an overview of available notebooks. Each notebook is also compiled to HTML using [Quarto](https://quarto.org/) for easy viewing without running code.
