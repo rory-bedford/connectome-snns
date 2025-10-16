@@ -203,19 +203,38 @@ class ExperimentTracker:
             error_file.write_text(error_trace)
             print(f"✗ Error trace saved to: {error_file}")
 
-            # Log failed experiment to central log
+            # Update metadata with failure status
             metadata = self._finalize_metadata(end_time, success=False)
             metadata["error_file"] = str(error_file)
-            log_file = Path(self.config["log_file"])
 
-            # Quietly log without printing (already printed error)
+            # Update metadata.json in output directory
+            metadata_file = self.output_dir / "metadata.json"
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            # Create README in output directory
+            readme_content = self._create_readme(metadata)
+            readme_file = self.output_dir / "README.md"
+            with open(readme_file, "w") as f:
+                f.write(readme_content)
+
+            # Log failed experiment to central log
+            log_file = Path(self.config["log_file"])
             log_file.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file, "a") as f:
                 f.write(json.dumps(metadata) + "\n")
 
+            print(
+                f"✗ Experiment failed. Partial results and error log saved to: {self.output_dir}"
+            )
+            print(f"✗ Failure logged to: {log_file}")
+
     def _create_readme(self, metadata):
         """Generate a README for the experiment output folder."""
-        readme = f"""# Experiment Run
+        status = metadata.get("status", "unknown")
+        status_emoji = "✓" if status == "completed" else "✗"
+
+        readme = f"""# Experiment Run - {status_emoji} {status.upper()}
 
 ## Description
 {metadata.get("description", "No description provided.")}
@@ -223,9 +242,22 @@ class ExperimentTracker:
 ## Execution Details
 - **Script**: `{metadata["script"]}`
 - **Start Time**: {metadata["start_time"]}
-- **End Time**: {metadata["end_time"]}
-- **Duration**: {metadata["duration_seconds"]:.2f} seconds
+- **End Time**: {metadata.get("end_time", "N/A")}
+- **Duration**: {metadata.get("duration_seconds", 0):.2f} seconds
+- **Status**: {status_emoji} **{status.upper()}**
+"""
 
+        if status == "failed" and "error_file" in metadata:
+            readme += f"""
+## Error Information
+⚠️ **This experiment failed during execution.**
+
+Error details saved to: `{Path(metadata["error_file"]).name}`
+
+See the error file in this directory for the full traceback.
+"""
+
+        readme += f"""
 ## Git Information
 - **Repository**: {metadata["git_remote_url"]}
 - **Commit**: {metadata["git_commit"]}
@@ -295,6 +327,13 @@ To reproduce this experiment:
         with open(metadata_file, "w") as f:
             json.dump(self.initial_metadata, f, indent=2)
         print(f"✓ Saved initial metadata to: {metadata_file}")
+
+        # Create initial README
+        readme_content = self._create_readme(self.initial_metadata)
+        readme_file = output_dir / "README.md"
+        with open(readme_file, "w") as f:
+            f.write(readme_content)
+        print(f"✓ Created README: {readme_file}")
 
         # Register error handler to run on unexpected exit
         atexit.register(self._handle_failure)
