@@ -18,7 +18,6 @@ import sys
 import toml
 import json
 import shutil
-import inspect
 import traceback
 from pathlib import Path
 from datetime import datetime
@@ -73,21 +72,6 @@ class ExperimentTracker:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         return toml.load(self.config_path)
-
-    def _detect_calling_script(self):
-        """Detect the script that called this module."""
-        # Walk up the call stack to find the first file that's not this module
-        for frame_info in inspect.stack():
-            filepath = Path(frame_info.filename).resolve()
-            # Skip if it's this reproducibility module
-            if filepath == Path(__file__).resolve():
-                continue
-            # Skip internal Python files
-            if str(filepath).startswith(sys.prefix):
-                continue
-            # Found the calling script
-            return filepath
-        return None
 
     def _check_git_status(self):
         """Check if there are uncommitted changes and get current commit hash."""
@@ -144,25 +128,18 @@ class ExperimentTracker:
             sys.exit(1)
 
     def _validate_config(self):
-        """Validate that required fields are present in config and script matches."""
+        """Validate that required fields are present in config."""
         required_fields = ["script", "output_dir", "parameters_csv", "log_file"]
         for field in required_fields:
             if field not in self.config:
                 raise ValueError(f"Missing required field '{field}' in config")
 
-        # Detect the calling script
-        self.calling_script = self._detect_calling_script()
+        # Validate that script exists
+        script_path = Path(self.config["script"])
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {script_path}")
 
-        # Validate that the script field matches the calling script
-        if self.calling_script is not None:
-            config_script = Path(self.config["script"]).resolve()
-            if config_script != self.calling_script:
-                print("ERROR: Script mismatch!")
-                print(f"  Config specifies: {config_script}")
-                print(f"  Actually running: {self.calling_script}")
-                print(f"\nPlease update 'script' field in {self.config_path}")
-                sys.exit(1)
-
+        # Validate that parameters CSV exists
         csv_path = Path(self.config["parameters_csv"])
         if not csv_path.exists():
             raise FileNotFoundError(f"Parameters CSV not found: {csv_path}")
@@ -310,11 +287,11 @@ pip install -e .
 
 ### 4. Run the experiment
 ```bash
-# Using the experiment config in this directory
-python {metadata["script"]}
+# The experiment runner will load the script from the config
+python scripts/run_experiment.py
 ```
 
-**Note**: The `experiment.toml` file in this directory has been configured with absolute paths to the data files also stored here. You can use it to re-run with these exact parameters by setting it as your config file.
+**Note**: The repository's default `experiment.toml` will run the experiment as originally configured. To re-run with the exact parameters from *this specific run*, copy the `experiment.toml` from this directory back to the repository root (it has absolute paths to the data files stored here).
 
 ## Files in This Directory
 - `parameters.csv` - Exact parameters used for this run
@@ -336,7 +313,7 @@ python {metadata["script"]}
         print(f"\n{'=' * len(title)}")
         print(title)
         print(f"{'=' * len(title)}\n")
-        print(f"Script: {self.calling_script or self.config['script']}")
+        print(f"Script: {self.config['script']}")
         print(f"Parameters: {self.config['parameters_csv']}")
         print(f"Output: {self.config['output_dir']}")
         print(f"Description: {self.config.get('description', 'N/A')}")
