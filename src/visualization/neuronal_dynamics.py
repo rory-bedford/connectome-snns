@@ -19,6 +19,7 @@ def plot_membrane_voltages(
     y_max: float = 0.0,
     y_tick_step: float = 50.0,
     figsize: tuple[float, float] = (12, 12),
+    save_path: str | None = None,
 ) -> None:
     """
     Visualize membrane voltage traces with spike markers.
@@ -36,6 +37,7 @@ def plot_membrane_voltages(
         y_max (float): Maximum y-axis value in mV. Defaults to 0.0.
         y_tick_step (float): Step size for y-axis ticks. Defaults to 50.0.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
+        save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
     """
     n_steps = voltages.shape[1]
     n_steps_plot = int(n_steps * fraction)
@@ -106,6 +108,8 @@ def plot_membrane_voltages(
         f"Membrane Potential Traces (First {n_neurons_plot} Neurons)", fontsize=12
     )
     plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -118,6 +122,7 @@ def plot_synaptic_currents(
     fraction: float = 1.0,
     show_total: bool = False,
     figsize: tuple[float, float] = (12, 12),
+    save_path: str | None = None,
 ) -> None:
     """
     Visualize excitatory and inhibitory synaptic currents.
@@ -131,6 +136,7 @@ def plot_synaptic_currents(
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         show_total (bool): Whether to show total current trace in grey. Defaults to False.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
+        save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
     """
     n_steps = I_exc.shape[1]
     n_steps_plot = int(n_steps * fraction)
@@ -229,4 +235,6 @@ def plot_synaptic_currents(
         f"Synaptic Current Inputs (First {n_neurons_plot} Neurons)", fontsize=12
     )
     plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
