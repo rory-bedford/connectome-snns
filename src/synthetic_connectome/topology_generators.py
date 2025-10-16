@@ -168,41 +168,33 @@ def assembly_generator(
 
     rng = np.random.default_rng(seed)
 
-    # Assign source nodes to assemblies (roughly equal sizes)
-    assembly_assignments = np.array_split(np.arange(n_source), num_assemblies)
+    # Assign source and target nodes to assemblies (roughly equal sizes)
+    assembly_assignments_source = np.array_split(np.arange(n_source), num_assemblies)
+    assembly_assignments_target = np.array_split(np.arange(n_target), num_assemblies)
 
-    # Initialize adjacency matrix
-    adjacency = np.zeros((n_source, n_target), dtype=np.bool_)
+    # Create within-assembly mask using outer products
+    within_assembly_mask = np.zeros((n_source, n_target), dtype=np.bool_)
+    for source_assembly, target_assembly in zip(
+        assembly_assignments_source, assembly_assignments_target
+    ):
+        # Create indicator vectors for this assembly
+        source_in_assembly = np.isin(np.arange(n_source), source_assembly)
+        target_in_assembly = np.isin(np.arange(n_target), target_assembly)
 
-    # Generate connections
-    for i in range(n_source):
-        for j in range(n_target):
-            # Skip self-loops for square matrices
-            if n_source == n_target and i == j:
-                continue
+        # Outer product gives True where both source and target are in this assembly
+        within_assembly_mask |= np.outer(source_in_assembly, target_in_assembly)
 
-            # Determine which assembly node i belongs to
-            assembly_i = next(
-                k for k, assembly in enumerate(assembly_assignments) if i in assembly
-            )
+    # Generate random connections based on within/between assembly probabilities
+    rand_matrix = rng.random((n_source, n_target))
+    adjacency = np.where(
+        within_assembly_mask,
+        rand_matrix < p_within,
+        rand_matrix < p_between,
+    )
 
-            # For rectangular matrices, determine assembly of target node j
-            if n_source == n_target:
-                assembly_j = next(
-                    k
-                    for k, assembly in enumerate(assembly_assignments)
-                    if j in assembly
-                )
-            else:
-                # For feedforward, assign target nodes to assemblies based on index
-                assembly_j = j * num_assemblies // n_target
-
-            # Choose probability based on whether nodes are in same assembly
-            p = p_within if assembly_i == assembly_j else p_between
-
-            # Create edge with appropriate probability
-            if rng.random() < p:
-                adjacency[i, j] = True
+    # No self-loops for square matrices
+    if n_source == n_target:
+        np.fill_diagonal(adjacency, 0)
 
     # Assign neuron types to source neurons
     neuron_types = np.ones(n_source, dtype=np.int_)

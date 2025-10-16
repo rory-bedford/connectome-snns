@@ -146,16 +146,20 @@ class CurrentLIFNetwork(nn.Module):
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Spike trains, voltages, and currents.
         """
 
-        # Default initial states to zero if not provided
+        # Default initial membrane potentials to resting potential if not provided
         if initial_v is None:
             initial_v = torch.zeros(
                 (1, self.n_neurons), dtype=torch.float32, device=self.device
             )
+            # Set resting potentials based on neuron type
+            initial_v[:, self.exc_indices] = self.U_rest_E
+            initial_v[:, self.inh_indices] = self.U_rest_I
         else:
             initial_v = torch.as_tensor(
                 initial_v, dtype=torch.float32, device=self.device
             )
 
+        # Default initial currents to zero if not provided
         if initial_I is None:
             initial_I = torch.zeros(
                 (1, self.n_neurons), dtype=torch.float32, device=self.device
