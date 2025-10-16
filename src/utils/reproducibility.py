@@ -227,14 +227,6 @@ class ExperimentTracker:
         else:
             repo_name = repo_url.split("/")[-1]
 
-        # Get relative path of config file from repo root
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        try:
-            config_rel_path = self.config_path.relative_to(repo_root)
-        except ValueError:
-            # If config is outside repo, use absolute path
-            config_rel_path = self.config_path
-
         readme = f"""# Experiment Run - {status_emoji} {status.upper()}
 
 ## Description
@@ -296,13 +288,13 @@ pip install -e .
 ### 4. Run the experiment
 ```bash
 # Using the executable wrapper (recommended)
-./run_experiment {config_rel_path}
+./run_experiment {self.output_dir / "experiment.toml"}
 
 # Or using uv directly
-uv run python run_experiment.py {config_rel_path}
+uv run python run_experiment.py {self.output_dir / "experiment.toml"}
 ```
 
-**Note**: The command above uses the exact config file path (`{config_rel_path}`) that was used for this run. To re-run with the exact parameters from *this specific run*, copy the `experiment.toml` from this directory back to the repository root (it has absolute paths to the data files stored here).
+**Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
 
 ## Files in This Directory
 - `parameters.csv` - Exact parameters used for this run
