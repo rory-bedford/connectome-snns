@@ -3,7 +3,7 @@
 symbol,unit,description,value
 # Simulation parameters
 delta_t,ms,Time resolution of the simulation,1
-duration,ms,Total simulation duration,10e3
+duration,ms,Total simulation duration,1e3
 # Dp topology
 num_neurons,,Total number of neurons in the network,5000
 num_assemblies,,Number of assemblies in the network,20
