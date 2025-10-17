@@ -2,13 +2,14 @@
 Universal experiment runner that loads and executes experiments from TOML configs.
 
 Usage:
-    python scripts/run_experiment.py [config_path]
+    python run_experiment.py [config_path]
 
-If no config_path is provided, defaults to experiment.toml in repository root.
+If no config_path is provided, defaults to workspace/experiment.toml.
 
 Examples:
-    python scripts/run_experiment.py
-    python scripts/run_experiment.py configs/baseline.toml
+    python run_experiment.py                          # Uses workspace/experiment.toml
+    python run_experiment.py workspace/experiment.toml
+    python run_experiment.py configs/baseline.toml
 """
 
 import sys
@@ -26,7 +27,7 @@ def run_experiment(config_path=None):
     Load and run an experiment from a TOML config file.
 
     Args:
-        config_path: Path to experiment.toml file. Defaults to repo root.
+        config_path: Path to experiment.toml file. Defaults to workspace/experiment.toml.
     """
     # Initialize tracker (validates config)
     tracker = ExperimentTracker(config_path=config_path)

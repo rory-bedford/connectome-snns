@@ -1,7 +1,8 @@
-# Single experiment configuration - edit this on the fly for each run
+# Single experiment configuration
+# This is a template you can copy into workspace and edit
 
 script = "scripts/simulate_Dp.py"
 output_dir = "results/simulate_Dp"
 parameters_csv = "parameters/Dp_default.csv"
 log_file = "logs/Dp_simulator_log.jsonl"
-description = "Simulating Dp with connectivity statistics from Claire's paper"
+description = "Simulating Dp example"

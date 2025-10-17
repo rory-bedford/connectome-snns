@@ -212,3 +212,6 @@ __marimo__/
 
 results/
 logs/
+
+# Workspace directory for editable experiment configs
+workspace/

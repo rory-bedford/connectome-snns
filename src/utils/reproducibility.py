@@ -35,12 +35,12 @@ class ExperimentTracker:
 
         Args:
             config_path: Path to the TOML configuration file.
-                        Defaults to experiment.toml in the repository root.
+                        Defaults to workspace/experiment.toml in the repository root.
         """
         if config_path is None:
-            # Default to experiment.toml in repository root (two levels up from this file)
+            # Default to workspace/experiment.toml in repository root
             repo_root = Path(__file__).resolve().parent.parent.parent
-            config_path = repo_root / "experiment.toml"
+            config_path = repo_root / "workspace" / "experiment.toml"
         self.config_path = Path(config_path)
         self.config = self._load_config()
         self.start_time = None
@@ -85,39 +85,10 @@ class ExperimentTracker:
             )
 
             if result.stdout.strip():
-                # Filter out whitelisted files that can be edited on the fly
-                whitelist = [
-                    "experiment.toml",  # Root experiment config
-                    "parameters/",  # Parameter files directory
-                ]
-
-                # Parse git status output and filter
-                lines = result.stdout.strip().split("\n")
-                non_whitelisted_changes = []
-
-                for line in lines:
-                    if not line.strip():
-                        continue
-                    # Git status format: "XY filename" where XY are status codes
-                    # Extract the filename (everything after the first 3 characters)
-                    if len(line) > 3:
-                        filename = line[3:].strip()
-                        # Check if this file is whitelisted
-                        is_whitelisted = any(
-                            filename == wl or filename.startswith(wl)
-                            for wl in whitelist
-                        )
-                        if not is_whitelisted:
-                            non_whitelisted_changes.append(line)
-
-                if non_whitelisted_changes:
-                    print("ERROR: You have uncommitted changes:")
-                    print("\n".join(non_whitelisted_changes))
-                    print("\nPlease commit all changes before running experiments.")
-                    print(
-                        "(Note: experiment.toml and parameters/ are whitelisted and can be edited)"
-                    )
-                    sys.exit(1)
+                print("ERROR: You have uncommitted changes:")
+                print(result.stdout)
+                print("\nPlease commit all changes before running experiments.")
+                sys.exit(1)
 
             # Get current commit hash
             result = subprocess.run(
