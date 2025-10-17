@@ -21,7 +21,7 @@ On the Zenke lab workstations, we need to store virtual environments on ereborfs
 
 ```
 uv venv /ereborfs/bedfrory/venvs/connectome-snns
-source /ereborfs/bedford/venvs/connectome-snns/bin/activate
+source /ereborfs/bedfrory/venvs/connectome-snns/bin/activate
 uv sync --active --extra cu129 --cache-dir /ereborfs/bedfrory/.cache/uv
 ```
 
