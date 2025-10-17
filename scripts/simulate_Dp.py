@@ -273,7 +273,7 @@ def main(output_dir, params_csv):
     model.to(device)
 
     # Run inference
-    with model.inference_mode():
+    with torch.inference_mode():
         output_spikes, output_voltages, output_I_exc, output_I_inh = model.forward(
             n_steps=n_steps,
             delta_t=delta_t,
