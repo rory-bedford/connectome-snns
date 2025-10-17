@@ -272,15 +272,13 @@ def main(output_dir, params_csv):
     # Move model to device for GPU acceleration
     model.to(device)
 
-    # We're just running the model forwards so no need to track gradients
-    model.eval()
-
-    # Run simulation
-    output_spikes, output_voltages, output_I_exc, output_I_inh = model.forward(
-        n_steps=n_steps,
-        delta_t=delta_t,
-        inputs=input_spikes,
-    )
+    # Run inference
+    with model.inference_mode():
+        output_spikes, output_voltages, output_I_exc, output_I_inh = model.forward(
+            n_steps=n_steps,
+            delta_t=delta_t,
+            inputs=input_spikes,
+        )
 
     # Visualize Dp network spike trains
     n_neurons_plot = 10
