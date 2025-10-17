@@ -54,7 +54,8 @@ def run_experiment(config_path=None):
         # Execute the script's main() function
         spec.loader.exec_module(module)
         if hasattr(module, "main"):
-            module.main(tracker)
+            # Pass output_dir and params_csv directly to the script
+            module.main(output_dir=tracker.output_dir, params_csv=tracker.params_csv)
         else:
             print(f"ERROR: Script {script_path} has no main() function")
             sys.exit(1)

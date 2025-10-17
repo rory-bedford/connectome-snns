@@ -23,15 +23,13 @@ from visualization import plot_membrane_voltages, plot_synaptic_currents
 import torch
 
 
-def main(tracker):
+def main(output_dir, params_csv):
     """Main execution function for Dp network simulation.
 
     Args:
-        tracker: ExperimentTracker instance from run_experiment.py
+        output_dir (Path): Directory where output files will be saved
+        params_csv (Path): Path to the CSV file containing network parameters
     """
-    output_dir = tracker.output_dir
-    params_csv = tracker.params_csv
-
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
