@@ -14,8 +14,18 @@ You should manually sync your environment with either CPU or GPU support:
 uv sync --extra cpu
 
 # For GPU
-uv sync --extra gpu
+uv sync --extra cu129
 ```
+
+On the Zenke lab workstations, we need to store virtual environments on ereborfs. To do this we need to manually make a virtual environment and sync it. For example, I run:
+
+```
+uv venv /ereborfs/bedfrory/venvs/connectome-snns
+source /ereborfs/bedford/venvs/connectome-snns/bin/activate
+uv sync --active --extra cu129 --cache-dir /ereborfs/bedfrory/.cache/uv
+```
+
+Note the `active` flag makes uv install into the activated environment rather than the default in the project directory, and the `cache` flag makes uv use a non-default cache directory as our home quota on these machines is small.
 
 ## Development
 
