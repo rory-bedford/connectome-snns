@@ -56,3 +56,14 @@ Note the experiment running scripts can be passed a filepath to your `experiment
 With this system, we can perform full provenance tracking of our experiments and easily rerun them even years later.
 
 For examples of usage please see `scripts/`.
+
+## GPUs
+
+Some tips to run on gpu (eg on the Zenke lab workstations):
+
+* Run `watch -n 1 nvidia-smi` in a different pane
+* Check what devices are free
+* Run the script with only the requested device via:
+```
+CUDA_VISIBLE_DEVICES=0 ./run
+```
