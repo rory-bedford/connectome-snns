@@ -14,6 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the script directory to ensure relative paths work
 cd "$SCRIPT_DIR"
 
+# Check if /ereborfs exists and activate environment if it does
+if [ -d "/ereborfs" ]; then
+    source /ereborfs/bedfrory/venvs/connectome-snns/bin/activate
+fi
+
 # Run the Python experiment script with uv
 if [ $# -eq 0 ]; then
     # No arguments provided, use default
