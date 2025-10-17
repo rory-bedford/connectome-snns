@@ -227,6 +227,16 @@ class ExperimentTracker:
         else:
             repo_name = repo_url.split("/")[-1]
 
+        # Absolute path to the reproducibility copy of experiment.toml in output dir
+        # Use metadata["output_dir"] which is written earlier when the file is copied
+        try:
+            experiment_toml_abs = str(
+                (Path(metadata["output_dir"]) / "experiment.toml").resolve()
+            )
+        except Exception:
+            # Fallback to self.output_dir if metadata is unexpectedly formatted
+            experiment_toml_abs = str((self.output_dir / "experiment.toml").resolve())
+
         readme = f"""# Experiment Run - {status_emoji} {status.upper()}
 
 ## Description
@@ -288,10 +298,10 @@ pip install -e .
 ### 4. Run the experiment
 ```bash
 # Using the executable wrapper (recommended)
-./run_experiment {(self.output_dir / "experiment.toml").absolute()}
+./run_experiment {experiment_toml_abs}
 
 # Or using uv directly
-uv run python run_experiment.py {(self.output_dir / "experiment.toml").absolute()}
+uv run python run_experiment.py {experiment_toml_abs}
 ```
 
 **Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
