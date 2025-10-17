@@ -85,10 +85,39 @@ class ExperimentTracker:
             )
 
             if result.stdout.strip():
-                print("ERROR: You have uncommitted changes:")
-                print(result.stdout)
-                print("\nPlease commit all changes before running experiments.")
-                sys.exit(1)
+                # Filter out whitelisted files that can be edited on the fly
+                whitelist = [
+                    "experiment.toml",  # Root experiment config
+                    "parameters/",  # Parameter files directory
+                ]
+
+                # Parse git status output and filter
+                lines = result.stdout.strip().split("\n")
+                non_whitelisted_changes = []
+
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    # Git status format: "XY filename" where XY are status codes
+                    # Extract the filename (everything after the first 3 characters)
+                    if len(line) > 3:
+                        filename = line[3:].strip()
+                        # Check if this file is whitelisted
+                        is_whitelisted = any(
+                            filename == wl or filename.startswith(wl)
+                            for wl in whitelist
+                        )
+                        if not is_whitelisted:
+                            non_whitelisted_changes.append(line)
+
+                if non_whitelisted_changes:
+                    print("ERROR: You have uncommitted changes:")
+                    print("\n".join(non_whitelisted_changes))
+                    print("\nPlease commit all changes before running experiments.")
+                    print(
+                        "(Note: experiment.toml and parameters/ are whitelisted and can be edited)"
+                    )
+                    sys.exit(1)
 
             # Get current commit hash
             result = subprocess.run(
@@ -302,6 +331,8 @@ pip install -e .
 
 # Or using uv directly
 uv run python run_experiment.py {experiment_toml_abs}
+
+You will most likeley be prompted to enter a new output directory to avoid overwriting existing results.
 ```
 
 **Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
@@ -338,15 +369,37 @@ uv run python run_experiment.py {experiment_toml_abs}
 
         # Check if output directory exists
         output_dir = Path(self.config["output_dir"])
-        if output_dir.exists():
+        while output_dir.exists():
             print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
-            response = input("Continue anyway? (y/n): ")
-            if response.lower() != "y":
+            print("\nChoose an option:")
+            print("  [c] Cancel experiment")
+            print("  [o] Overwrite existing folder")
+            print("  [n] Specify a new output folder")
+            response = input("\nYour choice (c/o/n): ").lower().strip()
+
+            if response == "c":
                 print("Experiment cancelled.")
                 sys.exit(0)
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"✓ Created output directory: {output_dir}")
+            elif response == "o":
+                print(f"⚠️  Overwriting: {output_dir}")
+                # Remove existing directory and its contents
+                shutil.rmtree(output_dir)
+                break
+            elif response == "n":
+                new_path = input("Enter new output folder path: ").strip()
+                if new_path:
+                    output_dir = Path(new_path)
+                    # Update config with new path
+                    self.config["output_dir"] = str(output_dir)
+                    print(f"Updated output directory to: {output_dir}")
+                else:
+                    print("Invalid path. Please try again.")
+            else:
+                print("Invalid choice. Please enter 'c', 'o', or 'n'.")
+
+        # Create output directory
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Created output directory: {output_dir}")
 
         # Copy parameters CSV to output folder
         csv_path = Path(self.config["parameters_csv"])
