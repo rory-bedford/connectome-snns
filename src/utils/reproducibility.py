@@ -298,7 +298,7 @@ pip install -e .
 ### 4. Run the experiment
 ```bash
 # Using the executable wrapper (recommended)
-./run_experiment {experiment_toml_abs}
+./run {experiment_toml_abs}
 
 # Or using uv directly
 uv run python run_experiment.py {experiment_toml_abs}
