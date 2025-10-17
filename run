@@ -17,13 +17,21 @@ cd "$SCRIPT_DIR"
 # Check if /ereborfs exists and activate environment if it does
 if [ -d "/ereborfs" ]; then
     source /ereborfs/bedfrory/venvs/connectome-snns/bin/activate
-fi
-
-# Run the Python experiment script with uv
-if [ $# -eq 0 ]; then
-    # No arguments provided, use default
-    uv run python run_experiment.py
+    # Run the Python experiment script with uv
+    if [ $# -eq 0 ]; then
+        # No arguments provided, use default
+        uv run --active python run_experiment.py
+    else
+        # Pass the first argument (config path) to the Python script
+        uv run --active python run_experiment.py "$1"
+    fi
 else
-    # Pass the first argument (config path) to the Python script
-    uv run python run_experiment.py "$1"
+    # Run the Python experiment script with uv
+    if [ $# -eq 0 ]; then
+        # No arguments provided, use default
+        uv run python run_experiment.py
+    else
+        # Pass the first argument (config path) to the Python script
+        uv run python run_experiment.py "$1"
+    fi
 fi
