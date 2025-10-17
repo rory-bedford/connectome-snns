@@ -279,6 +279,12 @@ def main(output_dir, params_csv):
             delta_t=delta_t,
             inputs=input_spikes,
         )
+    
+    # Move tensors to CPU for further processing and saving
+    output_spikes = output_spikes.cpu()
+    output_voltages = output_voltages.cpu()
+    output_I_exc = output_I_exc.cpu()
+    output_I_inh = output_I_inh.cpu()
 
     # Visualize Dp network spike trains
     n_neurons_plot = 10
@@ -298,7 +304,7 @@ def main(output_dir, params_csv):
 
     # Compute and plot firing rates for all neurons
     # Calculate firing rates (spikes per second)
-    spike_counts = output_spikes[0].sum(axis=0).cpu().numpy()  # Total spikes per neuron
+    spike_counts = output_spikes[0].sum(axis=0).numpy()  # Total spikes per neuron
     firing_rates = spike_counts / (duration * 1e-3)  # Convert duration from ms to s
 
     # Separate firing rates by neuron type
@@ -383,10 +389,10 @@ def main(output_dir, params_csv):
     )
 
     # Save output arrays
-    np.save(output_dir / "output_spikes.npy", output_spikes.cpu().numpy())
-    np.save(output_dir / "output_voltages.npy", output_voltages.cpu().numpy())
-    np.save(output_dir / "output_I_exc.npy", output_I_exc.cpu().numpy())
-    np.save(output_dir / "output_I_inh.npy", output_I_inh.cpu().numpy())
+    np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
+    np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
+    np.save(output_dir / "output_I_exc.npy", output_I_exc.numpy())
+    np.save(output_dir / "output_I_inh.npy", output_I_inh.numpy())
     np.save(output_dir / "input_spikes.npy", input_spikes)
     np.save(output_dir / "neuron_types.npy", neuron_types)
     np.save(output_dir / "connectivity_graph.npy", connectivity_graph)
