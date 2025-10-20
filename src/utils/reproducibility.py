@@ -334,6 +334,11 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         print(f"Description: {self.config.get('description', 'N/A')}")
 
         # Check git status
+        print("\nChecking git status...")
+        self.git_info = self._check_git_status()
+        print(f"✓ Git status clean (commit: {self.git_info['commit_hash'][:8]})")
+
+        # Check if output directory exists
         output_dir = Path(self.config["output_dir"])
         while output_dir.exists():
             print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
