@@ -14,9 +14,7 @@
   - `uv sync --extra cpu` (CPU)
   - `uv sync --extra gpu` (GPU)
 - Dependencies are tracked in `pyproject.toml` and `uv.lock`.
-- Lint and format code using Ruff via uv:
-  - `uv ruff check .` (lint)
-  - `uv ruff format .` (format)
+- Code should conform to Ruff lint/format standards, but **avoid running command line tools** (testing, linting, formatting) unless absolutely necessary - the user handles these tasks themselves.
 
 
 

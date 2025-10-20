@@ -40,3 +40,5 @@ U_reset_I,mV,Reset voltage after spike for inhibitory neurons,-60
 scaling_factor_E,pA/voxel,Scaling factor for excitatory weights,3e-3
 scaling_factor_I,pA/voxel,Scaling factor for inhibitory weights,4e-3
 scaling_factor_FF,pA/voxel,Scaling factor for feedforward weights,4e-3
+# Hyperparameters
+surrgrad_scale,,Scale for surrogate gradient fast sigmoid function,100

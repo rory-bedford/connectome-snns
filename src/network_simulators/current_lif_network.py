@@ -2,130 +2,20 @@
 
 import numpy as np
 import torch
-import torch.nn as nn
 from numpy.typing import NDArray
 from pathlib import Path
 from tqdm import tqdm
-from network_simulators.current_lif_io import load_params_from_csv, export_params_to_csv
+from network_simulators.current_lif_io import CurrentLIFNetwork_IO
+from optimisation.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
 FloatArray = NDArray[np.float64]
 
 
-class CurrentLIFNetwork(nn.Module):
-    def __init__(
-        self,
-        csv_path: str | Path,
-        neuron_types: IntArray,
-        recurrent_weights: FloatArray,
-        feedforward_weights: FloatArray | None = None,
-    ):
-        """
-        Initialize the LIF network parameters from CSV file.
-
-        Args:
-            csv_path (str | Path): Path to CSV parameter file.
-            neuron_types (IntArray): Array of shape (n_neurons,) with +1 (excitatory) or -1 (inhibitory).
-            recurrent_weights (FloatArray): Recurrent weight matrix of shape (n_neurons, n_neurons).
-            feedforward_weights (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
-        """
-        super(CurrentLIFNetwork, self).__init__()
-
-        # Load all parameters from CSV
-        params = load_params_from_csv(csv_path)
-
-        # Basic assertions
-        assert neuron_types.ndim == 1
-        assert recurrent_weights.ndim == 2
-        assert recurrent_weights.shape[0] == recurrent_weights.shape[1]
-        assert neuron_types.shape[0] == recurrent_weights.shape[0]
-
-        if feedforward_weights is not None:
-            assert feedforward_weights.ndim == 2
-            assert feedforward_weights.shape[1] == neuron_types.shape[0]
-
-        # Extract indices before registering them
-        exc_indices = torch.from_numpy(np.where(neuron_types == 1)[0]).long()
-        inh_indices = torch.from_numpy(np.where(neuron_types == -1)[0]).long()
-
-        # Register network structure
-        self.register_buffer("neuron_types", torch.from_numpy(neuron_types).long())
-        self.register_buffer("exc_indices", exc_indices)
-        self.register_buffer("inh_indices", inh_indices)
-        self.register_buffer("n_neurons", torch.tensor(neuron_types.shape[0]))
-        self.register_buffer(
-            "recurrent_weights", torch.from_numpy(recurrent_weights).float()
-        )
-        if feedforward_weights is not None:
-            self.register_buffer(
-                "feedforward_weights", torch.from_numpy(feedforward_weights).float()
-            )
-            self.register_buffer("n_inputs", torch.tensor(feedforward_weights.shape[0]))
-        else:
-            self.feedforward_weights = None
-            self.n_inputs = None
-
-        # Register all loaded parameters
-        for name, value in params.items():
-            self.register_buffer(name, value)
-
-    def export_to_csv(self, csv_path: str | Path):
-        """
-        Export network parameters to CSV file.
-
-        Args:
-            csv_path: Path where CSV file will be saved
-        """
-        export_params_to_csv(self, csv_path)
-
-    @property
-    def device(self):
-        """Get the device the model is on"""
-        return self.recurrent_weights.device
-
-    def initialise_parameters(
-        self,
-        E_weight: float,
-        I_weight: float,
-    ):
-        """
-        Initialize optimisable parameters.
-
-        Args:
-            E_weight (float): Scaling factor for excitatory weights (pA/voxel).
-            I_weight (float): Scaling factor for inhibitory weights (pA/voxel).
-        """
-        assert E_weight > 0, "E_weight must be positive"
-        assert I_weight > 0, "I_weight must be positive"
-
-        self.E_weight = nn.Parameter(
-            torch.tensor(E_weight, dtype=torch.float32, device=self.device)
-        )
-        self.I_weight = nn.Parameter(
-            torch.tensor(I_weight, dtype=torch.float32, device=self.device)
-        )
-
-    @property
-    def scaled_recurrent_weights(self) -> torch.Tensor:
-        """
-        Get the recurrent weights scaled by E_weight and I_weight
-
-        From our connectome weights, we want to scale all E->I and E->E connections by E_weight,
-        and all I->E and I->I connections by I_weight. This is done by multiplying each column of the
-        recurrent weight matrix by the appropriate scaling factor based on the neuron types.
-
-        Returns:
-            torch.Tensor: Scaled recurrent weight matrix of shape (n_neurons, n_neurons).
-        """
-        assert hasattr(self, "E_weight") and hasattr(self, "I_weight"), (
-            "Parameters must be initialized first"
-        )
-        scaling_factors = torch.where(
-            self.neuron_types == 1, self.E_weight, self.I_weight
-        )
-        return self.recurrent_weights * scaling_factors.unsqueeze(0)
-
+class CurrentLIFNetwork(CurrentLIFNetwork_IO):
+    """Current-based LIF network simulator with connectome-constrained weights."""
+    
     def forward(
         self,
         n_steps: int,
@@ -308,7 +198,7 @@ class CurrentLIFNetwork(nn.Module):
             # Add feedforward input if present
             if inputs is not None:
                 # Assume feedforward inputs are excitatory, so they contribute to I_exc
-                I_exc = I_exc + inputs[:, t, :] @ self.feedforward_weights
+                I_exc = I_exc + inputs[:, t, :] @ self.scaled_feedforward_weights
 
             # Store results
             all_v[:, t, self.exc_indices] = v_exc
