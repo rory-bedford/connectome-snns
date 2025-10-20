@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from numpy.typing import NDArray
 from pathlib import Path
+from optimisation.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
@@ -423,3 +424,13 @@ class CurrentLIFNetwork_IO(nn.Module):
             
         assert hasattr(self, "scaling_factor_FF"), "scaling_factor_FF must be initialized"
         return self.feedforward_weights * self.scaling_factor_FF
+
+    @property
+    def spike_fn(self):
+        """
+        Get the surrogate gradient spike function with the current scale parameter.
+        
+        Returns:
+            Callable: Partial function for SurrGradSpike with configured scale.
+        """
+        return lambda x: SurrGradSpike.apply(x, self.surrgrad_scale)
