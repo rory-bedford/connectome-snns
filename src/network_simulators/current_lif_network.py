@@ -73,6 +73,9 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         beta_E = torch.exp(-dt / self.tau_mem_E)
         beta_I = torch.exp(-dt / self.tau_mem_I)
 
+        # Initialise surrogate gradient non-linearity
+        spike_fn = SurrGradSpike(self.surrgrad_scale)
+
         # Default initial membrane potentials to resting potential if not provided
         if initial_v is None:
             initial_v = torch.zeros(
@@ -174,9 +177,9 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                 + I_to_inh * self.R_I * (1 - beta_I)  # Input current
             )
 
-            # Generate spikes based on threshold
-            s_exc = (v_exc >= self.theta_E).float()
-            s_inh = (v_inh >= self.theta_I).float()
+            # Generate spikes based on threshold - uses surrogate gradient
+            s_exc = spike_fn(v_exc - self.theta_E)
+            s_inh = spike_fn(v_inh - self.theta_I)
 
             # Reset neurons that spiked
             v_exc = v_exc * (1 - s_exc) + self.U_reset_E * s_exc
