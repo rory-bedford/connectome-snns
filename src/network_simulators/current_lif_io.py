@@ -433,5 +433,4 @@ class CurrentLIFNetwork_IO(nn.Module):
         Returns:
             Callable: Partial function for SurrGradSpike with configured scale.
         """
-        return lambda x: (x >= 0).float()
-        #return lambda x: SurrGradSpike.apply(x, self.surrgrad_scale)
+        return lambda x: SurrGradSpike.apply(x, self.surrgrad_scale)

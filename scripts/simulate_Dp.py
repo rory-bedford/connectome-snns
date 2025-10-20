@@ -278,7 +278,7 @@ def main(output_dir, params_csv):
         csv_path=params_csv,
         neuron_types=neuron_types,
         recurrent_weights=weights,
-        feedforward_weights=feedforward_weights * scaling_factor_FF,
+        feedforward_weights=feedforward_weights,
     )
 
     # Move model to device for GPU acceleration
