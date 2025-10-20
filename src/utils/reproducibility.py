@@ -7,7 +7,7 @@ Usage in your scripts:
     tracker = ExperimentTracker()
 
     with tracker:
-        output_dir, params_csv = tracker.output_dir, tracker.params_csv
+        output_dir, params_file = tracker.output_dir, tracker.params_file
 
         # Your code here...
         # Errors are automatically caught and logged
@@ -49,7 +49,7 @@ class ExperimentTracker:
         self.output_dir = None
         self.completed_successfully = False
         self.initial_metadata = None
-        self.params_csv = None
+        self.params_file = None
 
     def __enter__(self):
         """Context manager entry - start tracking."""
@@ -129,7 +129,7 @@ class ExperimentTracker:
 
     def _validate_config(self):
         """Validate that required fields are present in config."""
-        required_fields = ["script", "output_dir", "parameters_csv", "log_file"]
+        required_fields = ["script", "output_dir", "parameters_file", "log_file"]
         for field in required_fields:
             if field not in self.config:
                 raise ValueError(f"Missing required field '{field}' in config")
@@ -139,17 +139,17 @@ class ExperimentTracker:
         if not script_path.exists():
             raise FileNotFoundError(f"Script not found: {script_path}")
 
-        # Validate that parameters CSV exists
-        csv_path = Path(self.config["parameters_csv"])
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Parameters CSV not found: {csv_path}")
+        # Validate that parameters file exists
+        params_path = Path(self.config["parameters_file"])
+        if not params_path.exists():
+            raise FileNotFoundError(f"Parameters file not found: {params_path}")
 
     def _create_initial_metadata(self):
         """Create initial metadata at experiment start."""
         return {
             "script": self.config["script"],
             "description": self.config.get("description", ""),
-            "parameters_csv": self.config["parameters_csv"],
+            "parameters_file": self.config["parameters_file"],
             "output_dir": str(self.config["output_dir"]),
             "git_commit": self.git_info["commit_hash"],
             "git_branch": self.git_info["branch"],
@@ -267,9 +267,9 @@ See the error file in this directory for the full traceback.
 - **Branch**: {metadata["git_branch"]}
 
 ## Parameters
-Parameters loaded from: `{metadata["parameters_csv"]}`
+Parameters loaded from: `{metadata["parameters_file"]}`
 
-See `parameters.csv` in this directory for the exact parameters used.
+See `parameters.{Path(metadata["parameters_file"]).suffix[1:]}` in this directory for the exact parameters used.
 
 ## Reproducibility
 
@@ -309,7 +309,7 @@ You will most likeley be prompted to enter a new output directory to avoid overw
 **Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
 
 ## Files in This Directory
-- `parameters.csv` - Exact parameters used for this run
+- `parameters.{Path(metadata["parameters_file"]).suffix[1:]}` - Exact parameters used for this run
 - `experiment.toml` - Configuration file (with paths updated to this directory)
 - `metadata.json` - Machine-readable metadata
 - `README.md` - This file
@@ -329,16 +329,11 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         print(title)
         print(f"{'=' * len(title)}\n")
         print(f"Script: {self.config['script']}")
-        print(f"Parameters: {self.config['parameters_csv']}")
+        print(f"Parameters: {self.config['parameters_file']}")
         print(f"Output: {self.config['output_dir']}")
         print(f"Description: {self.config.get('description', 'N/A')}")
 
         # Check git status
-        print("\nChecking git status...")
-        self.git_info = self._check_git_status()
-        print(f"✓ Git status clean (commit: {self.git_info['commit_hash'][:8]})")
-
-        # Check if output directory exists
         output_dir = Path(self.config["output_dir"])
         while output_dir.exists():
             print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
@@ -372,18 +367,19 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         output_dir.mkdir(parents=True, exist_ok=True)
         print(f"✓ Created output directory: {output_dir}")
 
-        # Copy parameters CSV to output folder
-        csv_path = Path(self.config["parameters_csv"])
-        dest_csv = output_dir / "parameters.csv"
-        shutil.copy2(csv_path, dest_csv)
-        print(f"✓ Copied parameters CSV to: {dest_csv}")
+        # Copy parameters file to output folder
+        params_path = Path(self.config["parameters_file"])
+        params_filename = f"parameters{params_path.suffix}"
+        dest_params = output_dir / params_filename
+        shutil.copy2(params_path, dest_params)
+        print(f"✓ Copied parameters file to: {dest_params}")
 
         # Copy and modify experiment.toml to output folder
         dest_toml = output_dir / "experiment.toml"
         modified_config = self.config.copy()
         # Update paths to point to copied files in output directory
-        modified_config["parameters_csv"] = str(
-            (output_dir / "parameters.csv").resolve()
+        modified_config["parameters_file"] = str(
+            (output_dir / params_filename).resolve()
         )
         modified_config["output_dir"] = str(output_dir.resolve())
         # Keep log_file absolute as-is
@@ -393,8 +389,8 @@ You will most likeley be prompted to enter a new output directory to avoid overw
             toml.dump(modified_config, f)
         print(f"✓ Copied experiment config to: {dest_toml}")
 
-        # Store params_csv for easy access
-        self.params_csv = csv_path
+        # Store params_file for easy access
+        self.params_file = params_path
 
         # Record start time and output directory
         self.start_time = datetime.now()

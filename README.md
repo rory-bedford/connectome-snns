@@ -42,9 +42,9 @@ Special care is taken to make all our simulations fully reproducible. In particu
 
 To use these features, you need to write and run your python scripts as follows:
 
-* Make sure your script has a `main(output_dir, params_csv)` function that accepts two arguments:
+* Make sure your script has a `main(output_dir, params_file)` function that accepts two arguments:
   - `output_dir`: Path to the directory where your experiment outputs should be saved
-  - `params_csv`: Path to the CSV file containing your experiment parameters
+  - `params_file`: Path to the file containing your experiment parameters
 * Please only use these paths for loading and saving data in order for our tracking to function properly
 * `experiment.toml` in the repository root is a template you can use to configure your experiments
 * We recommend you make a `workspace/` folder which will be gitignored, and copy this template in there alongside any parameter files you wish to modify on the fly

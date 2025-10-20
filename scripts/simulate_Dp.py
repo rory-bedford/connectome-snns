@@ -23,12 +23,12 @@ from visualization import plot_membrane_voltages, plot_synaptic_currents
 import torch
 
 
-def main(output_dir, params_csv):
+def main(output_dir, params_file):
     """Main execution function for Dp network simulation.
 
     Args:
         output_dir (Path): Directory where output files will be saved
-        params_csv (Path): Path to the CSV file containing network parameters
+        params_file (Path): Path to the file containing network parameters
     """
     # ================================================================================================
     # SETUP: Device selection and parameter loading
@@ -38,7 +38,7 @@ def main(output_dir, params_csv):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load all network parameters
-    params_df = pd.read_csv(params_csv, comment="#")
+    params_df = pd.read_csv(params_file, comment="#")
 
     # Extract parameters from dataframe
     params = params_df.set_index("symbol")
@@ -275,7 +275,7 @@ def main(output_dir, params_csv):
 
     # Initialize LIF network model
     model = CurrentLIFNetwork(
-        csv_path=params_csv,
+        csv_path=params_file,
         neuron_types=neuron_types,
         recurrent_weights=weights,
         feedforward_weights=feedforward_weights,
