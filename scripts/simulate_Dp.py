@@ -17,6 +17,7 @@ Overview:
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import toml
 from synthetic_connectome import topology_generators, weight_assigners
 from network_simulators.current_lif_network import CurrentLIFNetwork
 from visualization import plot_membrane_voltages, plot_synaptic_currents
@@ -37,31 +38,38 @@ def main(output_dir, params_file):
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Load all network parameters
-    params_df = pd.read_csv(params_file, comment="#")
+    # Load all network parameters from TOML file
+    with open(params_file, 'r') as f:
+        params = toml.load(f)
 
-    # Extract parameters from dataframe
-    params = params_df.set_index("symbol")
-
-    delta_t = params.loc["delta_t", "value"]
-    duration = params.loc["duration", "value"]
-    num_neurons = int(params.loc["num_neurons", "value"])
-    num_assemblies = int(params.loc["num_assemblies", "value"])
-    p_within = params.loc["p_within", "value"]
-    p_between = params.loc["p_between", "value"]
-    p_E = params.loc["p_E", "value"]
-    w_mu_E = params.loc["w_mu_E", "value"]
-    w_sigma_E = params.loc["w_sigma_E", "value"]
-    w_mu_I = params.loc["w_mu_I", "value"]
-    w_sigma_I = params.loc["w_sigma_I", "value"]
-    num_mitral = int(params.loc["num_mitral", "value"])
-    r_mitral = params.loc["r_mitral", "value"]
-    p_feedforward = params.loc["p_feedforward", "value"]
-    w_mu_FF = params.loc["w_mu_FF", "value"]
-    w_sigma_FF = params.loc["w_sigma_FF", "value"]
-    scaling_factor_E = params.loc["scaling_factor_E", "value"]
-    scaling_factor_I = params.loc["scaling_factor_I", "value"]
-    scaling_factor_FF = params.loc["scaling_factor_FF", "value"]
+    # Extract simulation parameters
+    delta_t = params['simulation']['delta_t']
+    duration = params['simulation']['duration']
+    
+    # Extract topology parameters
+    num_neurons = int(params['topology']['num_neurons'])
+    num_assemblies = int(params['topology']['num_assemblies'])
+    p_within = params['topology']['p_within']
+    p_between = params['topology']['p_between']
+    p_E = params['topology']['p_E']
+    
+    # Extract weight parameters
+    w_mu_E = params['weights']['recurrent']['w_mu_E']
+    w_sigma_E = params['weights']['recurrent']['w_sigma_E']
+    w_mu_I = params['weights']['recurrent']['w_mu_I']
+    w_sigma_I = params['weights']['recurrent']['w_sigma_I']
+    w_mu_FF = params['weights']['feedforward']['w_mu_FF']
+    w_sigma_FF = params['weights']['feedforward']['w_sigma_FF']
+    
+    # Extract feedforward parameters
+    num_mitral = int(params['feedforward']['num_mitral'])
+    r_mitral = params['feedforward']['r_mitral']
+    p_feedforward = params['feedforward']['p_feedforward']
+    
+    # Extract scaling parameters
+    scaling_factor_E = params['scaling']['scaling_factor_E']
+    scaling_factor_I = params['scaling']['scaling_factor_I']
+    scaling_factor_FF = params['scaling']['scaling_factor_FF']
 
     # ================================================================================================
     # STEP 1: Generate Assembly-Based Topology and Visualization
@@ -275,7 +283,7 @@ def main(output_dir, params_file):
 
     # Initialize LIF network model
     model = CurrentLIFNetwork(
-        csv_path=params_file,
+        params_file=params_file,
         neuron_types=neuron_types,
         recurrent_weights=weights,
         feedforward_weights=feedforward_weights,

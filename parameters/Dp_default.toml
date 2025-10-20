@@ -1,0 +1,61 @@
+# Combined network parameters for connectome-constrained SNN models
+# Adapted from Meissner-Bernard et al. (2025)
+
+[simulation]
+# Simulation parameters
+delta_t = 1.0  # ms - Time resolution of the simulation
+duration = 10000.0  # ms - Total simulation duration
+
+[topology]
+# Dp topology
+num_neurons = 5000  # Total number of neurons in the network
+num_assemblies = 20  # Number of assemblies in the network
+p_within = 0.05  # Connection probability within assemblies
+p_between = 0.01  # Connection probability between assemblies
+p_E = 0.8  # Proportion of excitatory neurons
+
+[weights.recurrent]
+# Recurrent weights (log-normal)
+w_mu_E = 1.0  # voxel - Mean (log-space) for excitatory synaptic weights
+w_sigma_E = 0.2  # voxel - Standard deviation (log-space) for excitatory weights
+w_mu_I = 2.39  # voxel - Mean (log-space) for inhibitory synaptic weights
+w_sigma_I = 0.2  # voxel - Standard deviation (log-space) for inhibitory weights
+
+[weights.feedforward]
+# Feedforward weights (log-normal)
+w_mu_FF = 0.0  # voxel - Mean (log-space) for feedforward synaptic weights
+w_sigma_FF = 0.2  # voxel - Standard deviation (log-space) for feedforward weights
+
+[feedforward]
+# Feedforward inputs
+num_mitral = 1500  # Number of mitral cells (feedforward inputs)
+r_mitral = 6.0  # Hz - Firing rate of mitral cells (Poisson)
+p_feedforward = 0.02  # Connection probability from mitral cells to Dp
+
+[cells.excitatory]
+# Neuron physiology parameters (excitatory)
+tau_mem = 85.0  # ms - Membrane time constant for excitatory neurons
+tau_syn = 30.0  # ms - Synaptic time constant for excitatory connections
+R = 740.74  # MOhm - Membrane resistance for excitatory neurons
+U_rest = -60.0  # mV - Resting membrane potential for excitatory neurons
+theta = -38.0  # mV - Spike threshold voltage for excitatory neurons
+U_reset = -60.0  # mV - Reset voltage after spike for excitatory neurons
+
+[cells.inhibitory]
+# Neuron physiology parameters (inhibitory)
+tau_mem = 50.0  # ms - Membrane time constant for inhibitory neurons
+tau_syn = 10.0  # ms - Synaptic time constant for inhibitory connections
+R = 1111.11  # MOhm - Membrane resistance for inhibitory neurons
+U_rest = -60.0  # mV - Resting membrane potential for inhibitory neurons
+theta = -45.0  # mV - Spike threshold voltage for inhibitory neurons
+U_reset = -60.0  # mV - Reset voltage after spike for inhibitory neurons
+
+[scaling]
+# Optimisable parameters
+scaling_factor_E = 0.003  # pA/voxel - Scaling factor for excitatory weights
+scaling_factor_I = 0.004  # pA/voxel - Scaling factor for inhibitory weights
+scaling_factor_FF = 0.004  # pA/voxel - Scaling factor for feedforward weights
+
+[hyperparameters]
+# Hyperparameters
+surrgrad_scale = 100.0  # Scale for surrogate gradient fast sigmoid function
