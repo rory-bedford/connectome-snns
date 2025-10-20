@@ -30,6 +30,10 @@ def main(output_dir, params_csv):
         output_dir (Path): Directory where output files will be saved
         params_csv (Path): Path to the CSV file containing network parameters
     """
+    # ================================================================================================
+    # SETUP: Device selection and parameter loading
+    # ================================================================================================
+
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -59,7 +63,10 @@ def main(output_dir, params_csv):
     scaling_factor_I = params.loc["scaling_factor_I", "value"]
     scaling_factor_FF = params.loc["scaling_factor_FF", "value"]
 
-    # Generate Assembly-Based Topology
+    # ================================================================================================
+    # STEP 1: Generate Assembly-Based Topology and Visualization
+    # ================================================================================================
+
     # Generate assembly-based connectivity graph and neuron types
     connectivity_graph, neuron_types = topology_generators.assembly_generator(
         num_neurons=num_neurons,
@@ -105,7 +112,10 @@ def main(output_dir, params_csv):
     plt.savefig(output_dir / "01_assembly_graph.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # Assign Synaptic Weights
+    # ================================================================================================
+    # STEP 2: Assign Synaptic Weights and Analyze Connectivity
+    # ================================================================================================
+
     # Assign log-normal weights to connectivity graph
     weights = weight_assigners.assign_weights_lognormal(
         connectivity_graph=connectivity_graph,
@@ -179,7 +189,10 @@ def main(output_dir, params_csv):
     )
     plt.close()
 
-    # Create network inputs
+    # ================================================================================================
+    # STEP 3: Create Feedforward Inputs from Mitral Cells
+    # ================================================================================================
+
     # Generate Poisson spike trains for mitral cells
     n_steps = int(duration / delta_t)
     shape = (1, n_steps, num_mitral)
@@ -256,17 +269,16 @@ def main(output_dir, params_csv):
     )
     plt.close()
 
-    # Initialize LIF network model and run simulation
+    # ================================================================================================
+    # STEP 4: Initialize and Run LIF Network Simulation
+    # ================================================================================================
+
+    # Initialize LIF network model
     model = CurrentLIFNetwork(
         csv_path=params_csv,
         neuron_types=neuron_types,
         recurrent_weights=weights,
         feedforward_weights=feedforward_weights * scaling_factor_FF,
-    )
-
-    model.initialise_parameters(
-        E_weight=scaling_factor_E,
-        I_weight=scaling_factor_I,
     )
 
     # Move model to device for GPU acceleration
@@ -285,6 +297,10 @@ def main(output_dir, params_csv):
     output_voltages = output_voltages.cpu()
     output_I_exc = output_I_exc.cpu()
     output_I_inh = output_I_inh.cpu()
+
+    # ================================================================================================
+    # STEP 5: Analyze and Visualize Network Output
+    # ================================================================================================
 
     # Visualize Dp network spike trains
     n_neurons_plot = 10
@@ -387,6 +403,10 @@ def main(output_dir, params_csv):
         fraction=1,
         save_path=output_dir / "09_synaptic_currents.png",
     )
+
+    # ================================================================================================
+    # STEP 6: Save Output Data for Further Analysis
+    # ================================================================================================
 
     # Save output arrays
     np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
