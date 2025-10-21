@@ -169,18 +169,8 @@ class CurrentLIFNetwork_IO(nn.Module):
         # FIXED PARAMETERS (NON-TRAINABLE - STORED IN BUFFERS)
         # ====================================================
 
-        # Create neuron-indexed arrays for physiological parameters
-        neuron_params = self._create_neuron_param_arrays(
-            physiology_params, cell_types, cell_type_indices, n_neurons
-        )
-
-        # Create feedforward neuron-indexed arrays for tau_syn if feedforward parameters are provided
-        if physiology_params_FF is not None:
-            neuron_params_FF = self._create_feedforward_neuron_param_arrays(
-                physiology_params_FF, cell_types_FF, cell_type_indices_FF, n_inputs
-            )
-        else:
-            neuron_params_FF = {}
+        self.n_neurons = n_neurons
+        self.n_inputs = n_inputs
 
         # Register network structure (connectivity matrices and dimensions)
         self.register_buffer("weights", torch.from_numpy(weights).float())
@@ -205,6 +195,19 @@ class CurrentLIFNetwork_IO(nn.Module):
             self.register_buffer(
                 "cell_type_indices_FF", torch.from_numpy(cell_type_indices_FF).long()
             )
+
+        # Create neuron-indexed arrays for physiological parameters
+        neuron_params = self._create_neuron_param_arrays(
+            physiology_params, cell_types, cell_type_indices, n_neurons
+        )
+
+        # Create feedforward neuron-indexed arrays for tau_syn if feedforward parameters are provided
+        if physiology_params_FF is not None:
+            neuron_params_FF = self._create_feedforward_neuron_param_arrays(
+                physiology_params_FF, cell_types_FF, cell_type_indices_FF, n_inputs
+            )
+        else:
+            neuron_params_FF = {}
 
         # Register physiological parameters as neuron-indexed arrays
         for param_name, param_array in neuron_params.items():
