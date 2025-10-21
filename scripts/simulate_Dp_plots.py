@@ -24,7 +24,7 @@ from visualization import plot_membrane_voltages, plot_synaptic_currents
 
 def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
     """Plot the assembly graph structure.
-    
+
     Args:
         connectivity_graph (np.ndarray): Binary connectivity matrix
         num_assemblies (int): Number of assemblies in the network
@@ -69,7 +69,7 @@ def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
 
 def plot_weighted_connectivity(weights, num_assemblies, save_path):
     """Plot the weighted connectivity matrix.
-    
+
     Args:
         weights (np.ndarray): Weighted connectivity matrix
         num_assemblies (int): Number of assemblies in the network
@@ -114,7 +114,7 @@ def plot_weighted_connectivity(weights, num_assemblies, save_path):
 
 def plot_synaptic_input_histogram(weights, save_path):
     """Plot histogram of total synaptic input to each neuron.
-    
+
     Args:
         weights (np.ndarray): Weighted connectivity matrix
         save_path (Path): Path to save the plot
@@ -144,7 +144,7 @@ def plot_synaptic_input_histogram(weights, save_path):
 
 def plot_mitral_cell_spikes(input_spikes, delta_t, duration, save_path):
     """Plot sample mitral cell spike trains.
-    
+
     Args:
         input_spikes (np.ndarray): Input spike array
         delta_t (float): Time step in ms
@@ -169,7 +169,7 @@ def plot_mitral_cell_spikes(input_spikes, delta_t, duration, save_path):
 
 def plot_feedforward_connectivity(feedforward_weights, save_path):
     """Plot feedforward connectivity matrix.
-    
+
     Args:
         feedforward_weights (np.ndarray): Feedforward connectivity weights
         save_path (Path): Path to save the plot
@@ -208,7 +208,7 @@ def plot_feedforward_connectivity(feedforward_weights, save_path):
 
 def plot_dp_network_spikes(output_spikes, delta_t, duration, save_path):
     """Plot sample Dp network spike trains.
-    
+
     Args:
         output_spikes (np.ndarray): Output spike array
         delta_t (float): Time step in ms
@@ -233,7 +233,7 @@ def plot_dp_network_spikes(output_spikes, delta_t, duration, save_path):
 
 def plot_firing_rate_distribution(output_spikes, neuron_types, duration, save_path):
     """Plot distribution of firing rates in the Dp network.
-    
+
     Args:
         output_spikes (np.ndarray): Output spike array
         neuron_types (np.ndarray): Neuron type assignments (+1/-1)
@@ -299,16 +299,16 @@ def plot_firing_rate_distribution(output_spikes, neuron_types, duration, save_pa
 
 def main(output_dir_path):
     """Main plotting function for Dp network simulation outputs.
-    
+
     Loads all necessary data from the output directory and generates plots.
 
     Args:
         output_dir_path (str or Path): Path to directory containing simulation outputs
     """
     output_dir = Path(output_dir_path)
-    
+
     print(f"Loading data from {output_dir}...")
-    
+
     # Load all saved arrays
     connectivity_graph = np.load(output_dir / "connectivity_graph.npy")
     weights = np.load(output_dir / "weights.npy")
@@ -319,78 +319,101 @@ def main(output_dir_path):
     output_I_exc = np.load(output_dir / "output_I_exc.npy")
     output_I_inh = np.load(output_dir / "output_I_inh.npy")
     neuron_types = np.load(output_dir / "neuron_types.npy")
-    
+
     # Try to load cell type indices if available (for newer saves)
     try:
         cell_type_indices = np.load(output_dir / "cell_type_indices.npy")
     except FileNotFoundError:
         # Fall back to deriving from neuron_types and parameters
         cell_type_indices = None
-    
+
     # Load parameters from the workspace to get simulation parameters
     # Look for parameter files in common locations
     params_file = None
     possible_params = [
         output_dir / "params.toml",  # If copied to output dir
-        output_dir.parent.parent / "parameters" / "Dp_default.toml",  # Standard location
-        output_dir.parent.parent / "workspace" / "Dp_default.toml",  # Alternative location
+        output_dir.parent.parent
+        / "parameters"
+        / "Dp_default.toml",  # Standard location
+        output_dir.parent.parent
+        / "workspace"
+        / "Dp_default.toml",  # Alternative location
         Path("parameters/Dp_default.toml"),  # Relative to current directory
         Path("workspace/Dp_default.toml"),  # Alternative relative path
     ]
-    
+
     for params_path in possible_params:
         if params_path.exists():
             params_file = params_path
             break
-    
+
     if params_file is None:
         raise FileNotFoundError(
-            "Could not find parameter file. Expected one of: " + 
-            ", ".join(str(p) for p in possible_params)
+            "Could not find parameter file. Expected one of: "
+            + ", ".join(str(p) for p in possible_params)
         )
-    
+
     print(f"Loading parameters from {params_file}...")
-    with open(params_file, 'r') as f:
+    with open(params_file, "r") as f:
         params = toml.load(f)
-    
+
     # Extract needed parameters
-    delta_t = params['simulation']['delta_t']
-    duration = params['simulation']['duration']
-    num_assemblies = int(params['connectome']['topology']['num_assemblies'])
-    
+    delta_t = params["simulation"]["delta_t"]
+    duration = params["simulation"]["duration"]
+    num_assemblies = int(params["connectome"]["topology"]["num_assemblies"])
+
     # Extract neuron parameters for plotting
-    cell_type_names = params['connectome']['cell_types']['names']
-    cell_type_signs = params['connectome']['cell_types']['signs']
-    
+    cell_type_names = params["connectome"]["cell_types"]["names"]
+    cell_type_signs = params["connectome"]["cell_types"]["signs"]
+
     # Extract LIF parameters for each cell type
     neuron_params = {}
     for i, name in enumerate(cell_type_names):
         sign = cell_type_signs[i]
-        suffix = 'E' if sign == 1 else 'I'
+        suffix = "E" if sign == 1 else "I"
         neuron_params[i] = {
-            'threshold': params['model']['neuron'][f'theta_{suffix}'],
-            'rest': params['model']['neuron'][f'U_rest_{suffix}'],
-            'name': name,
-            'sign': sign
+            "threshold": params["model"]["neuron"][f"theta_{suffix}"],
+            "rest": params["model"]["neuron"][f"U_rest_{suffix}"],
+            "name": name,
+            "sign": sign,
         }
-    
+
     print("Generating plots...")
 
     # Network structure plots
-    plot_assembly_graph(connectivity_graph, num_assemblies, output_dir / "01_assembly_graph.png")
-    plot_weighted_connectivity(weights, num_assemblies, output_dir / "02_weighted_connectivity.png")
-    plot_synaptic_input_histogram(weights, output_dir / "03_synaptic_input_histogram.png")
+    plot_assembly_graph(
+        connectivity_graph, num_assemblies, output_dir / "01_assembly_graph.png"
+    )
+    plot_weighted_connectivity(
+        weights, num_assemblies, output_dir / "02_weighted_connectivity.png"
+    )
+    plot_synaptic_input_histogram(
+        weights, output_dir / "03_synaptic_input_histogram.png"
+    )
 
     # Input analysis plots
-    plot_mitral_cell_spikes(input_spikes, delta_t, duration, output_dir / "04_mitral_cell_spikes.png")
-    plot_feedforward_connectivity(feedforward_weights, output_dir / "05_feedforward_connectivity.png")
+    plot_mitral_cell_spikes(
+        input_spikes, delta_t, duration, output_dir / "04_mitral_cell_spikes.png"
+    )
+    plot_feedforward_connectivity(
+        feedforward_weights, output_dir / "05_feedforward_connectivity.png"
+    )
 
     # Output analysis plots
-    plot_dp_network_spikes(output_spikes, delta_t, duration, output_dir / "06_dp_network_spikes.png")
-    plot_firing_rate_distribution(output_spikes, neuron_types, duration, output_dir / "07_firing_rate_distribution.png")
+    plot_dp_network_spikes(
+        output_spikes, delta_t, duration, output_dir / "06_dp_network_spikes.png"
+    )
+    plot_firing_rate_distribution(
+        output_spikes,
+        neuron_types,
+        duration,
+        output_dir / "07_firing_rate_distribution.png",
+    )
 
     # Use cell_type_indices if available, otherwise fall back to neuron_types
-    neuron_type_indices = cell_type_indices if cell_type_indices is not None else neuron_types
+    neuron_type_indices = (
+        cell_type_indices if cell_type_indices is not None else neuron_types
+    )
 
     # Detailed neuronal dynamics plots using updated visualization functions
     plot_membrane_voltages(
@@ -426,6 +449,6 @@ if __name__ == "__main__":
         print("Usage: python simulate_Dp_plots.py <output_directory>")
         print("Example: python simulate_Dp_plots.py /path/to/output/folder")
         sys.exit(1)
-    
+
     output_directory = sys.argv[1]
     main(output_directory)

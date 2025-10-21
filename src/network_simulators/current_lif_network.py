@@ -3,10 +3,8 @@
 import numpy as np
 import torch
 from numpy.typing import NDArray
-from pathlib import Path
 from tqdm import tqdm
 from network_simulators.current_lif_io import CurrentLIFNetwork_IO
-from optimisation.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
@@ -15,7 +13,7 @@ FloatArray = NDArray[np.float64]
 
 class CurrentLIFNetwork(CurrentLIFNetwork_IO):
     """Current-based LIF network simulator with connectome-constrained weights."""
-    
+
     def forward(
         self,
         n_steps: int,

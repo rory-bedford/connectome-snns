@@ -57,10 +57,9 @@ def plot_membrane_voltages(
         # Get neuron-specific parameters
         cell_type_idx = neuron_types[neuron_id]
         params = neuron_params[cell_type_idx]
-        threshold = params['threshold']
-        rest = params['rest']
-        cell_name = params['name']
-        is_excitatory = params['sign'] == 1
+        threshold = params["threshold"]
+        rest = params["rest"]
+        cell_name = params["name"]
 
         # Add threshold and rest lines
         axes[neuron_id].axhline(

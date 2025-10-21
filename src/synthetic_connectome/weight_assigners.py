@@ -44,26 +44,26 @@ def assign_weights_lognormal(
     """
     w_mu_np = np.array(w_mu_matrix)
     w_sigma_np = np.array(w_sigma_matrix)
-    
+
     W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
-    
+
     # Assign weights based on cell type connectivity matrix
     for i in range(n_source):
         for j in range(n_target):
             if connectivity_graph[i, j]:
                 source_type = source_cell_indices[i]
                 target_type = target_cell_indices[j]
-                
+
                 # Get weight parameters for this cell type combination
                 mu = w_mu_np[source_type, target_type]
                 sigma = w_sigma_np[source_type, target_type]
-                
+
                 # Generate weight magnitude and apply sign (Dale's law)
                 weight_magnitude = np.random.lognormal(mu, sigma)
                 source_sign = cell_type_signs[source_type]
                 W[i, j] = weight_magnitude * source_sign
-    
+
     return W
 
 
@@ -91,26 +91,26 @@ def assign_weights_gamma(
     """
     shape_np = np.array(shape_matrix)
     scale_np = np.array(scale_matrix)
-    
+
     W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
-    
+
     # Assign weights based on cell type connectivity matrix
     for i in range(n_source):
         for j in range(n_target):
             if connectivity_graph[i, j]:
                 source_type = source_cell_indices[i]
                 target_type = target_cell_indices[j]
-                
+
                 # Get weight parameters for this cell type combination
                 shape = shape_np[source_type, target_type]
                 scale = scale_np[source_type, target_type]
-                
+
                 # Generate weight magnitude and apply sign (Dale's law)
                 weight_magnitude = np.random.gamma(shape, scale)
                 source_sign = cell_type_signs[source_type]
                 W[i, j] = weight_magnitude * source_sign
-    
+
     return W
 
 
@@ -138,24 +138,24 @@ def assign_weights_uniform(
     """
     low_np = np.array(low_matrix)
     high_np = np.array(high_matrix)
-    
+
     W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
-    
+
     # Assign weights based on cell type connectivity matrix
     for i in range(n_source):
         for j in range(n_target):
             if connectivity_graph[i, j]:
                 source_type = source_cell_indices[i]
                 target_type = target_cell_indices[j]
-                
+
                 # Get weight parameters for this cell type combination
                 low = low_np[source_type, target_type]
                 high = high_np[source_type, target_type]
-                
+
                 # Generate weight magnitude and apply sign (Dale's law)
                 weight_magnitude = np.random.uniform(low, high)
                 source_sign = cell_type_signs[source_type]
                 W[i, j] = weight_magnitude * source_sign
-    
+
     return W
