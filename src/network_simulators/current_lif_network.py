@@ -22,6 +22,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
         initial_I: FloatArray | None = None,
+        initial_I_FF: FloatArray | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate the network for a given number of time steps.
@@ -32,6 +33,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             inputs (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batch_size, n_neurons). Defaults to resting potentials.
             initial_I (FloatArray | None): Initial synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types). Defaults to zeros.
+            initial_I_FF (FloatArray | None): Initial feedforward synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types_FF). Defaults to zeros.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
@@ -74,6 +76,24 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                 "initial_I must match the number of cell types."
             )
 
+        # Validate initial feedforward currents if provided
+        if initial_I_FF is not None:
+            assert initial_I_FF.ndim == 4, (
+                "initial_I_FF must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types_FF)."
+            )
+            assert initial_I_FF.shape[0] == batch_size, (
+                "initial_I_FF batch size must match batch_size."
+            )
+            assert initial_I_FF.shape[1] == n_steps, (
+                "initial_I_FF must have n_steps time steps."
+            )
+            assert initial_I_FF.shape[2] == self.n_neurons, (
+                "initial_I_FF must match n_neurons."
+            )
+            assert initial_I_FF.shape[3] == len(self.cell_types_FF), (
+                "initial_I_FF must match the number of feedforward cell types."
+            )
+
         # Validate initial membrane potentials if provided
         if initial_v is not None:
             assert initial_v.ndim == 2, (
@@ -104,11 +124,17 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             I = torch.as_tensor(initial_I, dtype=torch.float32, device=self.device)
         else:
             I = torch.zeros(
-                (
-                    batch_size,
-                    self.n_neurons,
-                    len(self.cell_types) + len(self.cell_types_FF),
-                ),
+                (batch_size, self.n_neurons, len(self.cell_types)),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        if initial_I_FF is not None:
+            I_FF = torch.as_tensor(
+                initial_I_FF, dtype=torch.float32, device=self.device
+            )
+        else:
+            I_FF = torch.zeros(
+                (batch_size, self.n_neurons, len(self.cell_types_FF)),
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -120,6 +146,11 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             device=self.device,
         )
         all_I = torch.zeros(
+            (batch_size, n_steps, self.n_neurons, len(self.cell_types)),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        all_I_FF = torch.zeros(
             (batch_size, n_steps, self.n_neurons, len(self.cell_types_FF)),
             dtype=torch.float32,
             device=self.device,
@@ -131,17 +162,18 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         )
 
         # Initialize decay constants
-        # alpha: (n_neurons, n_cell_types + n_cell_types_FF)
-        combined_tau_syn = torch.cat([self.tau_syn.T, self.tau_syn_FF.T], dim=1)
-        alpha = torch.exp(
-            -dt / combined_tau_syn
-        )  # Shape (n_neurons, n_cell_types + n_cell_types_FF)
+        alpha = torch.exp(-dt / self.tau_syn)  # Shape (n_neurons, n_cell_types)
+        alpha_FF = torch.exp(
+            -dt / self.tau_syn_FF
+        )  # Shape (n_neurons, n_cell_types_FF)
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Compute total current at each neuron
             I_total = I.sum(dim=-1)  # Shape (batch_size, n_neurons)
+            if inputs is not None:
+                I_total += I_FF.sum(dim=-1)
 
             # Update membrane potentials (without reset)
             v = (
@@ -156,17 +188,20 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
 
-            # Append feedforward spikes to recurrent spikes if inputs exist
-            if inputs is not None:
-                s = torch.cat(
-                    [s, inputs[:, t, :]], dim=-1
-                )  # Shape (batch_size, n_neurons + n_inputs)
-
             # Update synaptic currents using self.cell_typed_weights directly
             I = (
                 I * alpha  # Decay with synapse time constant
-                + torch.einsum("bi,cij->bcj", s, self.cell_typed_weights)
+                + torch.einsum(
+                    "bi,cij->bcj", s, self.cell_typed_weights
+                )  # Sum over recurrent spikes with weights
             )
+            if inputs is not None:
+                I_FF = (
+                    I_FF * alpha_FF  # Decay with feedforward synapse time constant
+                    + torch.einsum(
+                        "bi,cij->bcj", inputs, self.cell_typed_weights_FF
+                    )  # Sum over feedforward spikes with weights
+                )
 
             # Store results
             all_v[:, t, :] = v
