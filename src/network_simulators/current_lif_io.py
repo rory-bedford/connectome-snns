@@ -172,6 +172,10 @@ class CurrentLIFNetwork_IO(nn.Module):
         self.n_neurons = n_neurons
         self.n_inputs = n_inputs
         self.cell_types = cell_types
+        if cell_types_FF is not None:
+            self.cell_types_FF = cell_types_FF
+        else:
+            self.cell_types_FF = []
 
         # Register weights and cell types
         self.register_buffer("weights", torch.from_numpy(weights).float())
