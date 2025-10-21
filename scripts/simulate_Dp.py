@@ -208,7 +208,7 @@ def main(output_dir, params_file):
 
     # Run inference
     with torch.inference_mode():
-        output_spikes, output_voltages, output_I_exc, output_I_inh = model.forward(
+        output_spikes, output_voltages, output_I, output_I_FF = model.forward(
             n_steps=n_steps,
             dt=dt,
             inputs=input_spikes,
@@ -217,8 +217,8 @@ def main(output_dir, params_file):
     # Move tensors to CPU for further processing and saving
     output_spikes = output_spikes.cpu()
     output_voltages = output_voltages.cpu()
-    output_I_exc = output_I_exc.cpu()
-    output_I_inh = output_I_inh.cpu()
+    output_I = output_I.cpu()
+    output_I_FF = output_I_FF.cpu()
 
     # ============================================
     # STEP 5: Save Output Data for Further Analysis
@@ -227,8 +227,8 @@ def main(output_dir, params_file):
     # Save output arrays
     np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
     np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
-    np.save(output_dir / "output_I_exc.npy", output_I_exc.numpy())
-    np.save(output_dir / "output_I_inh.npy", output_I_inh.numpy())
+    np.save(output_dir / "output_I.npy", output_I.numpy())
+    np.save(output_dir / "output_I_FF.npy", output_I_FF.numpy())
     np.save(output_dir / "input_spikes.npy", input_spikes)
     np.save(output_dir / "neuron_types.npy", neuron_types)
     np.save(output_dir / "cell_type_indices.npy", cell_type_indices)

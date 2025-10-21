@@ -316,8 +316,7 @@ def main(output_dir_path):
     input_spikes = np.load(output_dir / "input_spikes.npy")
     output_spikes = np.load(output_dir / "output_spikes.npy")
     output_voltages = np.load(output_dir / "output_voltages.npy")
-    output_I_exc = np.load(output_dir / "output_I_exc.npy")
-    output_I_inh = np.load(output_dir / "output_I_inh.npy")
+    output_I = np.load(output_dir / "output_I_exc.npy")  # Concatenated currents
     neuron_types = np.load(output_dir / "neuron_types.npy")
 
     # Try to load cell type indices if available (for newer saves)
@@ -432,8 +431,8 @@ def main(output_dir_path):
     )
 
     plot_synaptic_currents(
-        I_exc=output_I_exc,
-        I_inh=output_I_inh,
+        I_exc=output_I[..., 0],  # Slice for excitatory currents
+        I_inh=output_I[..., 1],  # Slice for inhibitory currents
         delta_t=delta_t,
         duration=duration,
         n_neurons_plot=10,

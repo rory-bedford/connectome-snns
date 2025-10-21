@@ -109,7 +109,6 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         # Convert inputs to torch if provided
         if inputs is not None:
             inputs = torch.as_tensor(inputs, dtype=torch.float32, device=self.device)
-            print(f"inputs.shape: {inputs.shape} ")
 
         # Handle initial membrane potentials
         if initial_v is not None:
@@ -207,6 +206,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             # Store results
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
+            all_I_FF[:, t, :, :] = I_FF
             all_s[:, t, :] = s
 
-        return all_s, all_v, all_I
+        return all_s, all_v, all_I, all_I_FF
