@@ -20,6 +20,11 @@ from synthetic_connectome import topology_generators, weight_assigners
 from synthetic_connectome.cell_types import assign_cell_types
 from network_simulators.current_lif_network import CurrentLIFNetwork
 import torch
+import sys
+from pathlib import Path
+
+# Import local scripts
+sys.path.append(str(Path(__file__).resolve().parent))
 import simulate_Dp_plots
 
 
