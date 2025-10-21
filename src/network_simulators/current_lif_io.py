@@ -213,24 +213,24 @@ class CurrentLIFNetwork_IO(nn.Module):
 
         # Register feedforward structure (if provided)
         if weights_FF is not None:
+            # Ensure feedforward weights and indices are registered only once
             self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
-            if cell_type_indices_FF is not None:
-                self.register_buffer(
-                    "cell_type_indices_FF",
-                    torch.from_numpy(cell_type_indices_FF).long(),
-                )
+            self.register_buffer(
+                "cell_type_indices_FF",
+                torch.from_numpy(cell_type_indices_FF).long(),
+            )
         else:
-            self.weights_FF = None
-            self.cell_type_indices_FF = None
+            # Initialize feedforward attributes to zero-length if not provided
+            self.weights_FF = torch.empty((0, n_neurons), dtype=torch.float32)
+            self.cell_type_indices_FF = torch.empty(0, dtype=torch.long)
 
-        # Register cell type indices for efficient scaling
+        # Register cell type indices for recurrent weights
         self.register_buffer(
             "cell_type_indices", torch.from_numpy(cell_type_indices).long()
         )
-        if weights_FF is not None and cell_type_indices_FF is not None:
-            self.register_buffer(
-                "cell_type_indices_FF", torch.from_numpy(cell_type_indices_FF).long()
-            )
+
+        # Remove redundant logic for feedforward cell type indices
+        # Feedforward indices are already handled above
 
         # Register physiological parameters as neuron-indexed arrays
         for param_name, param_array in neuron_params.items():
@@ -245,14 +245,14 @@ class CurrentLIFNetwork_IO(nn.Module):
         # ===========================================================
 
         # Convert scaling factors to tensors and register as trainable parameters
-        scaling_factors_tensor = torch.tensor(scaling_factors, dtype=torch.float32)
-        self.scaling_factors = nn.Parameter(scaling_factors_tensor)
+        self.scaling_factors = nn.Parameter(
+            torch.tensor(scaling_factors, dtype=torch.float32)
+        )
 
         if scaling_factors_FF is not None:
-            scaling_factors_FF_tensor = torch.tensor(
-                scaling_factors_FF, dtype=torch.float32
+            self.scaling_factors_FF = nn.Parameter(
+                torch.tensor(scaling_factors_FF, dtype=torch.float32)
             )
-            self.scaling_factors_FF = nn.Parameter(scaling_factors_FF_tensor)
         else:
             self.scaling_factors_FF = None
 
