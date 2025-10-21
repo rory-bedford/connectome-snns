@@ -63,7 +63,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         """
 
         # Compute decay factors
-        dt = torch.tensor(delta_t, dtype=torch.float32, device=self.device)
+        dt = torch.tensor(dt, dtype=torch.float32, device=self.device)
         print(self.tau_syn.mean())
         alpha = torch.exp(-dt / self.tau_syn)
         beta = torch.exp(-dt / self.tau_mem)
