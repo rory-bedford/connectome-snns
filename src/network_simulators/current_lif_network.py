@@ -104,7 +104,11 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             I = torch.as_tensor(initial_I, dtype=torch.float32, device=self.device)
         else:
             I = torch.zeros(
-                (batch_size, n_steps, self.n_neurons, len(self.cell_types_FF)),
+                (
+                    batch_size,
+                    self.n_neurons,
+                    len(self.cell_types) + len(self.cell_types_FF),
+                ),
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -126,96 +130,53 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             device=self.device,
         )
 
+        # Concatenate all weights once at the start
+        # combined_weights: (n_cell_types + n_cell_types_FF, n_neurons, n_neurons + n_inputs)
+        combined_weights = torch.cat(
+            [self.scaled_weights, self.scaled_weights_FF], dim=1
+        )
+
         # Initialize decay constants
-        combined_tau_syn = torch.cat([self.tau_syn, self.tau_syn_FF], dim=0)
+        # alpha: (n_neurons, n_cell_types + n_cell_types_FF)
+        combined_tau_syn = torch.cat([self.tau_syn.T, self.tau_syn_FF.T], dim=1)
         alpha = torch.exp(
             -dt / combined_tau_syn
-        )  # Shape (n_cell_types + n_cell_types_FF, n_neurons)
+        )  # Shape (n_neurons, n_cell_types + n_cell_types_FF)
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Compute total current at each neuron
-            I_total = I[:, t, :, :].sum(dim=-1)  # Shape (batch_size, n_neurons)
+            I_total = I.sum(dim=-1)  # Shape (batch_size, n_neurons)
 
             # Update membrane potentials (without reset)
             v = (
                 self.U_rest  # Resting potential
-                + (v - self.U_rest) * self.beta  # Leak
-                + I_total * self.R * (1 - self.beta)  # Input current
+                + (v - self.U_rest) * beta  # Leak
+                + I_total * self.R * (1 - beta)  # Input current
             )
 
             # Generate spikes based on threshold - uses surrogate gradient
             s = self.spike_fn(v - self.theta)
 
-            # Reset neurons that spiked
+            # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
 
-            # Update synaptic currents by synapse type (presynaptic neuron type)
-            for ct_idx, ct in enumerate(self.cell_type_indices):
-                I[:, t, :, ct_idx] = (
-                    I[:, t, :, ct_idx]
-                    * self.alpha[ct_idx]  # Decay with synapse time constant
-                    + s @ self.scaled_recurrent_weights[ct, :].unsqueeze(0).T  # ct→all
-                )
-
-            ### LLLM STOP HERE ###
-            # Add feedforward input if present
+            # Append feedforward spikes to recurrent spikes if inputs exist
             if inputs is not None:
-                pass
+                s = torch.cat(
+                    [s, inputs[:, t, :]], dim=-1
+                )  # Shape (batch_size, n_neurons + n_inputs)
 
-        # Run simulation
-        for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
-            # Compute total current at each neuron
-            I_total = I_exc + I_inh
-            I_to_exc = I_total[:, self.exc_indices]
-            I_to_inh = I_total[:, self.inh_indices]
-
-            # Update membrane potentials (without reset)
-            v_exc = (
-                self.U_rest_E  # Resting potential
-                + (v_exc - self.U_rest_E) * beta_E  # Leak
-                + I_to_exc * self.R_E * (1 - beta_E)  # Input current
+            # Update synaptic currents
+            I = (
+                I * alpha  # Decay with synapse time constant
+                + torch.einsum("bi,cij->bcj", s, combined_weights)
             )
-
-            v_inh = (
-                self.U_rest_I  # Resting potential
-                + (v_inh - self.U_rest_I) * beta_I  # Leak
-                + I_to_inh * self.R_I * (1 - beta_I)  # Input current
-            )
-
-            # Generate spikes based on threshold - uses surrogate gradient
-            s_exc = self.spike_fn(v_exc - self.theta_E)
-            s_inh = self.spike_fn(v_inh - self.theta_I)
-
-            # Reset neurons that spiked
-            v_exc = v_exc * (1 - s_exc) + self.U_reset_E * s_exc
-            v_inh = v_inh * (1 - s_inh) + self.U_reset_I * s_inh
-
-            # Update synaptic currents by synapse type (presynaptic neuron type)
-            # Excitatory synaptic currents decay with alpha_E
-            I_exc = (
-                I_exc * alpha_E  # Decay with excitatory synapse time constant
-                + s_exc @ self.scaled_recurrent_weights[self.exc_indices, :]  # E→all
-            )
-
-            # Inhibitory synaptic currents decay with alpha_I
-            I_inh = (
-                I_inh * alpha_I  # Decay with inhibitory synapse time constant
-                + s_inh @ self.scaled_recurrent_weights[self.inh_indices, :]  # I→all
-            )
-
-            # Add feedforward input if present
-            if inputs is not None:
-                # Assume feedforward inputs are excitatory, so they contribute to I_exc
-                I_exc = I_exc + inputs[:, t, :] @ self.scaled_feedforward_weights
 
             # Store results
-            all_v[:, t, self.exc_indices] = v_exc
-            all_v[:, t, self.inh_indices] = v_inh
-            all_I_exc[:, t, :] = I_exc
-            all_I_inh[:, t, :] = I_inh
-            all_s[:, t, self.exc_indices] = s_exc
-            all_s[:, t, self.inh_indices] = s_inh
+            all_v[:, t, :] = v
+            all_I[:, t, :, :] = I
+            all_s[:, t, :] = s
 
-        return all_s, all_v, all_I_exc, all_I_inh
+        return all_s, all_v, all_I
