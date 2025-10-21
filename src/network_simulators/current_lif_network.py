@@ -210,7 +210,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                 I_FF = (
                     I_FF * alpha_FF  # Decay with feedforward synapse time constant
                     + torch.einsum(
-                        "bi,cij->bjc", inputs, self.cell_typed_weights_FF
+                        "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
                     )  # Sum over feedforward spikes with weights
                 )
 
