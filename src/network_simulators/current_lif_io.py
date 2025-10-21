@@ -175,32 +175,22 @@ class CurrentLIFNetwork_IO(nn.Module):
         if cell_types_FF is not None:
             self.cell_types_FF = cell_types_FF
         else:
-            self.cell_types_FF = []
+            self.cell_types_FF = None
 
-        # Register weights and cell types
+        # Register weights and cell type indices for recurrent connections
         self.register_buffer("weights", torch.from_numpy(weights).float())
-        self.register_buffer(
-            "cell_type_indices", torch.from_numpy(cell_type_indices).long()
-        )
+        self.register_buffer("cell_type_indices", torch.from_numpy(cell_type_indices))
+
+        # Register feedforward structure (if provided)
         if weights_FF is not None:
             self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
             self.register_buffer(
                 "cell_type_indices_FF",
-                torch.from_numpy(cell_type_indices_FF).long(),
+                torch.from_numpy(cell_type_indices_FF),
             )
         else:
-            # Initialize feedforward attributes to zero-length if not provided
-            self.register_buffer(
-                "weights_FF", torch.empty((0, n_neurons), dtype=torch.float32)
-            )
-            self.register_buffer(
-                "cell_type_indices_FF", torch.empty(0, dtype=torch.long)
-            )
-
-        # Register cell type indices for recurrent weights
-        self.register_buffer(
-            "cell_type_indices", torch.from_numpy(cell_type_indices).long()
-        )
+            self.register_buffer("weights_FF", None)
+            self.register_buffer("cell_type_indices_FF", None)
 
         # Create neuron-indexed arrays for physiological parameters
         neuron_params = self._create_neuron_param_arrays(
@@ -240,9 +230,7 @@ class CurrentLIFNetwork_IO(nn.Module):
                 torch.tensor(scaling_factors_FF, dtype=torch.float32)
             )
         else:
-            self.scaling_factors_FF = nn.Parameter(
-                torch.empty((0, n_cell_types), dtype=torch.float32)
-            )
+            self.register_buffer("scaling_factors_FF", None)
 
         # ======================================================================
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
@@ -395,41 +383,30 @@ class CurrentLIFNetwork_IO(nn.Module):
     @property
     def cell_typed_weights(self) -> torch.Tensor:
         """
-        Combine the recurrent and feedforward weight matrices into a tiered structure
-        based on cell types. Each tier corresponds to a specific input cell type.
+        Create a tiered structure for the recurrent weight matrix based on cell types.
+
+        Each input row of `n_neurons` is placed on the level according to its index
+        in `cell_type_indices`.
 
         Returns:
             torch.Tensor: Tiered weight matrix of shape
-                (n_cell_types + n_cell_types_FF, n_inputs + n_neurons, n_neurons).
+                (n_cell_types, n_neurons, n_neurons).
         """
-        # Concatenate recurrent and feedforward weights along the input dimension
-        combined_weights = torch.cat(
-            [self.scaled_weights, self.scaled_weights_FF], dim=0
-        )  # (n_inputs + n_neurons, n_neurons)
-
         # Initialize a zero tensor for tiered weights
-        n_tiers = len(self.cell_types) + len(self.cell_types_FF)
+        n_tiers = len(self.cell_types)
         tiered_weights = torch.zeros(
-            (n_tiers, combined_weights.shape[0], combined_weights.shape[1]),
-            dtype=combined_weights.dtype,
-            device=combined_weights.device,
+            (n_tiers, self.n_neurons, self.n_neurons),
+            dtype=self.weights.dtype,
+            device=self.weights.device,
         )
 
-        # Create tier indices for recurrent and feedforward weights
-        recurrent_tiers = self.cell_type_indices[None, :] == torch.arange(
-            len(self.cell_types), device=self.device
-        ).view(-1, 1)
-        feedforward_tiers = self.cell_type_indices_FF[None, :] == torch.arange(
-            len(self.cell_types_FF), device=self.device
-        ).view(-1, 1)
+        # Create a boolean mask for tiering
+        mask = self.cell_type_indices[None, :] == torch.arange(
+            n_tiers, device=self.device
+        ).view(-1, 1)  # Shape: (n_cell_types, n_neurons)
 
-        # Assign weights to the appropriate tiers
-        tiered_weights[: len(self.cell_types), : self.n_neurons, :] = (
-            self.scaled_weights[recurrent_tiers]
-        )
-        tiered_weights[len(self.cell_types) :, self.n_neurons :, :] = (
-            self.scaled_weights_FF[feedforward_tiers]
-        )
+        # Broadcast the mask to tiered_weights and assign scaled weights
+        tiered_weights = mask[:, :, None] * self.scaled_weights[None, :, :]
 
         return tiered_weights
 
