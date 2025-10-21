@@ -29,120 +29,133 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         Args:
             n_steps (int): Number of time steps to simulate.
             dt (float): Time step duration in milliseconds.
-            inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
-            initial_v (FloatArray | None): Initial membrane potentials of shape (batches, n_neurons). Defaults to resting potentials.
-            initial_I (FloatArray | None): Initial excitatory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
+            inputs (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
+            initial_v (FloatArray | None): Initial membrane potentials of shape (batch_size, n_neurons). Defaults to resting potentials.
+            initial_I (FloatArray | None): Initial synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types). Defaults to zeros.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
-                - all_s: Spike trains of shape (batches, n_steps, n_neurons)
-                - all_v: Membrane potentials of shape (batches, n_steps, n_neurons)
-                - all_I: Synaptic currents of shape (batches, n_steps, n_neurons)
-
-        Notes:
-            Model equations (discrete-time):
-
-            Membrane potential update:
-                V_E[t+1] = U_rest_E + (V_E[t] - U_rest_E) * beta_E + I_total[t] * R_E * (1 - beta_E)
-                V_I[t+1] = U_rest_I + (V_I[t] - U_rest_I) * beta_I + I_total[t] * R_I * (1 - beta_I)
-
-            Synaptic current update:
-                I_exc[t+1] = I_exc[t] * alpha_E + Σ w_ij * s_j[t]  (for excitatory presynaptic spikes)
-                I_inh[t+1] = I_inh[t] * alpha_I + Σ w_ij * s_j[t]  (for inhibitory presynaptic spikes)
-                I_total[t] = I_exc[t] + I_inh[t]
-
-            Spike generation and reset:
-                s[t] = 1 if V[t] >= theta, else 0
-                If s[t] = 1: V[t] = U_reset
-
-            Decay factors:
-                alpha_E = exp(-dt / tau_syn_E)
-                alpha_I = exp(-dt / tau_syn_I)
-                beta_E = exp(-dt / tau_mem_E)
-                beta_I = exp(-dt / tau_mem_I)
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
+                - all_s: Spike trains of shape (batch_size, n_steps, n_neurons)
+                - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
+                - all_I: Synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types)
         """
 
-        # Compute decay factors
-        dt = torch.tensor(dt, dtype=torch.float32, device=self.device)
-        print(self.tau_syn.mean())
-        alpha = torch.exp(-dt / self.tau_syn)
-        beta = torch.exp(-dt / self.tau_mem)
+        # Determine batch size
+        batch_size = inputs.shape[0] if inputs is not None else 1
 
-        # Default initial membrane potentials to resting potential if not provided
-        if initial_v is None:
-            initial_v = self.U_rest.copy()
-        else:
-            initial_v = torch.as_tensor(
-                initial_v, dtype=torch.float32, device=self.device
+        # Validate inputs if provided
+        if inputs is not None:
+            assert inputs.ndim == 3, (
+                "inputs must have 3 dimensions (batch_size, n_steps, n_inputs)."
             )
-
-        # Default initial currents to zero if not provided
-        if initial_I_exc is None:
-            initial_I_exc = torch.zeros(
-                (1, self.n_neurons), dtype=torch.float32, device=self.device
+            assert inputs.shape[0] == batch_size, (
+                "inputs batch size must match batch_size."
             )
-        else:
-            initial_I_exc = torch.as_tensor(
-                initial_I_exc, dtype=torch.float32, device=self.device
+            assert inputs.shape[1] == n_steps, "inputs must have n_steps time steps."
+            assert inputs.shape[2] == self.n_inputs, (
+                "inputs must match the number of feedforward inputs."
             )
 
-        if initial_I_inh is None:
-            initial_I_inh = torch.zeros(
-                (1, self.n_neurons), dtype=torch.float32, device=self.device
+        # Validate initial currents if provided
+        if initial_I is not None:
+            assert initial_I.ndim == 4, (
+                "initial_I must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types)."
             )
-        else:
-            initial_I_inh = torch.as_tensor(
-                initial_I_inh, dtype=torch.float32, device=self.device
+            assert initial_I.shape[0] == batch_size, (
+                "initial_I batch size must match batch_size."
+            )
+            assert initial_I.shape[1] == n_steps, (
+                "initial_I must have n_steps time steps."
+            )
+            assert initial_I.shape[2] == self.n_neurons, (
+                "initial_I must match n_neurons."
+            )
+            assert initial_I.shape[3] == len(self.cell_type_indices), (
+                "initial_I must match the number of cell types."
             )
 
+        # Validate initial membrane potentials if provided
+        if initial_v is not None:
+            assert initial_v.ndim == 2, (
+                "initial_v must have 2 dimensions (batch_size, n_neurons)."
+            )
+            assert initial_v.shape[1] == self.n_neurons, (
+                "initial_v must match n_neurons."
+            )
+            assert initial_v.shape[0] == batch_size, (
+                "initial_v batch size must match batch_size."
+            )
+
+        # Convert inputs to torch if provided
         if inputs is not None:
             inputs = torch.as_tensor(inputs, dtype=torch.float32, device=self.device)
 
-        batch_size = initial_v.shape[0]
+        # Handle initial membrane potentials
+        if initial_v is not None:
+            v = torch.as_tensor(
+                initial_v, dtype=torch.float32, device=self.device
+            ).clone()
+        else:
+            v = self.U_rest.clone().detach()
+            v = v.repeat(batch_size, 1)
 
-        # Validate dimensions of inputs
-        assert n_steps > 0
-        assert initial_v.ndim == 2
-        assert initial_v.shape[1] == self.n_neurons
-        assert initial_I_exc.ndim == 2
-        assert initial_I_exc.shape[1] == self.n_neurons
-        assert initial_I_exc.shape[0] == batch_size
-        assert initial_I_inh.ndim == 2
-        assert initial_I_inh.shape[1] == self.n_neurons
-        assert initial_I_inh.shape[0] == batch_size
+        # Handle initial synaptic currents
+        if initial_I is not None:
+            I = torch.as_tensor(initial_I, dtype=torch.float32, device=self.device)
+        else:
+            I = torch.zeros(
+                (batch_size, n_steps, self.n_neurons, len(self.cell_type_indices)),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
-        if inputs is not None:
-            assert self.feedforward_weights is not None
-            assert inputs.ndim == 3
-            assert inputs.shape[0] == batch_size
-            assert inputs.shape[1] == n_steps
-            assert inputs.shape[2] == self.n_inputs
-
-        # Initialize membrane potentials by neuron type
-        v_exc = initial_v[:, self.exc_indices]  # Shape: (batch, n_exc)
-        v_inh = initial_v[:, self.inh_indices]  # Shape: (batch, n_inh)
-
-        # Initialize synaptic currents by synapse type
-        I_exc = initial_I_exc  # Excitatory synaptic currents, shape: (batch, n_neurons)
-        I_inh = initial_I_inh  # Inhibitory synaptic currents, shape: (batch, n_neurons)
-
-        # Initialize spike trains
-        s_exc = torch.zeros(
-            (batch_size, len(self.exc_indices)), device=self.device
-        )  # Shape: (batch, n_exc)
-        s_inh = torch.zeros(
-            (batch_size, len(self.inh_indices)), device=self.device
-        )  # Shape: (batch, n_inh)
-
-        # Preallocate output tensors
-        all_v = torch.zeros((batch_size, n_steps, self.n_neurons), device=self.device)
-        all_I_exc = torch.zeros(
-            (batch_size, n_steps, self.n_neurons), device=self.device
+        # Create output tensors for spikes and membrane potentials
+        all_v = torch.zeros(
+            (batch_size, n_steps, self.n_neurons),
+            dtype=torch.float32,
+            device=self.device,
         )
-        all_I_inh = torch.zeros(
-            (batch_size, n_steps, self.n_neurons), device=self.device
+        all_I = torch.zeros(
+            (batch_size, n_steps, self.n_neurons, len(self.cell_type_indices)),
+            dtype=torch.float32,
+            device=self.device,
         )
-        all_s = torch.zeros((batch_size, n_steps, self.n_neurons), device=self.device)
+        all_s = torch.zeros(
+            (batch_size, n_steps, self.n_neurons),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        # Run simulation
+        for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
+            # Compute total current at each neuron
+            I_total = I[:, t, :, :].sum(dim=-1)  # Shape (batch_size, n_neurons)
+
+            # Update membrane potentials (without reset)
+            v = (
+                self.U_rest  # Resting potential
+                + (v - self.U_rest) * self.beta  # Leak
+                + I_total * self.R * (1 - self.beta)  # Input current
+            )
+
+            # Generate spikes based on threshold - uses surrogate gradient
+            s = self.spike_fn(v - self.theta)
+
+            # Reset neurons that spiked
+            v = v * (1 - s) + self.U_reset * s
+
+            # Update synaptic currents by synapse type (presynaptic neuron type)
+            for ct_idx, ct in enumerate(self.cell_type_indices):
+                I[:, t, :, ct_idx] = (
+                    I[:, t, :, ct_idx]
+                    * self.alpha[ct_idx]  # Decay with synapse time constant
+                    + s @ self.scaled_recurrent_weights[ct, :].unsqueeze(0).T  # ct→all
+                )
+
+            ### LLLM STOP HERE ###
+            # Add feedforward input if present
+            if inputs is not None:
+                pass
 
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):

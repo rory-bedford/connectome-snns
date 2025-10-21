@@ -36,6 +36,9 @@ w_sigma = [                            # Log-space std dev for input synapse str
 [inputs.activity]
 firing_rates = [6.0]                   # Hz - Firing rates of input cells (Poisson process)
 
+[inputs.physiology.mitral]
+tau_syn = 30.0                         # ms - Synaptic time constant
+
 # =============================
 # RECURRENT LAYER CONFIGURATION  
 # =============================
@@ -69,9 +72,9 @@ w_sigma = [                            # Log-space std dev for synapse strengths
     [0.2, 0.2],
 ]
 
-# ===============================
+# ==============================
 # NEURONAL PHYSIOLOGY PARAMETERS
-# ===============================
+# ==============================
 
 [physiology.excitatory]
 tau_mem = 85.0                         # ms - Membrane time constant
@@ -89,9 +92,9 @@ U_rest = -60.0                         # mV - Resting membrane potential
 theta = -45.0                          # mV - Spike threshold voltage
 U_reset = -60.0                        # mV - Reset voltage after spike
 
-# ==============================
+# ================================
 # OPTIMIZATION AND HYPERPARAMETERS
-# ==============================
+# ================================
 
 [optimisation]
 scaling_factors = [                    # pA/voxel - Recurrent scaling factors to be optimised

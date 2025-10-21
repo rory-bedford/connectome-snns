@@ -86,7 +86,15 @@ def main(output_dir, params_file):
             "theta": float(params["physiology"][ct]["theta"]),
             "U_reset": float(params["physiology"][ct]["U_reset"]),
         }
-        for ct in cell_type_names
+        for ct in cell_type_names + input_cell_type_names  # Include input cell types
+    }
+
+    # Correctly structure physiology_params_FF as a nested dictionary
+    physiology_params_FF = {
+        ct: {
+            "tau_syn": float(params["inputs"]["physiology"][ct]["tau_syn"]),
+        }
+        for ct in input_cell_type_names
     }
 
     scaling_factors = np.array(params["optimisation"]["scaling_factors"], dtype=float)
@@ -191,6 +199,7 @@ def main(output_dir, params_file):
         weights_FF=feedforward_weights,
         cell_types_FF=input_cell_type_names,
         cell_type_indices_FF=input_source_indices,
+        physiology_params_FF=physiology_params_FF,
         scaling_factors_FF=scaling_factors_FF,
     )
 

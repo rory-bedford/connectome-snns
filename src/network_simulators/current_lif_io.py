@@ -25,6 +25,7 @@ class CurrentLIFNetwork_IO(nn.Module):
         weights_FF: FloatArray | None = None,
         cell_types_FF: list[str] | None = None,
         cell_type_indices_FF: IntArray | None = None,
+        physiology_params_FF: dict[str, dict[str, float]] | None = None,
         scaling_factors_FF: FloatArray | None = None,
     ):
         """
@@ -40,6 +41,7 @@ class CurrentLIFNetwork_IO(nn.Module):
             weights_FF (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
             cell_types_FF (list[str] | None): List of feedforward cell type names.
             cell_type_indices_FF (IntArray | None): Array of feedforward cell type indices.
+            physiology_params_FF (dict[str, dict[str, float]] | None): Nested dict for feedforward input cell types.
             scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling.
         """
         super(CurrentLIFNetwork_IO, self).__init__()
@@ -104,12 +106,18 @@ class CurrentLIFNetwork_IO(nn.Module):
             )
 
         # Feedforward weights validation (all-or-nothing)
-        ff_args = [weights_FF, cell_types_FF, cell_type_indices_FF, scaling_factors_FF]
+        ff_args = [
+            weights_FF,
+            cell_types_FF,
+            cell_type_indices_FF,
+            scaling_factors_FF,
+            physiology_params_FF,
+        ]
         ff_provided = [arg is not None for arg in ff_args]
         if any(ff_provided):
             assert all(ff_provided), (
                 "If any feedforward argument is provided, all of "
-                "weights_FF, cell_types_FF, cell_type_indices_FF, and scaling_factors_FF must be provided."
+                "weights_FF, cell_types_FF, cell_type_indices_FF, scaling_factors_FF, and physiology_params_FF must be provided."
             )
             assert weights_FF.ndim == 2, "Feedforward weights must be 2D matrix"
             # Updated asserts to use n_inputs and n_cell_types_FF for readability
@@ -139,6 +147,18 @@ class CurrentLIFNetwork_IO(nn.Module):
                 "All feedforward scaling factors must be positive"
             )
 
+            # Physiology parameters validation (feedforward)
+            assert isinstance(physiology_params_FF, dict), (
+                "physiology_params_FF must be a dictionary"
+            )
+            for cell_type in cell_types_FF:
+                assert cell_type in physiology_params_FF, (
+                    f"Missing physiology parameters for feedforward cell type '{cell_type}'"
+                )
+                assert isinstance(physiology_params_FF[cell_type], dict), (
+                    f"Physiology parameters for feedforward cell type '{cell_type}' must be a dictionary"
+                )
+
         # Hyperparameter validation
         assert isinstance(surrgrad_scale, (int, float)), (
             "surrgrad_scale must be numeric"
@@ -153,6 +173,14 @@ class CurrentLIFNetwork_IO(nn.Module):
         neuron_params = self._create_neuron_param_arrays(
             physiology_params, cell_types, cell_type_indices, n_neurons
         )
+
+        # Create feedforward neuron-indexed arrays for tau_syn if feedforward parameters are provided
+        if physiology_params_FF is not None:
+            neuron_params_FF = self._create_feedforward_neuron_param_arrays(
+                physiology_params_FF, cell_types_FF, cell_type_indices_FF, n_inputs
+            )
+        else:
+            neuron_params_FF = {}
 
         # Register network structure (connectivity matrices and dimensions)
         self.register_buffer("weights", torch.from_numpy(weights).float())
@@ -180,6 +208,10 @@ class CurrentLIFNetwork_IO(nn.Module):
 
         # Register physiological parameters as neuron-indexed arrays
         for param_name, param_array in neuron_params.items():
+            self.register_buffer(param_name, param_array)
+
+        # Register feedforward physiological parameters as neuron-indexed arrays
+        for param_name, param_array in neuron_params_FF.items():
             self.register_buffer(param_name, param_array)
 
         # ===========================================================
@@ -247,6 +279,43 @@ class CurrentLIFNetwork_IO(nn.Module):
             neuron_params[param_name] = torch.from_numpy(param_array)
 
         return neuron_params
+
+    def _create_feedforward_neuron_param_arrays(
+        self,
+        physiology_params_FF: dict[str, dict[str, float]],
+        cell_types_FF: list[str],
+        cell_type_indices_FF: IntArray,
+        n_inputs: int,
+    ) -> dict[str, torch.Tensor]:
+        """
+        Create feedforward neuron-indexed parameter arrays from cell-type-specific parameters.
+
+        Args:
+            physiology_params_FF (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
+            cell_types_FF (list[str]): List of feedforward cell type names.
+            cell_type_indices_FF (IntArray): Array mapping each input to its cell type index.
+            n_inputs (int): Total number of inputs.
+
+        Returns:
+            dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_inputs,).
+        """
+        # Feedforward parameters (only tau_syn for now)
+        required_param_names = ["tau_syn"]
+
+        neuron_params_FF = {}
+
+        for param_name in required_param_names:
+            # Build a lookup array: parameter value for each cell type
+            param_lookup = np.array(
+                [physiology_params_FF[ct][param_name] for ct in cell_types_FF],
+                dtype=np.float32,
+            )
+
+            # Map each input to its parameter value using cell_type_indices_FF
+            param_array = param_lookup[cell_type_indices_FF]
+            neuron_params_FF[param_name] = torch.from_numpy(param_array)
+
+        return neuron_params_FF
 
     @property
     def device(self):
