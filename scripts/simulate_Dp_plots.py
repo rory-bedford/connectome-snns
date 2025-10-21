@@ -142,12 +142,12 @@ def plot_synaptic_input_histogram(weights, save_path):
     plt.close()
 
 
-def plot_mitral_cell_spikes(input_spikes, delta_t, duration, save_path):
+def plot_mitral_cell_spikes(input_spikes, dt, duration, save_path):
     """Plot sample mitral cell spike trains.
 
     Args:
         input_spikes (np.ndarray): Input spike array
-        delta_t (float): Time step in ms
+        dt (float): Time step in ms
         duration (float): Simulation duration in ms
         save_path (Path): Path to save the plot
     """
@@ -155,7 +155,7 @@ def plot_mitral_cell_spikes(input_spikes, delta_t, duration, save_path):
     fraction = 1.0  # fraction of duration to plot
     fig, ax = plt.subplots(figsize=(12, 4))
     spike_times, neuron_ids = np.where(input_spikes[0, :, :n_neurons_plot])
-    ax.scatter(spike_times * delta_t * 1e-3, neuron_ids, s=1, color="black")
+    ax.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, color="black")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Neuron ID")
     ax.set_title("Sample Mitral Cell Spike Trains")
@@ -206,12 +206,12 @@ def plot_feedforward_connectivity(feedforward_weights, save_path):
     plt.close()
 
 
-def plot_dp_network_spikes(output_spikes, delta_t, duration, save_path):
+def plot_dp_network_spikes(output_spikes, dt, duration, save_path):
     """Plot sample Dp network spike trains.
 
     Args:
         output_spikes (np.ndarray): Output spike array
-        delta_t (float): Time step in ms
+        dt (float): Time step in ms
         duration (float): Simulation duration in ms
         save_path (Path): Path to save the plot
     """
@@ -219,7 +219,7 @@ def plot_dp_network_spikes(output_spikes, delta_t, duration, save_path):
     fraction = 1.0  # fraction of duration to plot
     fig, ax = plt.subplots(figsize=(12, 4))
     spike_times, neuron_ids = np.where(output_spikes[0, :, :n_neurons_plot])
-    ax.scatter(spike_times * delta_t * 1e-3, neuron_ids, s=1, color="black")
+    ax.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, color="black")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Neuron ID")
     ax.set_title("Sample Dp Network Spike Trains")
@@ -316,7 +316,7 @@ def main(output_dir_path):
     input_spikes = np.load(output_dir / "input_spikes.npy")
     output_spikes = np.load(output_dir / "output_spikes.npy")
     output_voltages = np.load(output_dir / "output_voltages.npy")
-    output_I = np.load(output_dir / "output_I_exc.npy")  # Concatenated currents
+    output_I = np.load(output_dir / "output_I.npy")  # Concatenated currents
     neuron_types = np.load(output_dir / "neuron_types.npy")
 
     # Try to load cell type indices if available (for newer saves)
@@ -326,38 +326,17 @@ def main(output_dir_path):
         # Fall back to deriving from neuron_types and parameters
         cell_type_indices = None
 
-    # Load parameters from the workspace to get simulation parameters
-    # Look for parameter files in common locations
-    params_file = None
-    possible_params = [
-        output_dir / "params.toml",  # If copied to output dir
-        output_dir.parent.parent
-        / "parameters"
-        / "Dp_default.toml",  # Standard location
-        output_dir.parent.parent
-        / "workspace"
-        / "Dp_default.toml",  # Alternative location
-        Path("parameters/Dp_default.toml"),  # Relative to current directory
-        Path("workspace/Dp_default.toml"),  # Alternative relative path
-    ]
-
-    for params_path in possible_params:
-        if params_path.exists():
-            params_file = params_path
-            break
-
-    if params_file is None:
-        raise FileNotFoundError(
-            "Could not find parameter file. Expected one of: "
-            + ", ".join(str(p) for p in possible_params)
-        )
+    # Load parameters from the TOML file in the output directory
+    params_file = output_dir / "parameters.toml"
+    if not params_file.exists():
+        raise FileNotFoundError(f"Parameters file not found: {params_file}")
 
     print(f"Loading parameters from {params_file}...")
     with open(params_file, "r") as f:
         params = toml.load(f)
 
     # Extract needed parameters
-    delta_t = params["simulation"]["delta_t"]
+    delta_t = params["simulation"]["dt"]
     duration = params["simulation"]["duration"]
     num_assemblies = int(params["connectome"]["topology"]["num_assemblies"])
 
@@ -369,10 +348,15 @@ def main(output_dir_path):
     neuron_params = {}
     for i, name in enumerate(cell_type_names):
         sign = cell_type_signs[i]
-        suffix = "E" if sign == 1 else "I"
-        neuron_params[i] = {
-            "threshold": params["model"]["neuron"][f"theta_{suffix}"],
-            "rest": params["model"]["neuron"][f"U_rest_{suffix}"],
+        neuron_params[i] = {  # Use integer keys to match cell_type_idx
+            "tau_mem": params["physiology"][name]["tau_mem"],
+            "tau_syn": params["physiology"][name]["tau_syn"],
+            "R": params["physiology"][name]["R"],
+            "rest": params["physiology"][name]["U_rest"],  # Updated to match 'rest'
+            "threshold": params["physiology"][name][
+                "theta"
+            ],  # Updated to match 'threshold'
+            "reset": params["physiology"][name]["U_reset"],  # Updated to match 'reset'
             "name": name,
             "sign": sign,
         }
@@ -418,8 +402,8 @@ def main(output_dir_path):
     plot_membrane_voltages(
         voltages=output_voltages,
         spikes=output_spikes,
-        neuron_types=neuron_type_indices,
-        neuron_params=neuron_params,
+        neuron_types=neuron_type_indices.astype(int),  # Ensure indices are integers
+        neuron_params=neuron_params,  # Pass the corrected neuron_params
         delta_t=delta_t,
         duration=duration,
         n_neurons_plot=10,
