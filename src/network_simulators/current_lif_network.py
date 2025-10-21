@@ -169,12 +169,6 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         ).T  # Shape (n_neurons, n_cell_types_FF)
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
-        print(f"I.shape: {I.shape} ")
-        print(f"I_FF.shape: {I_FF.shape} ")
-        print(f"alpha.shape: {alpha.shape} ")
-        print(f"alpha_FF.shape: {alpha_FF.shape} ")
-        print(f"beta.shape: {beta.shape} ")
-
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Compute total current at each neuron
@@ -191,10 +185,6 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
             # Generate spikes based on threshold - uses surrogate gradient
             s = self.spike_fn(v - self.theta)
-            print(f"s.shape: {s.shape}")
-            print(f"I.shape: {I.shape} ")
-            print(f"{self.cell_typed_weights.shape=}")
-            print(f"{self.cell_typed_weights_FF.shape=}")
 
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
