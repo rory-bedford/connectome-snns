@@ -2,17 +2,16 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from numpy.typing import NDArray
 
 
 def plot_membrane_voltages(
-    voltages: torch.Tensor,
-    spikes: torch.Tensor,
+    voltages: NDArray[np.float32],
+    spikes: NDArray[np.int32],
     neuron_types: NDArray[np.int32],
-    model: torch.nn.Module,
     delta_t: float,
     duration: float,
+    neuron_params: dict,
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
     y_min: float = -100.0,
@@ -25,12 +24,13 @@ def plot_membrane_voltages(
     Visualize membrane voltage traces with spike markers.
 
     Args:
-        voltages (torch.Tensor): Voltage tensor with shape (batch, time, neurons).
-        spikes (torch.Tensor): Spike tensor with shape (batch, time, neurons).
-        neuron_types (NDArray[np.int32]): Array indicating neuron type (1 for excitatory, -1 for inhibitory).
-        model (torch.nn.Module): The neural network model with threshold and rest parameters.
+        voltages (NDArray[np.float32]): Voltage array with shape (batch, time, neurons).
+        spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
+        neuron_types (NDArray[np.int32]): Array indicating neuron type indices (0, 1, 2, ...).
         delta_t (float): Time step in milliseconds.
         duration (float): Total duration in milliseconds.
+        neuron_params (dict): Dictionary mapping cell type indices to parameters
+            {'threshold': float, 'rest': float, 'name': str, 'sign': int}.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         y_min (float): Minimum y-axis value in mV. Defaults to -100.0.
@@ -48,18 +48,19 @@ def plot_membrane_voltages(
     time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
 
     for neuron_id in range(n_neurons_plot):
-        voltage_trace = voltages[0, :n_steps_plot, neuron_id].detach().cpu().numpy()
-        spike_times_neuron = np.where(
-            spikes[0, :n_steps_plot, neuron_id].cpu().numpy()
-        )[0]
+        voltage_trace = voltages[0, :n_steps_plot, neuron_id]
+        spike_times_neuron = np.where(spikes[0, :n_steps_plot, neuron_id])[0]
 
         # Plot voltage trace
         axes[neuron_id].plot(time_axis, voltage_trace, linewidth=0.5, color="black")
 
         # Get neuron-specific parameters
-        is_excitatory = neuron_types[neuron_id] == 1
-        threshold = model.theta_E.item() if is_excitatory else model.theta_I.item()
-        rest = model.U_rest_E.item() if is_excitatory else model.U_rest_I.item()
+        cell_type_idx = neuron_types[neuron_id]
+        params = neuron_params[cell_type_idx]
+        threshold = params['threshold']
+        rest = params['rest']
+        cell_name = params['name']
+        is_excitatory = params['sign'] == 1
 
         # Add threshold and rest lines
         axes[neuron_id].axhline(
@@ -92,7 +93,9 @@ def plot_membrane_voltages(
                     zorder=5,
                 )
 
-        axes[neuron_id].set_ylabel(f"U_{neuron_id}", fontsize=8)
+        # Create ylabel with cell type info
+        ylabel = f"U_{neuron_id} ({cell_name})"
+        axes[neuron_id].set_ylabel(ylabel, fontsize=8)
         axes[neuron_id].set_xlim(0, duration * 1e-3 * fraction)
         axes[neuron_id].set_ylim(y_min, y_max)
         axes[neuron_id].set_yticks(y_ticks)
@@ -116,8 +119,8 @@ def plot_membrane_voltages(
 
 
 def plot_synaptic_currents(
-    I_exc: torch.Tensor,
-    I_inh: torch.Tensor,
+    I_exc: NDArray[np.float32],
+    I_inh: NDArray[np.float32],
     delta_t: float,
     duration: float,
     n_neurons_plot: int = 10,
@@ -130,8 +133,8 @@ def plot_synaptic_currents(
     Visualize excitatory and inhibitory synaptic currents.
 
     Args:
-        I_exc (torch.Tensor): Excitatory current tensor with shape (batch, time, neurons).
-        I_inh (torch.Tensor): Inhibitory current tensor with shape (batch, time, neurons).
+        I_exc (NDArray[np.float32]): Excitatory current array with shape (batch, time, neurons).
+        I_inh (NDArray[np.float32]): Inhibitory current array with shape (batch, time, neurons).
         delta_t (float): Time step in milliseconds.
         duration (float): Total duration in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
@@ -146,8 +149,8 @@ def plot_synaptic_currents(
     # Calculate max absolute value across all neurons for consistent scaling
     max_current = 0
     for neuron_id in range(n_neurons_plot):
-        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id].detach().cpu().numpy()
-        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id].detach().cpu().numpy()
+        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
+        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
         max_current = max(
             max_current, np.abs(I_exc_trace).max(), np.abs(I_inh_trace).max()
         )
@@ -160,14 +163,12 @@ def plot_synaptic_currents(
 
     for neuron_id in range(n_neurons_plot):
         # Extract excitatory and inhibitory currents for this neuron
-        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id].detach().cpu().numpy()
-        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id].detach().cpu().numpy()
+        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
+        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
         I_total_trace = I_exc_trace + I_inh_trace
 
         # Compute mean total current over full simulation (not just plotted portion)
-        I_total_full = (
-            (I_exc[0, :, neuron_id] + I_inh[0, :, neuron_id]).detach().cpu().numpy()
-        )
+        I_total_full = I_exc[0, :, neuron_id] + I_inh[0, :, neuron_id]
         mean_total = I_total_full.mean()
 
         # Plot total current in grey (optional)

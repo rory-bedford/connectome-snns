@@ -1,61 +1,107 @@
 # Combined network parameters for connectome-constrained SNN models
 # Adapted from Meissner-Bernard et al. (2025)
 
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
 [simulation]
-# Simulation parameters
-delta_t = 1.0  # ms - Time resolution of the simulation
-duration = 10000.0  # ms - Total simulation duration
+delta_t = 1.0                          # ms - Time resolution of the simulation
+duration = 10000.0                     # ms - Total simulation duration
 
-[topology]
-# Dp topology
-num_neurons = 5000  # Total number of neurons in the network
-num_assemblies = 20  # Number of assemblies in the network
-p_within = 0.05  # Connection probability within assemblies
-p_between = 0.01  # Connection probability between assemblies
-p_E = 0.8  # Proportion of excitatory neurons
+# =========================
+# INPUT LAYER CONFIGURATION
+# =========================
 
-[weights.recurrent]
-# Recurrent weights (log-normal)
-w_mu_E = 1.0  # voxel - Mean (log-space) for excitatory synaptic weights
-w_sigma_E = 0.2  # voxel - Standard deviation (log-space) for excitatory weights
-w_mu_I = 2.39  # voxel - Mean (log-space) for inhibitory synaptic weights
-w_sigma_I = 0.2  # voxel - Standard deviation (log-space) for inhibitory weights
+[inputs.cell_types]
+names = ['mitral']                     # Cell type names
+signs = [1]                            # Sign convention (1=excitatory, -1=inhibitory)
+proportion = [1]                       # Relative proportions of each cell type
 
-[weights.feedforward]
-# Feedforward weights (log-normal)
-w_mu_FF = 0.0  # voxel - Mean (log-space) for feedforward synaptic weights
-w_sigma_FF = 0.2  # voxel - Standard deviation (log-space) for feedforward weights
+[inputs.topology]
+num_neurons = 1500                     # Total number of input neurons
+conn_inputs = [                        # Connection probabilities to connectome layers
+    [0.02, 0],
+]
 
-[feedforward]
-# Feedforward inputs
-num_mitral = 1500  # Number of mitral cells (feedforward inputs)
-r_mitral = 6.0  # Hz - Firing rate of mitral cells (Poisson)
-p_feedforward = 0.02  # Connection probability from mitral cells to Dp
+[inputs.weights]
+w_mu = [                               # Log-space mean for input synapse strengths (log-normal)
+    [1.0, 0.0]
+]
+w_sigma = [                            # Log-space std dev for input synapse strengths (log-normal)
+    [0.2, 0.0]
+]
+w_mu_FF = 0.0                          # voxel - Mean (log-space) for feedforward synaptic weights
+w_sigma_FF = 0.2                       # voxel - Standard deviation (log-space) for feedforward weights
 
-[cells.excitatory]
-# Neuron physiology parameters (excitatory)
-tau_mem = 85.0  # ms - Membrane time constant for excitatory neurons
-tau_syn = 30.0  # ms - Synaptic time constant for excitatory connections
-R = 740.74  # MOhm - Membrane resistance for excitatory neurons
-U_rest = -60.0  # mV - Resting membrane potential for excitatory neurons
-theta = -38.0  # mV - Spike threshold voltage for excitatory neurons
-U_reset = -60.0  # mV - Reset voltage after spike for excitatory neurons
+[inputs.activity]
+firing_rates = [6.0]                   # Hz - Firing rates of input cells (Poisson process)
 
-[cells.inhibitory]
-# Neuron physiology parameters (inhibitory)
-tau_mem = 50.0  # ms - Membrane time constant for inhibitory neurons
-tau_syn = 10.0  # ms - Synaptic time constant for inhibitory connections
-R = 1111.11  # MOhm - Membrane resistance for inhibitory neurons
-U_rest = -60.0  # mV - Resting membrane potential for inhibitory neurons
-theta = -45.0  # mV - Spike threshold voltage for inhibitory neurons
-U_reset = -60.0  # mV - Reset voltage after spike for inhibitory neurons
+# =============================
+# RECURRENT LAYER CONFIGURATION  
+# =============================
 
-[scaling]
-# Optimisable parameters
-scaling_factor_E = 0.003  # pA/voxel - Scaling factor for excitatory weights
-scaling_factor_I = 0.004  # pA/voxel - Scaling factor for inhibitory weights
-scaling_factor_FF = 0.004  # pA/voxel - Scaling factor for feedforward weights
+[connectome.cell_types]
+names = ['excitatory', 'inhibitory']   # Cell type names
+signs = [1, -1]                        # Sign convention (1=excitatory, -1=inhibitory)
+proportion = [0.8, 0.2]                # Relative proportions of each cell type
+
+[connectome.topology]
+num_neurons = 5000                     # Total number of neurons in the network
+num_assemblies = 20                    # Number of assemblies in the network
+
+conn_within = [                        # Connection probabilities within assemblies
+    [0.05, 0.05],
+    [0.3, 0.05],
+]
+
+conn_between = [                       # Connection probabilities between assemblies
+    [0.01, 0.01],
+    [0.01, 0.01],
+]
+
+[connectome.weights]
+w_mu = [                               # Log-space mean for synapse strengths (log-normal)
+    [1.0, 1.2],
+    [2.4, 1.6],
+]
+w_sigma = [                            # Log-space std dev for synapse strengths (log-normal)
+    [0.8, 0.8],
+    [0.2, 0.2],
+]
+
+# ===============================
+# NEURONAL PHYSIOLOGY PARAMETERS
+# ===============================
+
+[physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+tau_syn = 30.0                         # ms - Synaptic time constant
+R = 740.74                             # MOhm - Membrane resistance
+U_rest = -60.0                         # mV - Resting membrane potential
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+
+[physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+tau_syn = 10.0                         # ms - Synaptic time constant
+R = 1111.11                            # MOhm - Membrane resistance
+U_rest = -60.0                         # mV - Resting membrane potential
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+
+# ==============================
+# OPTIMIZATION AND HYPERPARAMETERS
+# ==============================
+
+[optimisation]
+scaling_factors = [                    # pA/voxel - Recurrent scaling factors to be optimised
+    [0.003, 0.003],
+    [0.004, 0.004],
+]
+scaling_factors_FF = [                 # pA/voxel - Feedforward scaling factors to be optimised
+    [0.004, 0.004],
+]
 
 [hyperparameters]
-# Hyperparameters
-surrgrad_scale = 100.0  # Scale for surrogate gradient fast sigmoid function
+surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
