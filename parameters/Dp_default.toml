@@ -6,7 +6,7 @@
 # ========================
 
 [simulation]
-delta_t = 1.0                          # ms - Time resolution of the simulation
+dt = 1.0                          # ms - Time resolution of the simulation
 duration = 10000.0                     # ms - Total simulation duration
 seed = 42                              # Random seed for reproducibility
 
