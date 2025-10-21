@@ -130,12 +130,6 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             device=self.device,
         )
 
-        # Concatenate all weights once at the start
-        # combined_weights: (n_cell_types + n_cell_types_FF, n_neurons, n_neurons + n_inputs)
-        combined_weights = torch.cat(
-            [self.scaled_weights, self.scaled_weights_FF], dim=1
-        )
-
         # Initialize decay constants
         # alpha: (n_neurons, n_cell_types + n_cell_types_FF)
         combined_tau_syn = torch.cat([self.tau_syn.T, self.tau_syn_FF.T], dim=1)
@@ -168,10 +162,10 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                     [s, inputs[:, t, :]], dim=-1
                 )  # Shape (batch_size, n_neurons + n_inputs)
 
-            # Update synaptic currents
+            # Update synaptic currents using self.cell_typed_weights directly
             I = (
                 I * alpha  # Decay with synapse time constant
-                + torch.einsum("bi,cij->bcj", s, combined_weights)
+                + torch.einsum("bi,cij->bcj", s, self.cell_typed_weights)
             )
 
             # Store results

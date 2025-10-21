@@ -358,37 +358,14 @@ class CurrentLIFNetwork_IO(nn.Module):
         scaling_factors[i, j] scales connections from cell type i to cell type j.
 
         Returns:
-            torch.Tensor: Scaled recurrent weight matrix of shape
-                (n_cell_types, n_neurons, n_neurons).
+            torch.Tensor: Scaled recurrent weight matrix of shape (n_neurons, n_neurons).
         """
-
-        # Create a scaling matrix for all neuron-to-neuron connections
-        # scaling_matrix: (n_neurons, n_neurons)
         source_types = self.cell_type_indices[:, None]  # shape (n_neurons, 1)
         target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
         scaling_matrix = self.scaling_factors[
             source_types, target_types
         ]  # (n_neurons, n_neurons)
-
-        # Initialize a zero tensor for tiered weights
-        # scaled_weights: (n_cell_types, n_neurons, n_neurons)
-        scaled_weights = torch.zeros(
-            (len(self.cell_types), self.weights.shape[0], self.weights.shape[1]),
-            dtype=self.weights.dtype,
-            device=self.weights.device,
-        )
-
-        # Create a mask for each cell type to assign weights to the correct tier
-        # tier_indices: (n_cell_types, n_neurons)
-        tier_indices = self.cell_type_indices[None, :] == torch.arange(
-            len(self.cell_types), device=self.weights.device
-        ).view(-1, 1)
-
-        # Assign scaled weights to the appropriate tier using broadcasting
-        # Each tier corresponds to a specific input cell type
-        scaled_weights[tier_indices] = self.weights * scaling_matrix
-
-        return scaled_weights
+        return self.weights * scaling_matrix
 
     @property
     def scaled_weights_FF(self) -> torch.Tensor:
@@ -399,54 +376,75 @@ class CurrentLIFNetwork_IO(nn.Module):
         scaling_factors_FF[i, j] scales connections from input cell type i to cell type j.
 
         Returns:
-            torch.Tensor: Scaled feedforward weight matrix of shape
-                (n_cell_types_FF, n_inputs, n_neurons).
+            torch.Tensor: Scaled feedforward weight matrix of shape (n_inputs, n_neurons).
         """
         if self.weights_FF is None:
             raise ValueError("weights_FF must be provided for feedforward scaling.")
-        if (
-            not hasattr(self, "cell_type_indices_FF")
-            or self.cell_type_indices_FF is None
-        ):
-            raise ValueError(
-                "cell_type_indices_FF must be provided for feedforward scaling."
-            )
-        if self.scaling_factors_FF is None:
-            raise ValueError(
-                "scaling_factors_FF must be provided for feedforward scaling."
-            )
-
-        # Create a scaling matrix for all input-to-neuron connections
-        # scaling_matrix: (n_inputs, n_neurons)
         input_types = self.cell_type_indices_FF[:, None]  # shape (n_inputs, 1)
         target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
         scaling_matrix = self.scaling_factors_FF[
             input_types, target_types
         ]  # (n_inputs, n_neurons)
+        return self.weights_FF * scaling_matrix
 
-        # Initialize a zero tensor for tiered feedforward weights
-        # scaled_weights_FF: (n_cell_types_FF, n_inputs, n_neurons)
-        scaled_weights_FF = torch.zeros(
-            (
-                len(self.cell_types_FF),
-                self.weights_FF.shape[0],
-                self.weights_FF.shape[1],
-            ),
-            dtype=self.weights_FF.dtype,
-            device=self.weights_FF.device,
+    @property
+    def cell_typed_weights(self) -> torch.Tensor:
+        """
+        Combine the recurrent and feedforward weight matrices into a tiered structure
+        based on cell types. Each tier corresponds to a specific input cell type.
+
+        Returns:
+            torch.Tensor: Tiered weight matrix of shape
+                (n_cell_types + n_cell_types_FF, n_inputs + n_neurons, n_neurons).
+        """
+        # Combine scaled recurrent and feedforward weights
+        recurrent_weights = (
+            self.scaled_weights
+            if self.weights is not None
+            else torch.zeros(
+                (self.n_neurons, self.n_neurons),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        )
+        feedforward_weights = (
+            self.scaled_weights_FF
+            if self.weights_FF is not None
+            else torch.zeros(
+                (self.n_inputs, self.n_neurons), dtype=torch.float32, device=self.device
+            )
         )
 
-        # Create a mask for each input cell type to assign weights to the correct tier
-        # tier_indices: (n_cell_types_FF, n_inputs)
-        tier_indices = self.cell_type_indices_FF[None, :] == torch.arange(
-            len(self.cell_types_FF), device=self.weights_FF.device
+        # Concatenate recurrent and feedforward weights along the input dimension
+        combined_weights = torch.cat(
+            [recurrent_weights, feedforward_weights], dim=0
+        )  # (n_inputs + n_neurons, n_neurons)
+
+        # Initialize a zero tensor for tiered weights
+        n_tiers = len(self.cell_types) + len(self.cell_types_FF)
+        tiered_weights = torch.zeros(
+            (n_tiers, combined_weights.shape[0], combined_weights.shape[1]),
+            dtype=combined_weights.dtype,
+            device=combined_weights.device,
+        )
+
+        # Create tier indices for recurrent and feedforward weights
+        recurrent_tiers = self.cell_type_indices[None, :] == torch.arange(
+            len(self.cell_types), device=self.device
+        ).view(-1, 1)
+        feedforward_tiers = self.cell_type_indices_FF[None, :] == torch.arange(
+            len(self.cell_types_FF), device=self.device
         ).view(-1, 1)
 
-        # Assign scaled feedforward weights to the appropriate tier using broadcasting
-        # Each tier corresponds to a specific input cell type
-        scaled_weights_FF[tier_indices] = self.weights_FF * scaling_matrix
+        # Assign weights to the appropriate tiers
+        tiered_weights[: len(self.cell_types), : self.n_neurons, :] = recurrent_weights[
+            recurrent_tiers
+        ]
+        tiered_weights[len(self.cell_types) :, self.n_neurons :, :] = (
+            feedforward_weights[feedforward_tiers]
+        )
 
-        return scaled_weights_FF
+        return tiered_weights
 
     @property
     def spike_fn(self):
