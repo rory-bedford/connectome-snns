@@ -41,7 +41,6 @@ def sparse_graph_generator(
 ) -> BoolArray:
     """
     Generate a sparse random graph using the Erdos-Renyi model with cell types.
-
     Creates boolean adjacency matrix based on connectivity probability matrix
     between different cell types. Supports both recurrent and feedforward connections.
 
@@ -59,7 +58,6 @@ def sparse_graph_generator(
     """
     n_source = len(source_cell_types)
     n_target = len(target_cell_types)
-
     conn_matrix_np = np.array(conn_matrix)
     n_source_types, n_target_types = conn_matrix_np.shape
 
@@ -71,21 +69,18 @@ def sparse_graph_generator(
         f"target_cell_types max {target_cell_types.max()} exceeds conn_matrix columns {n_target_types}"
     )
 
-    # Generate connectivity
-    adjacency = np.zeros((n_source, n_target), dtype=bool)
+    # Use advanced indexing to get probability matrix for all connections
+    # source_cell_types[:, None] broadcasts to (n_source, 1)
+    # target_cell_types broadcasts to (n_target,)
+    # Result is (n_source, n_target) matrix of connection probabilities
+    prob_matrix = conn_matrix_np[source_cell_types[:, None], target_cell_types]
 
-    for i in range(n_source):
-        for j in range(n_target):
-            # Skip self-loops if not allowed
-            if not allow_self_loops and n_source == n_target and i == j:
-                continue
+    # Generate random matrix and compare to probabilities
+    adjacency = np.random.random((n_source, n_target)) < prob_matrix
 
-            source_type = source_cell_types[i]
-            target_type = target_cell_types[j]
-            conn_prob = conn_matrix_np[source_type, target_type]
-
-            if np.random.random() < conn_prob:
-                adjacency[i, j] = True
+    # Mask out self-loops if not allowed
+    if not allow_self_loops and n_source == n_target:
+        np.fill_diagonal(adjacency, False)
 
     return adjacency
 
@@ -132,7 +127,6 @@ def assembly_generator(
 ) -> BoolArray:
     """
     Generate a graph with assembly structure and cell types.
-
     Creates boolean adjacency matrix with assembly structure using
     connectivity probability matrices between different cell types.
 
@@ -176,34 +170,32 @@ def assembly_generator(
     assembly_assignments_source = np.array_split(np.arange(n_source), num_assemblies)
     assembly_assignments_target = np.array_split(np.arange(n_target), num_assemblies)
 
-    # Create within-assembly mask
-    within_assembly_mask = np.zeros((n_source, n_target), dtype=bool)
-    for source_assembly, target_assembly in zip(
-        assembly_assignments_source, assembly_assignments_target
+    # Create assembly membership arrays
+    source_assembly_id = np.zeros(n_source, dtype=int)
+    target_assembly_id = np.zeros(n_target, dtype=int)
+
+    for assembly_id, (source_indices, target_indices) in enumerate(
+        zip(assembly_assignments_source, assembly_assignments_target)
     ):
-        source_in_assembly = np.isin(np.arange(n_source), source_assembly)
-        target_in_assembly = np.isin(np.arange(n_target), target_assembly)
-        within_assembly_mask |= np.outer(source_in_assembly, target_in_assembly)
+        source_assembly_id[source_indices] = assembly_id
+        target_assembly_id[target_indices] = assembly_id
 
-    # Generate connectivity with assembly-dependent probabilities
-    adjacency = np.zeros((n_source, n_target), dtype=bool)
+    # Create within-assembly mask using broadcasting
+    # Shape: (n_source, n_target)
+    within_assembly_mask = source_assembly_id[:, None] == target_assembly_id
 
-    for i in range(n_source):
-        for j in range(n_target):
-            # Skip self-loops if not allowed
-            if not allow_self_loops and n_source == n_target and i == j:
-                continue
+    # Get probability matrices for all connections using advanced indexing
+    prob_within = conn_within_np[source_cell_types[:, None], target_cell_types]
+    prob_between = conn_between_np[source_cell_types[:, None], target_cell_types]
 
-            source_type = source_cell_types[i]
-            target_type = target_cell_types[j]
+    # Select appropriate probabilities based on assembly membership
+    prob_matrix = np.where(within_assembly_mask, prob_within, prob_between)
 
-            # Choose connection probability based on assembly membership
-            if within_assembly_mask[i, j]:
-                conn_prob = conn_within_np[source_type, target_type]
-            else:
-                conn_prob = conn_between_np[source_type, target_type]
+    # Generate random matrix and compare to probabilities
+    adjacency = np.random.random((n_source, n_target)) < prob_matrix
 
-            if np.random.random() < conn_prob:
-                adjacency[i, j] = True
+    # Mask out self-loops if not allowed
+    if not allow_self_loops and n_source == n_target:
+        np.fill_diagonal(adjacency, False)
 
     return adjacency
