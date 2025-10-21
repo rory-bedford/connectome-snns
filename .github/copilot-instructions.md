@@ -14,7 +14,7 @@
   - `uv sync --extra cpu` (CPU)
   - `uv sync --extra gpu` (GPU)
 - Dependencies are tracked in `pyproject.toml` and `uv.lock`.
-- Code should conform to Ruff lint/format standards, but **avoid running command line tools** (testing, linting, formatting) unless absolutely necessary - the user handles these tasks themselves.
+- Code should conform to Ruff lint/format standards, but **NEVER run command line tools** (testing, linting, formatting, or any terminal commands) - the user handles all testing and execution themselves.
 
 
 

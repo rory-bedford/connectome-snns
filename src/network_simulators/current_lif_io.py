@@ -18,266 +18,183 @@ class CurrentLIFNetwork_IO(nn.Module):
     
     def __init__(
         self,
-        params_file: str | Path,
-        neuron_types: IntArray,
-        recurrent_weights: FloatArray,
-        feedforward_weights: FloatArray | None = None,
+        weights: FloatArray,
+        cell_types: list[str],
+        cell_type_indices: IntArray,
+        physiology_params: dict[str, dict[str, float]],
+        scaling_factors: FloatArray,
+        surrgrad_scale: float,
+        weights_FF: FloatArray | None = None,
+        cell_types_FF: list[str] | None = None,
+        cell_type_indices_FF: IntArray | None = None,
+        scaling_factors_FF: FloatArray | None = None,
     ):
         """
-        Initialize the LIF network parameters from parameter file.
+        Initialize the LIF network with explicit parameters.
 
         Args:
-            params_file (str | Path): Path to TOML parameter file.
-            neuron_types (IntArray): Array of shape (n_neurons,) with +1 (excitatory) or -1 (inhibitory).
-            recurrent_weights (FloatArray): Recurrent weight matrix of shape (n_neurons, n_neurons).
-            feedforward_weights (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
+            weights (FloatArray): Recurrent weight matrix of shape (n_neurons, n_neurons).
+            cell_types (list[str]): List of cell type names (e.g., ["excitatory", "inhibitory"]).
+            cell_type_indices (IntArray): Array of shape (n_neurons,) with cell type indices (0, 1, 2, ...).
+            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
+            scaling_factors (FloatArray): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling.
+            surrgrad_scale (float): Scale parameter for surrogate gradient function.
+            weights_FF (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
+            cell_types_FF (list[str] | None): List of feedforward cell type names.
+            cell_type_indices_FF (IntArray | None): Array of feedforward cell type indices.
+            scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling.
         """
         super(CurrentLIFNetwork_IO, self).__init__()
 
-        # Load fixed parameters from file
-        fixed_params = self.load_fixed_params(params_file)
+        # =================================
+        # PARAMETER VALIDATION & ASSERTIONS
+        # =================================
         
-        # Load optimizable parameters from file
-        optimizable_params = self.load_optimizable_params(params_file)
+        # Extract key dimensions for validation
+        n_neurons = weights.shape[0] if weights.ndim == 2 else 0
+        n_cell_types = len(cell_types)
+        n_inputs = weights_FF.shape[0] if weights_FF is not None and weights_FF.ndim == 2 else 0
+        n_cell_types_FF = len(cell_types_FF) if cell_types_FF is not None else 0
         
-        # Load hyperparameters from file
-        hyperparams = self.load_hyperparams(params_file)
-
-        # Basic assertions
-        assert neuron_types.ndim == 1
-        assert recurrent_weights.ndim == 2
-        assert recurrent_weights.shape[0] == recurrent_weights.shape[1]
-        assert neuron_types.shape[0] == recurrent_weights.shape[0]
-
-        if feedforward_weights is not None:
-            assert feedforward_weights.ndim == 2
-            assert feedforward_weights.shape[1] == neuron_types.shape[0]
-
-        # Extract indices before registering them
-        exc_indices = torch.from_numpy(np.where(neuron_types == 1)[0]).long()
-        inh_indices = torch.from_numpy(np.where(neuron_types == -1)[0]).long()
-
-        # Register network structure
-        self.register_buffer("neuron_types", torch.from_numpy(neuron_types).long())
-        self.register_buffer("exc_indices", exc_indices)
-        self.register_buffer("inh_indices", inh_indices)
-        self.register_buffer("n_neurons", torch.tensor(neuron_types.shape[0]))
-        self.register_buffer(
-            "recurrent_weights", torch.from_numpy(recurrent_weights).float()
-        )
-        if feedforward_weights is not None:
-            self.register_buffer(
-                "feedforward_weights", torch.from_numpy(feedforward_weights).float()
+        # Basic type and shape validation
+        assert isinstance(cell_types, list), "cell_types must be a list"
+        assert len(cell_types) > 0, "cell_types must not be empty"
+        assert all(isinstance(ct, str) for ct in cell_types), "All cell_types must be strings"
+        
+        # Recurrent weights validation
+        assert weights.ndim == 2, "Recurrent weights must be 2D matrix"
+        assert weights.shape[0] == weights.shape[1], "Recurrent weights must be square matrix"
+        assert n_neurons > 0, "Number of neurons must be positive"
+        
+        # Cell type indices validation
+        assert cell_type_indices.ndim == 1, "Cell type indices must be 1D array"
+        assert cell_type_indices.shape[0] == n_neurons, f"Cell type indices length ({cell_type_indices.shape[0]}) must match number of neurons ({n_neurons})"
+        assert np.all(cell_type_indices >= 0), "All cell type indices must be non-negative"
+        assert np.all(cell_type_indices < n_cell_types), f"All cell type indices must be less than n_cell_types ({n_cell_types})"
+        
+        # Scaling factors validation (recurrent)
+        assert scaling_factors.ndim == 2, "Scaling factors must be 2D matrix"
+        assert scaling_factors.shape == (n_cell_types, n_cell_types), f"Scaling factors shape {scaling_factors.shape} must be ({n_cell_types}, {n_cell_types})"
+        assert np.all(scaling_factors > 0), "All scaling factors must be positive"
+        
+        # Physiology parameters validation
+        assert isinstance(physiology_params, dict), "physiology_params must be a dictionary"
+        for cell_type in cell_types:
+            assert cell_type in physiology_params, f"Missing physiology parameters for cell type '{cell_type}'"
+            assert isinstance(physiology_params[cell_type], dict), f"Physiology parameters for '{cell_type}' must be a dictionary"
+        
+        # Feedforward weights validation (all-or-nothing)
+        ff_args = [weights_FF, cell_types_FF, cell_type_indices_FF, scaling_factors_FF]
+        ff_provided = [arg is not None for arg in ff_args]
+        if any(ff_provided):
+            assert all(ff_provided), (
+                "If any feedforward argument is provided, all of "
+                "weights_FF, cell_types_FF, cell_type_indices_FF, and scaling_factors_FF must be provided."
             )
-            self.register_buffer("n_inputs", torch.tensor(feedforward_weights.shape[0]))
+            assert weights_FF.ndim == 2, "Feedforward weights must be 2D matrix"
+            assert weights_FF.shape[1] == n_neurons, f"Feedforward weights output dimension ({weights_FF.shape[1]}) must match number of neurons ({n_neurons})"
+            assert cell_type_indices_FF.ndim == 1, "Feedforward cell type indices must be 1D array"
+            assert cell_type_indices_FF.shape[0] == weights_FF.shape[0], f"Feedforward cell type indices length ({cell_type_indices_FF.shape[0]}) must match number of inputs ({weights_FF.shape[0]})"
+            assert isinstance(cell_types_FF, list), "cell_types_FF must be a list"
+            assert len(cell_types_FF) > 0, "cell_types_FF must not be empty when provided"
+            assert all(isinstance(ct, str) for ct in cell_types_FF), "All cell_types_FF must be strings"
+            assert scaling_factors_FF.ndim == 2, "Feedforward scaling factors must be 2D matrix"
+            expected_ff_shape = (len(cell_types_FF), n_cell_types)
+            assert scaling_factors_FF.shape == expected_ff_shape, f"Feedforward scaling factors shape {scaling_factors_FF.shape} must be {expected_ff_shape}"
+            assert np.all(scaling_factors_FF > 0), "All feedforward scaling factors must be positive"
+        
+        # Hyperparameter validation
+        assert isinstance(surrgrad_scale, (int, float)), "surrgrad_scale must be numeric"
+        assert surrgrad_scale > 0, "Surrogate gradient scale must be positive"
+
+        # ====================================================
+        # FIXED PARAMETERS (NON-TRAINABLE - STORED IN BUFFERS)
+        # ====================================================
+        
+        # Create neuron-indexed arrays for physiological parameters
+        neuron_params = self._create_neuron_param_arrays(physiology_params, cell_types, cell_type_indices, n_neurons)
+        
+        # Register network structure (connectivity matrices and dimensions)
+        self.register_buffer("weights", torch.from_numpy(weights).float())
+        
+        # Register feedforward structure (if provided)
+        if weights_FF is not None:
+            self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
+            if cell_type_indices_FF is not None:
+                self.register_buffer("cell_type_indices_FF", torch.from_numpy(cell_type_indices_FF).long())
         else:
-            self.feedforward_weights = None
-            self.n_inputs = None
+            self.weights_FF = None
+            self.cell_type_indices_FF = None
 
-        # Register all fixed loaded parameters
-        for name, value in fixed_params.items():
-            self.register_buffer(name, value)
+        # Register cell type indices for efficient scaling
+        self.register_buffer("cell_type_indices", torch.from_numpy(cell_type_indices).long())
+        if weights_FF is not None and cell_type_indices_FF is not None:
+            self.register_buffer("cell_type_indices_FF", torch.from_numpy(cell_type_indices_FF).long())
 
-        # Initialize optimizable parameters directly
-        if "scaling_factor_E" not in optimizable_params:
-            raise ValueError("scaling_factor_E must be specified")
-        if "scaling_factor_I" not in optimizable_params:
-            raise ValueError("scaling_factor_I must be specified")
-        if "scaling_factor_FF" not in optimizable_params:
-            raise ValueError("scaling_factor_FF must be specified")
-            
-        E_weight = optimizable_params["scaling_factor_E"]
-        I_weight = optimizable_params["scaling_factor_I"]
-        FF_weight = optimizable_params["scaling_factor_FF"]
+        # Register physiological parameters as neuron-indexed arrays
+        for param_name, param_array in neuron_params.items():
+            self.register_buffer(param_name, param_array)
+
+        # ===========================================================
+        # OPTIMIZABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
+        # ===========================================================
         
-        assert E_weight > 0, "E_weight must be positive"
-        assert I_weight > 0, "I_weight must be positive"
-        assert FF_weight > 0, "FF_weight must be positive"
-
-        self.scaling_factor_E = nn.Parameter(
-            torch.tensor(E_weight, dtype=torch.float32, device=self.device)
-        )
-        self.scaling_factor_I = nn.Parameter(
-            torch.tensor(I_weight, dtype=torch.float32, device=self.device)
-        )
-        self.scaling_factor_FF = nn.Parameter(
-            torch.tensor(FF_weight, dtype=torch.float32, device=self.device)
-        )
+        # Convert scaling factors to tensors and register as trainable parameters
+        scaling_factors_tensor = torch.tensor(scaling_factors, dtype=torch.float32)
+        self.scaling_factors = nn.Parameter(scaling_factors_tensor)
         
-        # Load hyperparameters directly
-        if "surrgrad_scale" not in hyperparams:
-            raise ValueError("surrgrad_scale must be specified")
-            
-        surrgrad_scale = hyperparams["surrgrad_scale"]
-        assert surrgrad_scale > 0, "surrgrad_scale must be positive"
+        if scaling_factors_FF is not None:
+            scaling_factors_FF_tensor = torch.tensor(scaling_factors_FF, dtype=torch.float32)
+            self.scaling_factors_FF = nn.Parameter(scaling_factors_FF_tensor)
+        else:
+            self.scaling_factors_FF = None
+
+        # ======================================================================
+        # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
+        # ======================================================================
+        
         self.surrgrad_scale = surrgrad_scale
 
-    def load_fixed_params(self, file_path: str | Path) -> dict[str, torch.Tensor]:
-        """Load fixed neuron parameters from TOML file.
-        
-        Args:
-            file_path (str | Path): Path to TOML parameter file.
-            
-        Returns:
-            Dictionary of parameter names to torch tensors
+    def _create_neuron_param_arrays(
+        self, 
+        physiology_params: dict[str, dict[str, float]], 
+        cell_types: list[str], 
+        cell_type_indices: IntArray, 
+        n_neurons: int
+    ) -> dict[str, torch.Tensor]:
         """
-        with open(file_path, 'r') as f:
-            toml_data = toml.load(f)
+        Create neuron-indexed parameter arrays from cell-type-specific parameters.
 
-        # Extract cell parameters with E/I suffixes
-        param_dict = {}
-        if 'cells' in toml_data:
-            if 'excitatory' in toml_data['cells']:
-                for key, value in toml_data['cells']['excitatory'].items():
-                    param_dict[f"{key}_E"] = value
-            if 'inhibitory' in toml_data['cells']:
-                for key, value in toml_data['cells']['inhibitory'].items():
-                    param_dict[f"{key}_I"] = value
+        Args:
+            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
+            cell_types (list[str]): List of cell type names.
+            cell_type_indices (IntArray): Array mapping each neuron to its cell type index.
+            n_neurons (int): Total number of neurons.
 
-        # Validate that all required parameters are present
-        required_params = [
-            "tau_mem_E",
-            "tau_mem_I",
-            "tau_syn_E",
-            "tau_syn_I",
-            "R_E",
-            "R_I",
-            "U_rest_E",
-            "U_rest_I",
-            "theta_E",
-            "theta_I",
-            "U_reset_E",
-            "U_reset_I",
+        Returns:
+            dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_neurons,).
+        """
+        # Required physiological parameters for LIF neurons:
+        required_param_names = [
+            "tau_mem",    # Membrane time constant
+            "tau_syn",    # Synaptic time constant
+            "R",          # Membrane resistance
+            "U_rest",     # Resting potential
+            "theta",      # Spike threshold
+            "U_reset",    # Reset potential
         ]
 
-        missing_params = [p for p in required_params if p not in param_dict]
-        if missing_params:
-            raise ValueError(f"Missing required parameters: {missing_params}")
+        neuron_params = {}
 
-        # Convert to torch tensors
-        fixed_params = {}
-        for param_name in required_params:
-            fixed_params[param_name] = torch.tensor(param_dict[param_name], dtype=torch.float32)
-        
-        return fixed_params
+        for param_name in required_param_names:
+            # Build a lookup array: parameter value for each cell type
+            param_lookup = np.array([physiology_params[ct][param_name] for ct in cell_types], dtype=np.float32)
 
-    def load_optimizable_params(self, file_path: str | Path) -> dict[str, float]:
-        """
-        Load optimizable parameters.
+            # Map each neuron to its parameter value using cell_type_indices
+            param_array = param_lookup[cell_type_indices]
+            neuron_params[param_name] = torch.from_numpy(param_array)
 
-        Args:
-            file_path: Path to TOML parameter file
-
-        Returns:
-            Dictionary of optimizable parameter names to their values
-        """
-        with open(file_path, 'r') as f:
-            toml_data = toml.load(f)
-
-        # Extract scaling parameters
-        param_dict = {}
-        if 'scaling' in toml_data:
-            param_dict.update(toml_data['scaling'])
-
-        # Define optimizable parameters
-        optimizable_params = [
-            "scaling_factor_E",
-            "scaling_factor_I", 
-            "scaling_factor_FF",
-        ]
-
-        # Extract optimizable parameters that exist in the file
-        optimizable_values = {}
-        for param_name in optimizable_params:
-            if param_name in param_dict:
-                value = param_dict[param_name]
-                if not isinstance(value, (int, float)):
-                    raise ValueError(f"Parameter '{param_name}' must be numeric, got {type(value)}")
-                optimizable_values[param_name] = float(value)
-
-        return optimizable_values
-
-    def load_hyperparams(self, file_path: str | Path) -> dict[str, float]:
-        """
-        Load hyperparameters.
-
-        Args:
-            file_path: Path to TOML parameter file
-
-        Returns:
-            Dictionary of hyperparameter names to their values
-        """
-        with open(file_path, 'r') as f:
-            toml_data = toml.load(f)
-
-        # Extract hyperparameters
-        param_dict = {}
-        if 'hyperparameters' in toml_data:
-            param_dict.update(toml_data['hyperparameters'])
-
-        # Define hyperparameters
-        hyperparams = ["surrgrad_scale"]
-
-        # Extract hyperparameters that exist in the file
-        hyperparam_values = {}
-        for param_name in hyperparams:
-            if param_name in param_dict:
-                value = param_dict[param_name]
-                if not isinstance(value, (int, float)):
-                    raise ValueError(f"Hyperparameter '{param_name}' must be numeric, got {type(value)}")
-                hyperparam_values[param_name] = float(value)
-
-        return hyperparam_values
-
-    def export_to_toml(self, toml_path: str | Path):
-        """
-        Export all current parameter values to a TOML file.
-
-        Args:
-            toml_path: Path where the TOML file will be saved
-        """
-        toml_path = Path(toml_path)
-        
-        # Build the structured TOML data
-        toml_data = {}
-        
-        # Cell parameters (split E and I)
-        toml_data['cells'] = {
-            'excitatory': {
-                'tau_mem': float(self.tau_mem_E.item()),
-                'tau_syn': float(self.tau_syn_E.item()),
-                'R': float(self.R_E.item()),
-                'U_rest': float(self.U_rest_E.item()),
-                'theta': float(self.theta_E.item()),
-                'U_reset': float(self.U_reset_E.item()),
-            },
-            'inhibitory': {
-                'tau_mem': float(self.tau_mem_I.item()),
-                'tau_syn': float(self.tau_syn_I.item()),
-                'R': float(self.R_I.item()),
-                'U_rest': float(self.U_rest_I.item()),
-                'theta': float(self.theta_I.item()),
-                'U_reset': float(self.U_reset_I.item()),
-            }
-        }
-        
-        # Scaling parameters (optimizable)
-        toml_data['scaling'] = {
-            'scaling_factor_E': float(self.scaling_factor_E.item()),
-            'scaling_factor_I': float(self.scaling_factor_I.item()),
-            'scaling_factor_FF': float(self.scaling_factor_FF.item()),
-        }
-        
-        # Hyperparameters
-        toml_data['hyperparameters'] = {
-            'surrgrad_scale': float(self.surrgrad_scale)
-        }
-        
-        # Write to file
-        with open(toml_path, 'w') as f:
-            toml.dump(toml_data, f)
-        
-        print(f"Parameters exported to {toml_path}")
+        return neuron_params
 
     @property
     def device(self):
@@ -285,43 +202,43 @@ class CurrentLIFNetwork_IO(nn.Module):
         return self.recurrent_weights.device
 
     @property
-    def scaled_recurrent_weights(self) -> torch.Tensor:
+    def scaled_weights(self) -> torch.Tensor:
         """
-        Get the recurrent weights scaled by scaling_factor_E and scaling_factor_I.
+        Get the recurrent weights scaled by the scaling_factors matrix.
 
-        From our connectome weights, we want to scale all E->I and E->E connections by scaling_factor_E,
-        and all I->E and I->I connections by scaling_factor_I.
+        The scaling_factors matrix is of shape (n_cell_types, n_cell_types) where
+        scaling_factors[i, j] scales connections from cell type i to cell type j.
 
         Returns:
             torch.Tensor: Scaled recurrent weight matrix.
         """
-        assert hasattr(self, "scaling_factor_E"), "scaling_factor_E must be initialized"
-        assert hasattr(self, "scaling_factor_I"), "scaling_factor_I must be initialized"
-        
-        # Create scaling matrix
-        scaling = torch.ones_like(self.recurrent_weights)
-        
-        # Scale excitatory connections (columns with exc_indices)
-        scaling[:, self.exc_indices] *= self.scaling_factor_E
-        
-        # Scale inhibitory connections (columns with inh_indices)  
-        scaling[:, self.inh_indices] *= self.scaling_factor_I
-        
-        return self.recurrent_weights * scaling
+        source_types = self.cell_type_indices[:, None]  # shape (n_neurons, 1)
+        target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
+        scaling_matrix = self.scaling_factors[source_types, target_types]
+        return self.weights * scaling_matrix
 
     @property  
-    def scaled_feedforward_weights(self) -> torch.Tensor:
+    def scaled_weights_FF(self) -> torch.Tensor:
         """
-        Get the feedforward weights scaled by scaling_factor_FF.
+        Get the feedforward weights scaled by the scaling_factors_FF matrix.
+        
+        The scaling_factors_FF matrix is of shape (n_cell_types_FF, n_cell_types) where
+        scaling_factors_FF[i, j] scales connections from input cell type i to cell type j.
         
         Returns:
             torch.Tensor: Scaled feedforward weight matrix.
         """
-        if self.feedforward_weights is None:
-            raise ValueError("No feedforward weights available")
-            
-        assert hasattr(self, "scaling_factor_FF"), "scaling_factor_FF must be initialized"
-        return self.feedforward_weights * self.scaling_factor_FF
+        if self.weights_FF is None:
+            raise ValueError("weights_FF must be provided for feedforward scaling.")
+        if not hasattr(self, "cell_type_indices_FF") or self.cell_type_indices_FF is None:
+            raise ValueError("cell_type_indices_FF must be provided for feedforward scaling.")
+        if self.scaling_factors_FF is None:
+            raise ValueError("scaling_factors_FF must be provided for feedforward scaling.")
+
+        input_types = self.cell_type_indices_FF[:, None]  # shape (n_inputs, 1)
+        target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
+        scaling_matrix = self.scaling_factors_FF[input_types, target_types]
+        return self.weights_FF * scaling_matrix
 
     @property
     def spike_fn(self):
