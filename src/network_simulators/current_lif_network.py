@@ -192,6 +192,8 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             s = self.spike_fn(v - self.theta)
             print(f"s.shape: {s.shape}")
             print(f"I.shape: {I.shape} ")
+            print(f"{self.cell_typed_weights.shape=}")
+            print(f"{self.cell_typed_weights_FF.shape=}")
 
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
