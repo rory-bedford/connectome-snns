@@ -251,7 +251,7 @@ class CurrentLIFNetwork_IO(nn.Module):
     @property
     def device(self):
         """Get the device the model is on"""
-        return self.recurrent_weights.device
+        return self.weights.device
 
     @property
     def scaled_weights(self) -> torch.Tensor:
