@@ -168,6 +168,12 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         )  # Shape (n_neurons, n_cell_types_FF)
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
+        print(f"I.shape: {I.shape} ")
+        print(f"I_FF.shape: {I_FF.shape} ")
+        print(f"alpha.shape: {alpha.shape} ")
+        print(f"alpha_FF.shape: {alpha_FF.shape} ")
+        print(f"beta.shape: {beta.shape} ")
+
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Compute total current at each neuron
