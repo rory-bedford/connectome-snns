@@ -15,7 +15,6 @@ Overview:
 """
 
 import numpy as np
-import pandas as pd
 import toml
 from synthetic_connectome import topology_generators, weight_assigners
 from synthetic_connectome.cell_types import assign_cell_types
@@ -39,48 +38,65 @@ def main(output_dir, params_file):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load all network parameters from TOML file
-    with open(params_file, 'r') as f:
+    with open(params_file, "r") as f:
         params = toml.load(f)
 
+    # Extract and convert all parameters at the top
+    delta_t = float(params["simulation"]["delta_t"])
+    duration = float(params["simulation"]["duration"])
+    seed = params["simulation"].get("seed", None)
+
+    num_neurons = int(params["connectome"]["topology"]["num_neurons"])
+    num_assemblies = int(params["connectome"]["topology"]["num_assemblies"])
+    conn_within = np.array(params["connectome"]["topology"]["conn_within"])
+    conn_between = np.array(params["connectome"]["topology"]["conn_between"])
+
+    cell_type_names = params["connectome"]["cell_types"]["names"]
+    cell_type_signs = np.array(params["connectome"]["cell_types"]["signs"], dtype=int)
+    cell_type_proportions = np.array(
+        params["connectome"]["cell_types"]["proportion"], dtype=float
+    )
+
+    w_mu = np.array(params["connectome"]["weights"]["w_mu"], dtype=float)
+    w_sigma = np.array(params["connectome"]["weights"]["w_sigma"], dtype=float)
+
+    input_num_neurons = int(params["inputs"]["topology"]["num_neurons"])
+    input_cell_type_names = params["inputs"]["cell_types"]["names"]
+    input_firing_rates = np.array(
+        params["inputs"]["activity"]["firing_rates"], dtype=float
+    )
+    input_conn_inputs = np.array(
+        params["inputs"]["topology"]["conn_inputs"], dtype=float
+    )
+    input_w_mu = np.array(params["inputs"]["weights"]["w_mu"], dtype=float)
+    input_w_sigma = np.array(params["inputs"]["weights"]["w_sigma"], dtype=float)
+
+    # Correctly structure physiology_params as a nested dictionary
+    physiology_params = {
+        ct: {
+            "tau_mem": float(params["physiology"][ct]["tau_mem"]),
+            "tau_syn": float(params["physiology"][ct]["tau_syn"]),
+            "R": float(params["physiology"][ct]["R"]),
+            "U_rest": float(params["physiology"][ct]["U_rest"]),
+            "theta": float(params["physiology"][ct]["theta"]),
+            "U_reset": float(params["physiology"][ct]["U_reset"]),
+        }
+        for ct in cell_type_names
+    }
+
+    scaling_factors = np.array(params["optimisation"]["scaling_factors"], dtype=float)
+    scaling_factors_FF = np.array(
+        params["optimisation"]["scaling_factors_FF"], dtype=float
+    )
+
+    surrgrad_scale = float(params["hyperparameters"]["surrgrad_scale"])
+
     # Set global random seed for reproducibility (only if specified in config)
-    if 'seed' in params['simulation']:
-        np.random.seed(params['simulation']['seed'])
-        print(f"Using seed: {params['simulation']['seed']}")
+    if seed is not None:
+        np.random.seed(seed)
+        print(f"Using seed: {seed}")
     else:
         print("No seed specified - using random initialization")
-
-    # Extract simulation parameters
-    delta_t = params['simulation']['delta_t']
-    duration = params['simulation']['duration']
-    
-    # Extract connectome topology parameters
-    num_neurons = int(params['connectome']['topology']['num_neurons'])
-    num_assemblies = int(params['connectome']['topology']['num_assemblies'])
-    conn_within = params['connectome']['topology']['conn_within']  # Matrix of connection probabilities
-    conn_between = params['connectome']['topology']['conn_between']  # Matrix of connection probabilities
-    
-    # Extract connectome cell type information
-    cell_type_names = params['connectome']['cell_types']['names']
-    cell_type_signs = params['connectome']['cell_types']['signs']  # 1 for excitatory, -1 for inhibitory
-    cell_type_proportions = params['connectome']['cell_types']['proportion']
-    
-    # Extract connectome weight parameters (matrices)
-    w_mu = params['connectome']['weights']['w_mu']  # Matrix of log-space means
-    w_sigma = params['connectome']['weights']['w_sigma']  # Matrix of log-space std devs
-    
-    # Extract input layer parameters
-    input_num_neurons = int(params['inputs']['topology']['num_neurons'])
-    input_cell_type_names = params['inputs']['cell_types']['names']
-    input_firing_rates = params['inputs']['activity']['firing_rates']
-    input_conn_inputs = params['inputs']['topology']['conn_inputs']  # Matrix of connection probabilities to connectome
-    input_w_mu = params['inputs']['weights']['w_mu']  # Matrix of input weight means
-    input_w_sigma = params['inputs']['weights']['w_sigma']  # Matrix of input weight std devs
-    input_w_mu_FF = params['inputs']['weights']['w_mu_FF']  # Scalar for feedforward weights
-    input_w_sigma_FF = params['inputs']['weights']['w_sigma_FF']  # Scalar for feedforward weights
-    
-    # Extract scaling parameters (matrices)
-    scaling_factors = params['optimisation']['scaling_factors']  # Matrix of scaling factors
-    scaling_factors_FF = params['optimisation']['scaling_factors_FF']  # Matrix for feedforward
 
     # ==========================================================
     # STEP 1: Generate Assembly-Based Topology and Visualization
@@ -91,7 +107,7 @@ def main(output_dir, params_file):
         num_neurons=num_neurons,
         cell_type_proportions=cell_type_proportions,
     )
-    
+
     # Generate assembly-based connectivity graph
     connectivity_graph = topology_generators.assembly_generator(
         source_cell_types=cell_type_indices,
@@ -100,9 +116,11 @@ def main(output_dir, params_file):
         conn_within=conn_within,
         conn_between=conn_between,
     )
-    
+
     # Map cell type indices to +1/-1 based on cell_type_signs from config
-    neuron_types = np.array([cell_type_signs[idx] for idx in cell_type_indices], dtype=np.int_)
+    neuron_types = np.array(
+        [cell_type_signs[idx] for idx in cell_type_indices], dtype=np.int_
+    )
 
     # ========================================================
     # STEP 2: Assign Synaptic Weights and Analyze Connectivity
@@ -142,7 +160,7 @@ def main(output_dir, params_file):
         allow_self_loops=True,  # Allow for feedforward connections
     )
 
-    # Assign log-normal weights to feedforward connectivity 
+    # Assign log-normal weights to feedforward connectivity
     # Source: input layer (all mitral cells = type 0), Target: connectome layer
     feedforward_weights = weight_assigners.assign_weights_lognormal(
         connectivity_graph=feedforward_connectivity_graph,
@@ -157,12 +175,18 @@ def main(output_dir, params_file):
     # STEP 4: Initialize and Run LIF Network Simulation
     # =================================================
 
-    # Initialize LIF network model
+    # Initialize LIF network model with corrected arguments
     model = CurrentLIFNetwork(
-        params_file=params_file,
-        neuron_types=neuron_types,
-        recurrent_weights=weights,
-        feedforward_weights=feedforward_weights,
+        weights=weights,
+        cell_types=cell_type_names,
+        cell_type_indices=cell_type_indices,
+        physiology_params=physiology_params,
+        scaling_factors=scaling_factors,
+        surrgrad_scale=surrgrad_scale,
+        weights_FF=feedforward_weights,
+        cell_types_FF=input_cell_type_names,
+        cell_type_indices_FF=input_source_indices,
+        scaling_factors_FF=scaling_factors_FF,
     )
 
     # Move model to device for GPU acceleration
@@ -175,7 +199,7 @@ def main(output_dir, params_file):
             delta_t=delta_t,
             inputs=input_spikes,
         )
-    
+
     # Move tensors to CPU for further processing and saving
     output_spikes = output_spikes.cpu()
     output_voltages = output_voltages.cpu()
@@ -201,6 +225,6 @@ def main(output_dir, params_file):
     # =============================================
     # STEP 6: Generate All Plots and Visualizations
     # =============================================
-    
+
     # Call the plotting script to generate all visualizations
     simulate_Dp_plots.main(output_dir)

@@ -32,8 +32,6 @@ w_mu = [                               # Log-space mean for input synapse streng
 w_sigma = [                            # Log-space std dev for input synapse strengths (log-normal)
     [0.2, 0.0]
 ]
-w_mu_FF = 0.0                          # voxel - Mean (log-space) for feedforward synaptic weights
-w_sigma_FF = 0.2                       # voxel - Standard deviation (log-space) for feedforward weights
 
 [inputs.activity]
 firing_rates = [6.0]                   # Hz - Firing rates of input cells (Poisson process)
