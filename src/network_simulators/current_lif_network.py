@@ -162,10 +162,10 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         )
 
         # Initialize decay constants
-        alpha = torch.exp(-dt / self.tau_syn)  # Shape (n_neurons, n_cell_types)
+        alpha = torch.exp(-dt / self.tau_syn).T  # Shape (n_neurons, n_cell_types)
         alpha_FF = torch.exp(
             -dt / self.tau_syn_FF
-        )  # Shape (n_neurons, n_cell_types_FF)
+        ).T  # Shape (n_neurons, n_cell_types_FF)
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
         print(f"I.shape: {I.shape} ")
