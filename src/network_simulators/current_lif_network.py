@@ -64,10 +64,9 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
         # Convert delta_t from ms to seconds and compute decay factors
         dt = torch.tensor(delta_t * 1e-3, dtype=torch.float32, device=self.device)
+        print(self.tau_syn)
         alpha = torch.exp(-dt / self.tau_syn)
-        print(alpha)
         beta = torch.exp(-dt / self.tau_mem)
-        exit()
 
         # Default initial membrane potentials to resting potential if not provided
         if initial_v is None:
