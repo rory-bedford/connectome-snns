@@ -109,6 +109,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         # Convert inputs to torch if provided
         if inputs is not None:
             inputs = torch.as_tensor(inputs, dtype=torch.float32, device=self.device)
+            print(f"inputs.shape: {inputs.shape} ")
 
         # Handle initial membrane potentials
         if initial_v is not None:
