@@ -126,6 +126,13 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             device=self.device,
         )
 
+        # Initialize decay constants
+        combined_tau_syn = torch.cat([self.tau_syn, self.tau_syn_FF], dim=0)
+        alpha = torch.exp(
+            -dt / combined_tau_syn
+        )  # Shape (n_cell_types + n_cell_types_FF, n_neurons)
+        beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
+
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
             # Compute total current at each neuron

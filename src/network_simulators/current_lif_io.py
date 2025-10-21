@@ -174,6 +174,23 @@ class CurrentLIFNetwork_IO(nn.Module):
         self.cell_types = cell_types
         self.cell_types_FF = cell_types_FF
 
+        # Create neuron-indexed arrays for physiological parameters
+        neuron_params = self._create_neuron_param_arrays(
+            physiology_params, cell_types, cell_type_indices, n_neurons
+        )
+
+        # Create synapse parameter arrays for tau_syn and tau_syn_FF
+        synapse_params = self._create_synapse_param_arrays(
+            physiology_params,
+            cell_types,
+            cell_type_indices,
+            n_neurons,
+            physiology_params_FF,
+            cell_types_FF,
+            cell_type_indices_FF,
+            n_inputs,
+        )
+
         # Register network structure (connectivity matrices and dimensions)
         self.register_buffer("weights", torch.from_numpy(weights).float())
 
@@ -198,25 +215,12 @@ class CurrentLIFNetwork_IO(nn.Module):
                 "cell_type_indices_FF", torch.from_numpy(cell_type_indices_FF).long()
             )
 
-        # Create neuron-indexed arrays for physiological parameters
-        neuron_params = self._create_neuron_param_arrays(
-            physiology_params, cell_types, cell_type_indices, n_neurons
-        )
-
-        # Create feedforward neuron-indexed arrays for tau_syn if feedforward parameters are provided
-        if physiology_params_FF is not None:
-            neuron_params_FF = self._create_feedforward_neuron_param_arrays(
-                physiology_params_FF, cell_types_FF, cell_type_indices_FF, n_inputs
-            )
-        else:
-            neuron_params_FF = {}
-
         # Register physiological parameters as neuron-indexed arrays
         for param_name, param_array in neuron_params.items():
             self.register_buffer(param_name, param_array)
 
-        # Register feedforward physiological parameters as neuron-indexed arrays
-        for param_name, param_array in neuron_params_FF.items():
+        # Register synapse parameters (tau_syn and tau_syn_FF)
+        for param_name, param_array in synapse_params.items():
             self.register_buffer(param_name, param_array)
 
         # ===========================================================
@@ -260,10 +264,9 @@ class CurrentLIFNetwork_IO(nn.Module):
         Returns:
             dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_neurons,).
         """
-        # Required physiological parameters for LIF neurons:
+        # Required physiological parameters for LIF neurons (excluding tau_syn):
         required_param_names = [
             "tau_mem",  # Membrane time constant
-            "tau_syn",  # Synaptic time constant
             "R",  # Membrane resistance
             "U_rest",  # Resting potential
             "theta",  # Spike threshold
@@ -285,42 +288,61 @@ class CurrentLIFNetwork_IO(nn.Module):
 
         return neuron_params
 
-    def _create_feedforward_neuron_param_arrays(
+    def _create_synapse_param_arrays(
         self,
-        physiology_params_FF: dict[str, dict[str, float]],
-        cell_types_FF: list[str],
-        cell_type_indices_FF: IntArray,
+        physiology_params: dict[str, dict[str, float]],
+        cell_types: list[str],
+        cell_type_indices: IntArray,
+        n_neurons: int,
+        physiology_params_FF: dict[str, dict[str, float]] | None,
+        cell_types_FF: list[str] | None,
+        cell_type_indices_FF: IntArray | None,
         n_inputs: int,
     ) -> dict[str, torch.Tensor]:
         """
-        Create feedforward neuron-indexed parameter arrays from cell-type-specific parameters.
+        Create synapse parameter arrays for tau_syn and tau_syn_FF.
 
         Args:
-            physiology_params_FF (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
-            cell_types_FF (list[str]): List of feedforward cell type names.
-            cell_type_indices_FF (IntArray): Array mapping each input to its cell type index.
+            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
+            cell_types (list[str]): List of cell type names.
+            cell_type_indices (IntArray): Array mapping each neuron to its cell type index.
+            n_neurons (int): Total number of neurons.
+            physiology_params_FF (dict[str, dict[str, float]] | None): Nested dict for feedforward input cell types.
+            cell_types_FF (list[str] | None): List of feedforward cell type names.
+            cell_type_indices_FF (IntArray | None): Array mapping each input to its cell type index.
             n_inputs (int): Total number of inputs.
 
         Returns:
-            dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_inputs,).
+            dict[str, torch.Tensor]: Dictionary containing tau_syn and tau_syn_FF arrays.
         """
-        # Feedforward parameters (only tau_syn for now)
-        required_param_names = ["tau_syn"]
+        synapse_params = {}
 
-        neuron_params_FF = {}
+        # Create tau_syn for recurrent connections
+        # tau_syn_lookup: (n_cell_types,)
+        tau_syn_lookup = np.array(
+            [physiology_params[ct]["tau_syn"] for ct in cell_types],
+            dtype=np.float32,
+        )
+        # tau_syn_array: (n_cell_types, n_neurons)
+        tau_syn_array = tau_syn_lookup[:, np.newaxis] * np.ones(
+            (len(cell_types), n_neurons), dtype=np.float32
+        )
+        synapse_params["tau_syn"] = torch.from_numpy(tau_syn_array)
 
-        for param_name in required_param_names:
-            # Build a lookup array: parameter value for each cell type
-            param_lookup = np.array(
-                [physiology_params_FF[ct][param_name] for ct in cell_types_FF],
+        # Create tau_syn_FF for feedforward connections (if provided)
+        if physiology_params_FF is not None and cell_types_FF is not None:
+            # tau_syn_FF_lookup: (n_cell_types_FF,)
+            tau_syn_FF_lookup = np.array(
+                [physiology_params_FF[ct]["tau_syn"] for ct in cell_types_FF],
                 dtype=np.float32,
             )
+            # tau_syn_FF_array: (n_cell_types_FF, n_neurons)
+            tau_syn_FF_array = tau_syn_FF_lookup[:, np.newaxis] * np.ones(
+                (len(cell_types_FF), n_neurons), dtype=np.float32
+            )
+            synapse_params["tau_syn_FF"] = torch.from_numpy(tau_syn_FF_array)
 
-            # Map each input to its parameter value using cell_type_indices_FF
-            param_array = param_lookup[cell_type_indices_FF]
-            neuron_params_FF[param_name] = torch.from_numpy(param_array)
-
-        return neuron_params_FF
+        return synapse_params
 
     @property
     def device(self):
