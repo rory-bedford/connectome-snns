@@ -171,6 +171,8 @@ class CurrentLIFNetwork_IO(nn.Module):
 
         self.n_neurons = n_neurons
         self.n_inputs = n_inputs
+        self.cell_types = cell_types
+        self.cell_types_FF = cell_types_FF
 
         # Register network structure (connectivity matrices and dimensions)
         self.register_buffer("weights", torch.from_numpy(weights).float())

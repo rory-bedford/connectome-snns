@@ -70,7 +70,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             assert initial_I.shape[2] == self.n_neurons, (
                 "initial_I must match n_neurons."
             )
-            assert initial_I.shape[3] == len(self.cell_type_indices), (
+            assert initial_I.shape[3] == len(self.cell_types_FF), (
                 "initial_I must match the number of cell types."
             )
 
@@ -104,7 +104,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             I = torch.as_tensor(initial_I, dtype=torch.float32, device=self.device)
         else:
             I = torch.zeros(
-                (batch_size, n_steps, self.n_neurons, len(self.cell_type_indices)),
+                (batch_size, n_steps, self.n_neurons, len(self.cell_types_FF)),
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -116,7 +116,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             device=self.device,
         )
         all_I = torch.zeros(
-            (batch_size, n_steps, self.n_neurons, len(self.cell_type_indices)),
+            (batch_size, n_steps, self.n_neurons, len(self.cell_types_FF)),
             dtype=torch.float32,
             device=self.device,
         )
