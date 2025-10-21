@@ -411,6 +411,41 @@ class CurrentLIFNetwork_IO(nn.Module):
         return tiered_weights
 
     @property
+    def cell_typed_weights_FF(self) -> torch.Tensor:
+        """
+        Create a tiered structure for the feedforward weight matrix based on input cell types.
+
+        Each input row of `n_inputs` is placed on the level according to its index
+        in `cell_type_indices_FF`.
+
+        Returns:
+            torch.Tensor: Tiered weight matrix of shape
+                (n_cell_types_FF, n_inputs, n_neurons).
+        """
+        if self.weights_FF is None or self.cell_type_indices_FF is None:
+            raise ValueError(
+                "Feedforward weights and cell type indices must be provided."
+            )
+
+        # Initialize a zero tensor for tiered weights
+        n_tiers = len(self.cell_types_FF)
+        tiered_weights_FF = torch.zeros(
+            (n_tiers, self.n_inputs, self.n_neurons),
+            dtype=self.weights_FF.dtype,
+            device=self.weights_FF.device,
+        )
+
+        # Create a boolean mask for tiering
+        mask = self.cell_type_indices_FF[None, :] == torch.arange(
+            n_tiers, device=self.device
+        ).view(-1, 1)  # Shape: (n_cell_types_FF, n_inputs)
+
+        # Broadcast the mask to tiered_weights_FF and assign scaled feedforward weights
+        tiered_weights_FF = mask[:, :, None] * self.scaled_weights_FF[None, :, :]
+
+        return tiered_weights_FF
+
+    @property
     def spike_fn(self):
         """
         Get the surrogate gradient spike function with the current scale parameter.

@@ -193,7 +193,6 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             print(f"s.shape: {s.shape}")
             print(f"I.shape: {I.shape} ")
             print(f"{self.cell_typed_weights.shape=}")
-            print(f"{self.cell_typed_weights_FF.shape=}")
 
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
@@ -202,14 +201,14 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             I = (
                 I * alpha  # Decay with synapse time constant
                 + torch.einsum(
-                    "bi,cij->bcj", s, self.cell_typed_weights
+                    "bi,cij->bjc", s, self.cell_typed_weights
                 )  # Sum over recurrent spikes with weights
             )
             if inputs is not None:
                 I_FF = (
                     I_FF * alpha_FF  # Decay with feedforward synapse time constant
                     + torch.einsum(
-                        "bi,cij->bcj", inputs, self.cell_typed_weights_FF
+                        "bi,cij->bjc", inputs, self.cell_typed_weights_FF
                     )  # Sum over feedforward spikes with weights
                 )
 
