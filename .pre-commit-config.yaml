@@ -3,14 +3,14 @@ repos:
     hooks:
       - id: ruff-check
         name: Ruff Lint
-        entry: uv run ruff check --fix
+        entry: uv run --active ruff check --fix
         language: system
         always_run: true
         files: \.py$
 
       - id: ruff-format
         name: Ruff Format
-        entry: uv run ruff format
+        entry: uv run --active ruff format
         language: system
         always_run: true
         files: \.py$

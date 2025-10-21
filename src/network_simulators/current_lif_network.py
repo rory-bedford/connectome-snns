@@ -1,4 +1,5 @@
 """Defines a straightforward simulator of recurrent current-based LIF network"""
+# ruff: noqa
 
 import numpy as np
 import torch
@@ -20,9 +21,8 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         delta_t: float,
         inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
-        initial_I_exc: FloatArray | None = None,
-        initial_I_inh: FloatArray | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        initial_I: FloatArray | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate the network for a given number of time steps.
 
@@ -31,15 +31,13 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             delta_t (float): Time step duration in milliseconds.
             inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batches, n_neurons). Defaults to resting potentials.
-            initial_I_exc (FloatArray | None): Initial excitatory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
-            initial_I_inh (FloatArray | None): Initial inhibitory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
+            initial_I (FloatArray | None): Initial excitatory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
                 - all_s: Spike trains of shape (batches, n_steps, n_neurons)
                 - all_v: Membrane potentials of shape (batches, n_steps, n_neurons)
-                - all_I_exc: Excitatory synaptic currents of shape (batches, n_steps, n_neurons)
-                - all_I_inh: Inhibitory synaptic currents of shape (batches, n_steps, n_neurons)
+                - all_I: Synaptic currents of shape (batches, n_steps, n_neurons)
 
         Notes:
             Model equations (discrete-time):
@@ -66,19 +64,14 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
         # Convert delta_t from ms to seconds and compute decay factors
         dt = torch.tensor(delta_t * 1e-3, dtype=torch.float32, device=self.device)
-        alpha_E = torch.exp(-dt / self.tau_syn_E)
-        alpha_I = torch.exp(-dt / self.tau_syn_I)
-        beta_E = torch.exp(-dt / self.tau_mem_E)
-        beta_I = torch.exp(-dt / self.tau_mem_I)
+        alpha = torch.exp(-dt / self.tau_syn)
+        print(alpha)
+        beta = torch.exp(-dt / self.tau_mem)
+        exit()
 
         # Default initial membrane potentials to resting potential if not provided
         if initial_v is None:
-            initial_v = torch.zeros(
-                (1, self.n_neurons), dtype=torch.float32, device=self.device
-            )
-            # Set resting potentials based on neuron type
-            initial_v[:, self.exc_indices] = self.U_rest_E
-            initial_v[:, self.inh_indices] = self.U_rest_I
+            initial_v = self.U_rest.copy()
         else:
             initial_v = torch.as_tensor(
                 initial_v, dtype=torch.float32, device=self.device
