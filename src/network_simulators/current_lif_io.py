@@ -172,7 +172,24 @@ class CurrentLIFNetwork_IO(nn.Module):
         self.n_neurons = n_neurons
         self.n_inputs = n_inputs
         self.cell_types = cell_types
-        self.cell_types_FF = cell_types_FF
+
+        # Ensure feedforward attributes are initialized to zero-length if not provided
+        self.cell_types_FF = cell_types_FF if cell_types_FF is not None else []
+        self.cell_type_indices_FF = (
+            torch.from_numpy(cell_type_indices_FF).long()
+            if cell_type_indices_FF is not None
+            else torch.empty(0, dtype=torch.long)
+        )
+        self.weights_FF = (
+            torch.from_numpy(weights_FF).float()
+            if weights_FF is not None
+            else torch.empty((0, n_neurons), dtype=torch.float32)
+        )
+        self.scaling_factors_FF = (
+            torch.tensor(scaling_factors_FF, dtype=torch.float32)
+            if scaling_factors_FF is not None
+            else torch.empty((0, n_cell_types), dtype=torch.float32)
+        )
 
         # Create neuron-indexed arrays for physiological parameters
         neuron_params = self._create_neuron_param_arrays(
@@ -397,27 +414,9 @@ class CurrentLIFNetwork_IO(nn.Module):
             torch.Tensor: Tiered weight matrix of shape
                 (n_cell_types + n_cell_types_FF, n_inputs + n_neurons, n_neurons).
         """
-        # Combine scaled recurrent and feedforward weights
-        recurrent_weights = (
-            self.scaled_weights
-            if self.weights is not None
-            else torch.zeros(
-                (self.n_neurons, self.n_neurons),
-                dtype=torch.float32,
-                device=self.device,
-            )
-        )
-        feedforward_weights = (
-            self.scaled_weights_FF
-            if self.weights_FF is not None
-            else torch.zeros(
-                (self.n_inputs, self.n_neurons), dtype=torch.float32, device=self.device
-            )
-        )
-
         # Concatenate recurrent and feedforward weights along the input dimension
         combined_weights = torch.cat(
-            [recurrent_weights, feedforward_weights], dim=0
+            [self.scaled_weights, self.scaled_weights_FF], dim=0
         )  # (n_inputs + n_neurons, n_neurons)
 
         # Initialize a zero tensor for tiered weights
@@ -437,11 +436,11 @@ class CurrentLIFNetwork_IO(nn.Module):
         ).view(-1, 1)
 
         # Assign weights to the appropriate tiers
-        tiered_weights[: len(self.cell_types), : self.n_neurons, :] = recurrent_weights[
-            recurrent_tiers
-        ]
+        tiered_weights[: len(self.cell_types), : self.n_neurons, :] = (
+            self.scaled_weights[recurrent_tiers]
+        )
         tiered_weights[len(self.cell_types) :, self.n_neurons :, :] = (
-            feedforward_weights[feedforward_tiers]
+            self.scaled_weights_FF[feedforward_tiers]
         )
 
         return tiered_weights
