@@ -190,6 +190,8 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
             # Generate spikes based on threshold - uses surrogate gradient
             s = self.spike_fn(v - self.theta)
+            print(f"s.shape: {s.shape}")
+            print(f"I.shape: {I.shape} ")
 
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
