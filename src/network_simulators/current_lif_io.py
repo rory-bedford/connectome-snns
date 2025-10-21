@@ -173,22 +173,29 @@ class CurrentLIFNetwork_IO(nn.Module):
         self.n_inputs = n_inputs
         self.cell_types = cell_types
 
-        # Ensure feedforward attributes are initialized to zero-length if not provided
-        self.cell_types_FF = cell_types_FF if cell_types_FF is not None else []
-        self.cell_type_indices_FF = (
-            torch.from_numpy(cell_type_indices_FF).long()
-            if cell_type_indices_FF is not None
-            else torch.empty(0, dtype=torch.long)
+        # Register weights and cell types
+        self.register_buffer("weights", torch.from_numpy(weights).float())
+        self.register_buffer(
+            "cell_type_indices", torch.from_numpy(cell_type_indices).long()
         )
-        self.weights_FF = (
-            torch.from_numpy(weights_FF).float()
-            if weights_FF is not None
-            else torch.empty((0, n_neurons), dtype=torch.float32)
-        )
-        self.scaling_factors_FF = (
-            torch.tensor(scaling_factors_FF, dtype=torch.float32)
-            if scaling_factors_FF is not None
-            else torch.empty((0, n_cell_types), dtype=torch.float32)
+        if weights_FF is not None:
+            self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
+            self.register_buffer(
+                "cell_type_indices_FF",
+                torch.from_numpy(cell_type_indices_FF).long(),
+            )
+        else:
+            # Initialize feedforward attributes to zero-length if not provided
+            self.register_buffer(
+                "weights_FF", torch.empty((0, n_neurons), dtype=torch.float32)
+            )
+            self.register_buffer(
+                "cell_type_indices_FF", torch.empty(0, dtype=torch.long)
+            )
+
+        # Register cell type indices for recurrent weights
+        self.register_buffer(
+            "cell_type_indices", torch.from_numpy(cell_type_indices).long()
         )
 
         # Create neuron-indexed arrays for physiological parameters
@@ -208,30 +215,6 @@ class CurrentLIFNetwork_IO(nn.Module):
             n_inputs,
         )
 
-        # Register network structure (connectivity matrices and dimensions)
-        self.register_buffer("weights", torch.from_numpy(weights).float())
-
-        # Register feedforward structure (if provided)
-        if weights_FF is not None:
-            # Ensure feedforward weights and indices are registered only once
-            self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
-            self.register_buffer(
-                "cell_type_indices_FF",
-                torch.from_numpy(cell_type_indices_FF).long(),
-            )
-        else:
-            # Initialize feedforward attributes to zero-length if not provided
-            self.weights_FF = torch.empty((0, n_neurons), dtype=torch.float32)
-            self.cell_type_indices_FF = torch.empty(0, dtype=torch.long)
-
-        # Register cell type indices for recurrent weights
-        self.register_buffer(
-            "cell_type_indices", torch.from_numpy(cell_type_indices).long()
-        )
-
-        # Remove redundant logic for feedforward cell type indices
-        # Feedforward indices are already handled above
-
         # Register physiological parameters as neuron-indexed arrays
         for param_name, param_array in neuron_params.items():
             self.register_buffer(param_name, param_array)
@@ -248,13 +231,14 @@ class CurrentLIFNetwork_IO(nn.Module):
         self.scaling_factors = nn.Parameter(
             torch.tensor(scaling_factors, dtype=torch.float32)
         )
-
         if scaling_factors_FF is not None:
             self.scaling_factors_FF = nn.Parameter(
                 torch.tensor(scaling_factors_FF, dtype=torch.float32)
             )
         else:
-            self.scaling_factors_FF = None
+            self.scaling_factors_FF = nn.Parameter(
+                torch.empty((0, n_cell_types), dtype=torch.float32)
+            )
 
         # ======================================================================
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
