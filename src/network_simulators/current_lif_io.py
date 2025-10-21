@@ -379,10 +379,10 @@ class CurrentLIFNetwork_IO(nn.Module):
         )
 
         # Create a mask for each cell type to assign weights to the correct tier
-        # tier_indices: (n_cell_types, n_neurons, n_neurons)
-        tier_indices = self.cell_type_indices[None, :, None] == torch.arange(
+        # tier_indices: (n_cell_types, n_neurons)
+        tier_indices = self.cell_type_indices[None, :] == torch.arange(
             len(self.cell_types), device=self.weights.device
-        ).view(-1, 1, 1)
+        ).view(-1, 1)
 
         # Assign scaled weights to the appropriate tier using broadcasting
         # Each tier corresponds to a specific input cell type
@@ -437,10 +437,10 @@ class CurrentLIFNetwork_IO(nn.Module):
         )
 
         # Create a mask for each input cell type to assign weights to the correct tier
-        # tier_indices: (n_cell_types_FF, n_inputs, n_neurons)
-        tier_indices = self.cell_type_indices_FF[None, :, None] == torch.arange(
+        # tier_indices: (n_cell_types_FF, n_inputs)
+        tier_indices = self.cell_type_indices_FF[None, :] == torch.arange(
             len(self.cell_types_FF), device=self.weights_FF.device
-        ).view(-1, 1, 1)
+        ).view(-1, 1)
 
         # Assign scaled feedforward weights to the appropriate tier using broadcasting
         # Each tier corresponds to a specific input cell type
