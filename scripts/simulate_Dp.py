@@ -86,7 +86,7 @@ def main(output_dir, params_file):
             "theta": float(params["physiology"][ct]["theta"]),
             "U_reset": float(params["physiology"][ct]["U_reset"]),
         }
-        for ct in cell_type_names + input_cell_type_names  # Include input cell types
+        for ct in cell_type_names
     }
 
     # Correctly structure physiology_params_FF as a nested dictionary
