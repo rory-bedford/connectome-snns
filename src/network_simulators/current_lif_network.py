@@ -18,7 +18,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
     def forward(
         self,
         n_steps: int,
-        delta_t: float,
+        dt: float,
         inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
         initial_I: FloatArray | None = None,
@@ -28,7 +28,7 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
         Args:
             n_steps (int): Number of time steps to simulate.
-            delta_t (float): Time step duration in milliseconds.
+            dt (float): Time step duration in milliseconds.
             inputs (FloatArray | None): External input spikes of shape (batches, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batches, n_neurons). Defaults to resting potentials.
             initial_I (FloatArray | None): Initial excitatory synaptic currents of shape (batches, n_neurons). Defaults to zeros.
@@ -62,9 +62,9 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                 beta_I = exp(-dt / tau_mem_I)
         """
 
-        # Convert delta_t from ms to seconds and compute decay factors
-        dt = torch.tensor(delta_t * 1e-3, dtype=torch.float32, device=self.device)
-        print(self.tau_syn)
+        # Compute decay factors
+        dt = torch.tensor(delta_t, dtype=torch.float32, device=self.device)
+        print(self.tau_syn.mean())
         alpha = torch.exp(-dt / self.tau_syn)
         beta = torch.exp(-dt / self.tau_mem)
 

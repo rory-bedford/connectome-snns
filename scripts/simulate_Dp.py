@@ -47,7 +47,7 @@ def main(output_dir, params_file):
         params = toml.load(f)
 
     # Extract and convert all parameters at the top
-    delta_t = float(params["simulation"]["delta_t"])
+    dt = float(params["simulation"]["dt"])
     duration = float(params["simulation"]["duration"])
     seed = params["simulation"].get("seed", None)
 
@@ -146,9 +146,9 @@ def main(output_dir, params_file):
     # ===================================================
 
     # Generate Poisson spike trains for mitral cells
-    n_steps = int(duration / delta_t)
+    n_steps = int(duration / dt)
     shape = (1, n_steps, input_num_neurons)
-    p_spike = input_firing_rates[0] * delta_t * 1e-3  # rate in Hz, delta_t in ms
+    p_spike = input_firing_rates[0] * dt * 1e-3  # rate in Hz, dt in ms
     input_spikes = np.random.rand(*shape) < p_spike
 
     # Assign cell types to input layer (all mitral cells are type 0)
@@ -201,7 +201,7 @@ def main(output_dir, params_file):
     with torch.inference_mode():
         output_spikes, output_voltages, output_I_exc, output_I_inh = model.forward(
             n_steps=n_steps,
-            delta_t=delta_t,
+            dt=dt,
             inputs=input_spikes,
         )
 
