@@ -22,15 +22,15 @@ proportion = [1]                       # Relative proportions of each cell type
 [inputs.topology]
 num_neurons = 1500                     # Total number of input neurons
 conn_inputs = [                        # Connection probabilities to connectome layers
-    [0.02, 0],
+    [0.02, 0.0],
 ]
 
 [inputs.weights]
 w_mu = [                               # Log-space mean for input synapse strengths (log-normal)
-    [1.0, 0.0]
+    [1.0, 0.0],
 ]
 w_sigma = [                            # Log-space std dev for input synapse strengths (log-normal)
-    [0.2, 0.0]
+    [0.2, 0.0],
 ]
 
 [inputs.activity]
