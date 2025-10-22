@@ -22,14 +22,14 @@ if [ -d "/ereborfs" ]; then
     if [ "$1" == "--grid" ]; then
         if [ $# -eq 1 ]; then
             # No additional input, use default grid config
-            uv run --active python workspace/run_grid_search.py config/experiment.toml
+            uv run --active python workspace/run_grid_search.py workspace/experiment.toml
         else
             # Use provided config for grid search
             uv run --active python workspace/run_grid_search.py "$2"
         fi
     elif [ $# -eq 0 ]; then
         # No arguments provided, use default experiment.toml
-        uv run --active python run_experiment.py config/experiment.toml
+        uv run --active python run_experiment.py workspace/experiment.toml
     else
         # Pass the first argument (config path) to the Python script
         uv run --active python run_experiment.py "$1"

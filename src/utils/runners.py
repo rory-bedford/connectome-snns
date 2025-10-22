@@ -80,10 +80,9 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     experiment_config = toml.load(experiment_config_path)
     base_params = toml.load(experiment_config["parameters_file"])
 
-    # Create parent grid search directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use the parent folder name directly from the config file
     parent_output = Path(experiment_config["output_dir"])
-    grid_parent = parent_output.parent / f"{parent_output.name}_grid_{timestamp}"
+    grid_parent = parent_output.parent / parent_output.name
     grid_parent.mkdir(parents=True, exist_ok=True)
 
     print(f"\nGrid search parent: {grid_parent}")
@@ -155,7 +154,7 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     success_count = sum(r["success"] for r in results)
     readme = f"""# Grid Search Run
 
-**Timestamp**: {timestamp}
+**Timestamp**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 **Base Experiment**: {experiment_config_path}
 **Base Parameters**: {experiment_config["parameters_file"]}
 
