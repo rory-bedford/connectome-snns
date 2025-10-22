@@ -56,5 +56,5 @@ if __name__ == "__main__":
     results = run_custom_search(
         experiment_config_path=config_path,
         config_generator=custom_config_generator,
-        cuda_devices=[0, 1],
+        cuda_devices=CUDA_VISIBLE_DEVICES,
     )
