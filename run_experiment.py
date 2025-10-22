@@ -13,54 +13,14 @@ Examples:
 """
 
 import sys
-import importlib.util
 from pathlib import Path
 
 # Add src to path so we can import utils
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from utils.reproducibility import ExperimentTracker
-
-
-def run_experiment(config_path=None):
-    """
-    Load and run an experiment from a TOML config file.
-
-    Args:
-        config_path: Path to experiment.toml file. Defaults to workspace/experiment.toml.
-    """
-    # Initialize tracker (validates config)
-    tracker = ExperimentTracker(config_path=config_path)
-
-    # Get the script to run from config
-    script_path = Path(tracker.config["script"])
-    if not script_path.is_absolute():
-        # Make relative to repo root
-        repo_root = Path(__file__).resolve().parent
-        script_path = (repo_root / script_path).resolve()
-
-    if not script_path.exists():
-        print(f"ERROR: Script not found: {script_path}")
-        sys.exit(1)
-
-    print(f"Loading experiment script: {script_path}")
-
-    # Load the script as a module
-    spec = importlib.util.spec_from_file_location("experiment_script", script_path)
-    module = importlib.util.module_from_spec(spec)
-
-    # Run within tracker context
-    with tracker:
-        # Execute the script's main() function
-        spec.loader.exec_module(module)
-        if hasattr(module, "main"):
-            # Pass output_dir and params_file directly to the script
-            module.main(output_dir=tracker.output_dir, params_file=tracker.params_file)
-        else:
-            print(f"ERROR: Script {script_path} has no main() function")
-            sys.exit(1)
+from utils.runners import run_experiment
 
 
 if __name__ == "__main__":
-    config_path = sys.argv[1] if len(sys.argv) > 1 else None
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "workspace/experiment.toml"
     run_experiment(config_path)

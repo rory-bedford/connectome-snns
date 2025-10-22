@@ -5,6 +5,7 @@
 # Usage:
 #   ./run                     # Uses default experiment.toml
 #   ./run path/to/config.toml # Uses specified config file
+#   ./run --grid              # Runs grid search script
 
 set -e
 
@@ -17,19 +18,35 @@ cd "$SCRIPT_DIR"
 # Check if /ereborfs exists and activate environment if it does
 if [ -d "/ereborfs" ]; then
     source /ereborfs/bedfrory/venvs/connectome-snns/bin/activate
-    # Run the Python experiment script with uv
-    if [ $# -eq 0 ]; then
-        # No arguments provided, use default
-        uv run --active python run_experiment.py
+    # Check for --grid flag
+    if [ "$1" == "--grid" ]; then
+        if [ $# -eq 1 ]; then
+            # No additional input, use default grid config
+            uv run --active python workspace/run_grid_search.py config/experiment.toml
+        else
+            # Use provided config for grid search
+            uv run --active python workspace/run_grid_search.py "$2"
+        fi
+    elif [ $# -eq 0 ]; then
+        # No arguments provided, use default experiment.toml
+        uv run --active python run_experiment.py config/experiment.toml
     else
         # Pass the first argument (config path) to the Python script
         uv run --active python run_experiment.py "$1"
     fi
 else
-    # Run the Python experiment script with uv
-    if [ $# -eq 0 ]; then
-        # No arguments provided, use default
-        uv run python run_experiment.py
+    # Check for --grid flag
+    if [ "$1" == "--grid" ]; then
+        if [ $# -eq 1 ]; then
+            # No additional input, use default grid config
+            uv run python workspace/run_grid_search.py config/experiment.toml
+        else
+            # Use provided config for grid search
+            uv run python workspace/run_grid_search.py "$2"
+        fi
+    elif [ $# -eq 0 ]; then
+        # No arguments provided, use default experiment.toml
+        uv run python run_experiment.py config/experiment.toml
     else
         # Pass the first argument (config path) to the Python script
         uv run python run_experiment.py "$1"

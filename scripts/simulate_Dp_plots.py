@@ -426,25 +426,6 @@ def main(output_dir_path):
 
     print("All plots generated successfully!")
 
-    # =========
-    # DEBUGGING
-    # =========
-
-    # Check connectivity statistics being generated correctly
-    E_mask = neuron_types == 1
-    I_mask = neuron_types == -1
-
-    E_to_E = weights[E_mask][:, E_mask]
-    E_to_I = weights[E_mask][:, I_mask]
-    I_to_E = weights[I_mask][:, E_mask]
-    I_to_I = weights[I_mask][:, I_mask]
-
-    print("Connectivity statistics:")
-    print(f"E->E: mean={E_to_E.mean():.4f}, std={E_to_E.std():.4f}, n={E_to_E.size}")
-    print(f"E->I: mean={E_to_I.mean():.4f}, std={E_to_I.std():.4f}, n={E_to_I.size}")
-    print(f"I->E: mean={I_to_E.mean():.4f}, std={I_to_E.std():.4f}, n={I_to_E.size}")
-    print(f"I->I: mean={I_to_I.mean():.4f}, std={I_to_I.std():.4f}, n={I_to_I.size}")
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
