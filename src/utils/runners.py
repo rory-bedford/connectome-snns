@@ -8,6 +8,7 @@ from datetime import datetime
 import importlib.util
 import shutil
 from utils.reproducibility import ExperimentTracker
+from tqdm import tqdm  # Add tqdm for progress bar
 
 
 def run_experiment(config_path=None):
@@ -51,7 +52,8 @@ def run_experiment(config_path=None):
 
 def run_on_gpu(args):
     """Run experiment on specific GPU."""
-    experiment_config_path, gpu_id = args
+    experiment_config_path, gpu_id, description = args
+    print(f"Running: {description} on GPU {gpu_id}")
     env = {**subprocess.os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
     result = subprocess.run(
         ["python", "run_experiment.py", str(experiment_config_path)],
@@ -62,6 +64,7 @@ def run_on_gpu(args):
     return {
         "config": experiment_config_path.stem,
         "gpu": gpu_id,
+        "description": description,
         "success": result.returncode == 0,
         "output": result.stdout if result.returncode == 0 else result.stderr,
     }
@@ -127,18 +130,25 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
 
     # Assign GPUs round-robin and run in parallel
     jobs = [
-        (cfg, cuda_devices[i % len(cuda_devices)])
+        (cfg, cuda_devices[i % len(cuda_devices)], all_runs[i]["description"])
         for i, cfg in enumerate(experiment_configs)
     ]
 
     print("Running experiments...\n")
     with ProcessPoolExecutor(max_workers=len(cuda_devices)) as executor:
-        results = list(executor.map(run_on_gpu, jobs))
+        # Wrap the executor.map with tqdm for progress tracking
+        results = list(
+            tqdm(
+                executor.map(run_on_gpu, jobs),
+                total=len(jobs),
+                desc="Experiments Progress",
+            )
+        )
 
     # Print results
     for r in results:
         status = "✓" if r["success"] else "✗"
-        print(f"{status} GPU{r['gpu']}: {r['config']}")
+        print(f"{status} GPU{r['gpu']}: {r['description']} ({r['config']})")
 
     # Update runs with success status
     for i, run in enumerate(all_runs):
