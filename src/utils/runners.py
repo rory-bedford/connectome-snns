@@ -120,12 +120,54 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
                 "description": description,
                 "output_dir": str(grid_parent / description),
                 "parameters": params,
+                "success": None,  # Initialize success status as None
             }
         )
 
     print(f"✓ Generated {len(experiment_configs)} configurations")
     print(f"  GPUs: {cuda_devices}")
     print(f"  Workers: {len(cuda_devices)}\n")
+
+    # Write initial README and parameters file
+    def write_readme_and_params():
+        success_count = sum(1 for run in all_runs if run["success"] is True)
+        failure_count = sum(1 for run in all_runs if run["success"] is False)
+        readme = f"""# Grid Search Run
+
+**Timestamp**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Base Experiment**: {experiment_config_path}
+**Base Parameters**: {experiment_config["parameters_file"]}
+
+## Summary
+- **Total Runs**: {len(all_runs)}
+- **Successful**: {success_count}
+- **Failed**: {failure_count}
+- **Pending**: {len(all_runs) - success_count - failure_count}
+
+## Runs
+
+"""
+        for run in all_runs:
+            status = (
+                "✓"
+                if run["success"] is True
+                else "✗"
+                if run["success"] is False
+                else "..."
+            )
+            readme += f"- {status} `{run['description']}/`\n"
+
+        readme += "\n## Details\nSee `grid_parameters.toml` for complete parameter configuration of each run.\n"
+
+        readme_path = grid_parent / "README.md"
+        with open(readme_path, "w") as f:
+            f.write(readme)
+
+        params_path = grid_parent / "grid_parameters.toml"
+        with open(params_path, "w") as f:
+            toml.dump({"runs": all_runs}, f)
+
+    write_readme_and_params()  # Write initial state
 
     # Assign GPUs round-robin and run in parallel
     jobs = [
@@ -135,57 +177,19 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
 
     print("Running experiments...\n")
     with ProcessPoolExecutor(max_workers=len(cuda_devices)) as executor:
-        # Wrap the executor.map with tqdm for progress tracking
-        results = list(
+        for i, result in enumerate(
             tqdm(
                 executor.map(run_on_gpu, jobs),
                 total=len(jobs),
                 desc="Experiments Progress",
             )
-        )
+        ):
+            all_runs[i]["success"] = result["success"]  # Update success status
+            write_readme_and_params()  # Update README and parameters file after each job
 
-    # Print results
-    for r in results:
-        status = "✓" if r["success"] else "✗"
-        print(f"{status} GPU{r['gpu']}: {r['description']} ({r['config']})")
-
-    # Update runs with success status
-    for i, run in enumerate(all_runs):
-        run["success"] = results[i]["success"]
-
-    # Save complete grid parameters
-    grid_params = {"runs": all_runs}
-    params_path = grid_parent / "grid_parameters.toml"
-    with open(params_path, "w") as f:
-        toml.dump(grid_params, f)
-
-    # Create README
-    success_count = sum(r["success"] for r in results)
-    readme = f"""# Grid Search Run
-
-**Timestamp**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-**Base Experiment**: {experiment_config_path}
-**Base Parameters**: {experiment_config["parameters_file"]}
-
-## Summary
-- **Total Runs**: {len(results)}
-- **Successful**: {success_count}
-- **Failed**: {len(results) - success_count}
-
-## Runs
-
-"""
-    for run in all_runs:
-        status = "✓" if run["success"] else "✗"
-        readme += f"- {status} `{run['description']}/`\n"
-
-    readme += "\n## Details\nSee `grid_parameters.toml` for complete parameter configuration of each run.\n"
-
-    readme_path = grid_parent / "README.md"
-    with open(readme_path, "w") as f:
-        f.write(readme)
-
-    print(f"\nComplete: {success_count}/{len(results)} successful")
+    print(
+        f"\nComplete: {sum(r['success'] for r in all_runs if r['success'] is not None)}/{len(all_runs)} successful"
+    )
     print(f"Results: {grid_parent}\n")
 
-    return results
+    return all_runs
