@@ -6,7 +6,6 @@ from concurrent.futures import ProcessPoolExecutor
 import sys
 from datetime import datetime
 import importlib.util
-import shutil
 from utils.reproducibility import ExperimentTracker
 from tqdm import tqdm  # Add tqdm for progress bar
 
@@ -188,8 +187,5 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
 
     print(f"\nComplete: {success_count}/{len(results)} successful")
     print(f"Results: {grid_parent}\n")
-
-    # Cleanup temp configs
-    shutil.rmtree(workspace)
 
     return results
