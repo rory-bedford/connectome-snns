@@ -24,9 +24,10 @@ def assign_weights_lognormal(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: list,
-    w_mu_matrix: list,
-    w_sigma_matrix: list,
+    cell_type_signs: IntArray,
+    w_mu_matrix: FloatArray,
+    w_sigma_matrix: FloatArray,
+    parameter_space: str = "log",
 ) -> FloatArray:
     """
     Assign log-normal distributed weights to a boolean adjacency matrix.
@@ -35,45 +36,83 @@ def assign_weights_lognormal(
         connectivity_graph (BoolArray): Boolean adjacency matrix.
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (list): Signs for each cell type (+1/-1).
-        w_mu_matrix (list): NxN matrix of log-normal means.
-        w_sigma_matrix (list): NxN matrix of log-normal stds.
+        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
+        w_mu_matrix (FloatArray): NxN matrix of parameters:
+            - If parameter_space="log" (default): mu parameters of log-normal distribution (in log-space)
+            - If parameter_space="linear": desired mean of resulting distribution (in linear space)
+        w_sigma_matrix (FloatArray): NxN matrix of parameters:
+            - If parameter_space="log" (default): sigma parameters of log-normal distribution (in log-space)
+            - If parameter_space="linear": desired variance of resulting distribution (in linear space)
+        parameter_space (str, optional): Specifies how to interpret the input parameters:
+            - "log": Parameters are in log space (mu, sigma)
+            - "linear": Parameters are in linear space (mean, variance)
+            Defaults to "log".
 
     Returns:
         FloatArray: Weighted adjacency matrix with log-normal magnitudes and appropriate signs.
     """
-    w_mu_np = np.array(w_mu_matrix)
-    w_sigma_np = np.array(w_sigma_matrix)
-
-    W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
+    n_cell_types = len(cell_type_signs)
 
-    # Assign weights based on cell type connectivity matrix
-    for i in range(n_source):
-        for j in range(n_target):
-            if connectivity_graph[i, j]:
-                source_type = source_cell_indices[i]
-                target_type = target_cell_indices[j]
+    # Input validation
+    assert source_cell_indices.shape[0] == n_source, (
+        "Mismatch between source indices and graph rows."
+    )
+    assert target_cell_indices.shape[0] == n_target, (
+        "Mismatch between target indices and graph columns."
+    )
+    assert w_mu_matrix.shape == (n_cell_types, n_cell_types), (
+        "w_mu_matrix must be NxN for N cell types."
+    )
+    assert w_sigma_matrix.shape == (n_cell_types, n_cell_types), (
+        "w_sigma_matrix must be NxN for N cell types."
+    )
+    assert parameter_space.lower() in ["log", "linear"], (
+        'parameter_space must be either "log" or "linear"'
+    )
 
-                # Get weight parameters for this cell type combination
-                mu = w_mu_np[source_type, target_type]
-                sigma = w_sigma_np[source_type, target_type]
+    # Convert from desired mean/variance to log-normal parameters if needed
+    if parameter_space.lower() == "linear":
+        # For lognormal distribution:
+        # If X ~ LogNormal(μ, σ²), then:
+        # E[X] = exp(μ + σ²/2)
+        # Var[X] = [exp(σ²) - 1] * exp(2μ + σ²)
 
-                # Generate weight magnitude and apply sign (Dale's law)
-                weight_magnitude = np.random.lognormal(mu, sigma)
-                source_sign = cell_type_signs[source_type]
-                W[i, j] = weight_magnitude * source_sign
+        # Given desired mean (m) and variance (v), we solve for μ and σ:
+        # σ² = log(1 + v/m²)
+        # μ = log(m) - σ²/2
 
-    return W
+        mean = w_mu_matrix.copy()
+        var = w_sigma_matrix.copy()
+
+        # Avoid division by zero or negative values
+        mean_eps = np.maximum(mean, np.finfo(float).eps)
+        var_ratio = np.maximum(var / (mean_eps * mean_eps), 0)
+
+        log_sigma_squared = np.log(1 + var_ratio)
+        log_mu = np.log(mean_eps) - log_sigma_squared / 2
+
+        w_mu_matrix = log_mu
+        w_sigma_matrix = np.sqrt(log_sigma_squared)
+
+    # Extract parameters for specific connections
+    source_signs = cell_type_signs[source_cell_indices]
+    mu = w_mu_matrix[source_cell_indices][:, target_cell_indices]
+    sigma = w_sigma_matrix[source_cell_indices][:, target_cell_indices]
+
+    weight_magnitudes = np.random.lognormal(mu, sigma)
+    weights = weight_magnitudes * source_signs[:, None]
+
+    return weights * connectivity_graph
 
 
 def assign_weights_gamma(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: list,
-    shape_matrix: list,
-    scale_matrix: list,
+    cell_type_signs: IntArray,
+    shape_matrix: FloatArray,
+    scale_matrix: FloatArray,
 ) -> FloatArray:
     """
     Assign gamma-distributed weights to a boolean adjacency matrix.
@@ -82,45 +121,46 @@ def assign_weights_gamma(
         connectivity_graph (BoolArray): Boolean adjacency matrix.
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (list): Signs for each cell type (+1/-1).
-        shape_matrix (list): NxN matrix of gamma shape parameters (k).
-        scale_matrix (list): NxN matrix of gamma scale parameters (θ).
+        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
+        shape_matrix (FloatArray): NxN matrix of gamma shape parameters (k).
+        scale_matrix (FloatArray): NxN matrix of gamma scale parameters (θ).
 
     Returns:
         FloatArray: Weighted adjacency matrix with gamma-distributed magnitudes and appropriate signs.
     """
-    shape_np = np.array(shape_matrix)
-    scale_np = np.array(scale_matrix)
-
-    W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
+    n_cell_types = len(cell_type_signs)
 
-    # Assign weights based on cell type connectivity matrix
-    for i in range(n_source):
-        for j in range(n_target):
-            if connectivity_graph[i, j]:
-                source_type = source_cell_indices[i]
-                target_type = target_cell_indices[j]
+    assert source_cell_indices.shape[0] == n_source, (
+        "Mismatch between source indices and graph rows."
+    )
+    assert target_cell_indices.shape[0] == n_target, (
+        "Mismatch between target indices and graph columns."
+    )
+    assert shape_matrix.shape == (n_cell_types, n_cell_types), (
+        "shape_matrix must be NxN for N cell types."
+    )
+    assert scale_matrix.shape == (n_cell_types, n_cell_types), (
+        "scale_matrix must be NxN for N cell types."
+    )
 
-                # Get weight parameters for this cell type combination
-                shape = shape_np[source_type, target_type]
-                scale = scale_np[source_type, target_type]
+    source_signs = cell_type_signs[source_cell_indices]
+    shape = shape_matrix[source_cell_indices][:, target_cell_indices]
+    scale = scale_matrix[source_cell_indices][:, target_cell_indices]
 
-                # Generate weight magnitude and apply sign (Dale's law)
-                weight_magnitude = np.random.gamma(shape, scale)
-                source_sign = cell_type_signs[source_type]
-                W[i, j] = weight_magnitude * source_sign
+    weight_magnitudes = np.random.gamma(shape, scale)
+    weights = weight_magnitudes * source_signs[:, None]
 
-    return W
+    return weights * connectivity_graph
 
 
 def assign_weights_uniform(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: list,
-    low_matrix: list,
-    high_matrix: list,
+    cell_type_signs: IntArray,
+    low_matrix: FloatArray,
+    high_matrix: FloatArray,
 ) -> FloatArray:
     """
     Assign uniformly distributed weights to a boolean adjacency matrix.
@@ -129,33 +169,34 @@ def assign_weights_uniform(
         connectivity_graph (BoolArray): Boolean adjacency matrix.
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (list): Signs for each cell type (+1/-1).
-        low_matrix (list): NxN matrix of uniform distribution lower bounds.
-        high_matrix (list): NxN matrix of uniform distribution upper bounds.
+        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
+        low_matrix (FloatArray): NxN matrix of uniform distribution lower bounds.
+        high_matrix (FloatArray): NxN matrix of uniform distribution upper bounds.
 
     Returns:
         FloatArray: Weighted adjacency matrix with uniformly distributed magnitudes and appropriate signs.
     """
-    low_np = np.array(low_matrix)
-    high_np = np.array(high_matrix)
-
-    W = np.zeros_like(connectivity_graph, dtype=np.float64)
     n_source, n_target = connectivity_graph.shape
+    n_cell_types = len(cell_type_signs)
 
-    # Assign weights based on cell type connectivity matrix
-    for i in range(n_source):
-        for j in range(n_target):
-            if connectivity_graph[i, j]:
-                source_type = source_cell_indices[i]
-                target_type = target_cell_indices[j]
+    assert source_cell_indices.shape[0] == n_source, (
+        "Mismatch between source indices and graph rows."
+    )
+    assert target_cell_indices.shape[0] == n_target, (
+        "Mismatch between target indices and graph columns."
+    )
+    assert low_matrix.shape == (n_cell_types, n_cell_types), (
+        "low_matrix must be NxN for N cell types."
+    )
+    assert high_matrix.shape == (n_cell_types, n_cell_types), (
+        "high_matrix must be NxN for N cell types."
+    )
 
-                # Get weight parameters for this cell type combination
-                low = low_np[source_type, target_type]
-                high = high_np[source_type, target_type]
+    source_signs = cell_type_signs[source_cell_indices]
+    low = low_matrix[source_cell_indices][:, target_cell_indices]
+    high = high_matrix[source_cell_indices][:, target_cell_indices]
 
-                # Generate weight magnitude and apply sign (Dale's law)
-                weight_magnitude = np.random.uniform(low, high)
-                source_sign = cell_type_signs[source_type]
-                W[i, j] = weight_magnitude * source_sign
+    weight_magnitudes = np.random.uniform(low, high)
+    weights = weight_magnitudes * source_signs[:, None]
 
-    return W
+    return weights * connectivity_graph
