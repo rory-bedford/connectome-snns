@@ -3,12 +3,14 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
+import torch
+from typing import Union
 
 
 def plot_membrane_voltages(
-    voltages: NDArray[np.float32],
-    spikes: NDArray[np.int32],
-    neuron_types: NDArray[np.int32],
+    voltages: Union[NDArray[np.float32], torch.Tensor],
+    spikes: Union[NDArray[np.int32], torch.Tensor],
+    neuron_types: Union[NDArray[np.int32], torch.Tensor],
     delta_t: float,
     duration: float,
     neuron_params: dict,
@@ -24,9 +26,9 @@ def plot_membrane_voltages(
     Visualize membrane voltage traces with spike markers.
 
     Args:
-        voltages (NDArray[np.float32]): Voltage array with shape (batch, time, neurons).
-        spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
-        neuron_types (NDArray[np.int32]): Array indicating neuron type indices (0, 1, 2, ...).
+        voltages (Union[NDArray[np.float32], torch.Tensor]): Voltage array with shape (batch, time, neurons).
+        spikes (Union[NDArray[np.int32], torch.Tensor]): Spike array with shape (batch, time, neurons).
+        neuron_types (Union[NDArray[np.int32], torch.Tensor]): Array indicating neuron type indices (0, 1, 2, ...).
         delta_t (float): Time step in milliseconds.
         duration (float): Total duration in milliseconds.
         neuron_params (dict): Dictionary mapping cell type indices to parameters
@@ -39,6 +41,14 @@ def plot_membrane_voltages(
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
         save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
     """
+    # Convert PyTorch tensors to NumPy arrays if needed
+    if isinstance(voltages, torch.Tensor):
+        voltages = voltages.detach().cpu().numpy()
+    if isinstance(spikes, torch.Tensor):
+        spikes = spikes.detach().cpu().numpy()
+    if isinstance(neuron_types, torch.Tensor):
+        neuron_types = neuron_types.detach().cpu().numpy()
+
     n_steps = voltages.shape[1]
     n_steps_plot = int(n_steps * fraction)
 
@@ -118,8 +128,8 @@ def plot_membrane_voltages(
 
 
 def plot_synaptic_currents(
-    I_exc: NDArray[np.float32],
-    I_inh: NDArray[np.float32],
+    I_exc: Union[NDArray[np.float32], torch.Tensor],
+    I_inh: Union[NDArray[np.float32], torch.Tensor],
     delta_t: float,
     duration: float,
     n_neurons_plot: int = 10,
@@ -132,8 +142,8 @@ def plot_synaptic_currents(
     Visualize excitatory and inhibitory synaptic currents.
 
     Args:
-        I_exc (NDArray[np.float32]): Excitatory current array with shape (batch, time, neurons).
-        I_inh (NDArray[np.float32]): Inhibitory current array with shape (batch, time, neurons).
+        I_exc (Union[NDArray[np.float32], torch.Tensor]): Excitatory current array with shape (batch, time, neurons).
+        I_inh (Union[NDArray[np.float32], torch.Tensor]): Inhibitory current array with shape (batch, time, neurons).
         delta_t (float): Time step in milliseconds.
         duration (float): Total duration in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
@@ -142,6 +152,12 @@ def plot_synaptic_currents(
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
         save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
     """
+    # Convert PyTorch tensors to NumPy arrays if needed
+    if isinstance(I_exc, torch.Tensor):
+        I_exc = I_exc.detach().cpu().numpy()
+    if isinstance(I_inh, torch.Tensor):
+        I_inh = I_inh.detach().cpu().numpy()
+
     n_steps = I_exc.shape[1]
     n_steps_plot = int(n_steps * fraction)
 

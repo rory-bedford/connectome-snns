@@ -1,0 +1,109 @@
+# Parameters for our conductance-based LIF network simulating zebrafish Dp
+# Adapted from Meissner-Bernard et al. (2025)
+
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+dt = 0.1                               # ms - Time resolution of the simulation
+duration = 10000.0                     # ms - Total simulation duration
+seed = 42                              # Random seed for reproducibility
+
+# =========================
+# INPUT LAYER CONFIGURATION
+# =========================
+
+[inputs.cell_types]
+names = ['mitral']                     # Cell type names
+signs = [1]                            # Sign convention (1=excitatory, -1=inhibitory)
+proportion = [1]                       # Relative proportions of each cell type
+
+[inputs.topology]
+num_neurons = 1500                     # Total number of input neurons
+conn_inputs = [                        # Connection probabilities to connectome layers
+    [0.02, 0.0],
+]
+
+[inputs.weights]
+w_mu = [                               # Log-space mean for input synapse strengths (log-normal)
+    [1.0, 0.0],
+]
+w_sigma = [                            # Log-space std dev for input synapse strengths (log-normal)
+    [0.2, 0.0],
+]
+
+[inputs.activity]
+firing_rates = [6.0]                   # Hz - Firing rates of input cells (Poisson process)
+
+[inputs.physiology.mitral]
+tau_syn = 30.0                         # ms - Synaptic time constant
+
+# =============================
+# RECURRENT LAYER CONFIGURATION  
+# =============================
+
+[connectome.cell_types]
+names = ['excitatory', 'inhibitory']   # Cell type names
+signs = [1, -1]                        # Sign convention (1=excitatory, -1=inhibitory)
+proportion = [0.8, 0.2]                # Relative proportions of each cell type
+
+[connectome.topology]
+num_neurons = 5000                     # Total number of neurons in the network
+num_assemblies = 20                    # Number of assemblies in the network
+
+conn_within = [                        # Connection probabilities within assemblies
+    [0.05, 0.05],
+    [0.3, 0.05],
+]
+
+conn_between = [                       # Connection probabilities between assemblies
+    [0.01, 0.01],
+    [0.01, 0.01],
+]
+
+[connectome.weights]
+w_mu = [                               # Log-space mean for synapse strengths (log-normal)
+    [1.0, 1.2],
+    [2.4, 1.6],
+]
+w_sigma = [                            # Log-space std dev for synapse strengths (log-normal)
+    [0.8, 0.8],
+    [0.2, 0.2],
+]
+
+# ==============================
+# NEURONAL PHYSIOLOGY PARAMETERS
+# ==============================
+
+[physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+tau_syn = 30.0                         # ms - Synaptic time constant
+R = 740.74                             # MOhm - Membrane resistance
+U_rest = -60.0                         # mV - Resting membrane potential
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+
+[physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+tau_syn = 10.0                         # ms - Synaptic time constant
+R = 1111.11                            # MOhm - Membrane resistance
+U_rest = -60.0                         # mV - Resting membrane potential
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+
+# ================================
+# OPTIMIZATION AND HYPERPARAMETERS
+# ================================
+
+[optimisation]
+scaling_factors = [                    # pA/voxel - Recurrent scaling factors to be optimised
+    [0.003, 0.003],
+    [0.004, 0.004],
+]
+scaling_factors_FF = [                 # pA/voxel - Feedforward scaling factors to be optimised
+    [0.004, 0.004],
+]
+
+[hyperparameters]
+surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function

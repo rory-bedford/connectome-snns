@@ -24,7 +24,7 @@ def assign_weights_lognormal(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: IntArray,
+    cell_type_signs: list or IntArray,
     w_mu_matrix: FloatArray,
     w_sigma_matrix: FloatArray,
     parameter_space: str = "log",
@@ -33,14 +33,16 @@ def assign_weights_lognormal(
     Assign log-normal distributed weights to a boolean adjacency matrix.
 
     Args:
-        connectivity_graph (BoolArray): Boolean adjacency matrix.
+        connectivity_graph (BoolArray): Boolean adjacency matrix of shape (n_source, n_target).
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
-        w_mu_matrix (FloatArray): NxN matrix of parameters:
+        cell_type_signs (list or ndarray): Signs for each SOURCE cell type (+1/-1). This is used to
+            determine if connections are excitatory or inhibitory based on Dale's law.
+            Length must equal the number of unique source cell types. Can be a list or numpy array.
+        w_mu_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) for parameters:
             - If parameter_space="log" (default): mu parameters of log-normal distribution (in log-space)
             - If parameter_space="linear": desired mean of resulting distribution (in linear space)
-        w_sigma_matrix (FloatArray): NxN matrix of parameters:
+        w_sigma_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) for parameters:
             - If parameter_space="log" (default): sigma parameters of log-normal distribution (in log-space)
             - If parameter_space="linear": desired variance of resulting distribution (in linear space)
         parameter_space (str, optional): Specifies how to interpret the input parameters:
@@ -52,7 +54,7 @@ def assign_weights_lognormal(
         FloatArray: Weighted adjacency matrix with log-normal magnitudes and appropriate signs.
     """
     n_source, n_target = connectivity_graph.shape
-    n_cell_types = len(cell_type_signs)
+    n_source_types = len(cell_type_signs)
 
     # Input validation
     assert source_cell_indices.shape[0] == n_source, (
@@ -61,11 +63,16 @@ def assign_weights_lognormal(
     assert target_cell_indices.shape[0] == n_target, (
         "Mismatch between target indices and graph columns."
     )
-    assert w_mu_matrix.shape == (n_cell_types, n_cell_types), (
-        "w_mu_matrix must be NxN for N cell types."
+
+    # Get the number of unique target types
+    n_target_types = max(target_cell_indices) + 1
+
+    # Allow rectangular matrices for weights between different numbers of source and target types
+    assert w_mu_matrix.shape == (n_source_types, n_target_types), (
+        f"w_mu_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
-    assert w_sigma_matrix.shape == (n_cell_types, n_cell_types), (
-        "w_sigma_matrix must be NxN for N cell types."
+    assert w_sigma_matrix.shape == (n_source_types, n_target_types), (
+        f"w_sigma_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
     assert parameter_space.lower() in ["log", "linear"], (
         'parameter_space must be either "log" or "linear"'
@@ -96,7 +103,9 @@ def assign_weights_lognormal(
         w_sigma_matrix = np.sqrt(log_sigma_squared)
 
     # Extract parameters for specific connections
-    source_signs = cell_type_signs[source_cell_indices]
+    # Convert cell_type_signs to numpy array if it's not already one
+    cell_type_signs_arr = np.array(cell_type_signs)
+    source_signs = cell_type_signs_arr[source_cell_indices]
     mu = w_mu_matrix[source_cell_indices][:, target_cell_indices]
     sigma = w_sigma_matrix[source_cell_indices][:, target_cell_indices]
 
@@ -110,7 +119,7 @@ def assign_weights_gamma(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: IntArray,
+    cell_type_signs: list or IntArray,
     shape_matrix: FloatArray,
     scale_matrix: FloatArray,
 ) -> FloatArray:
@@ -118,18 +127,20 @@ def assign_weights_gamma(
     Assign gamma-distributed weights to a boolean adjacency matrix.
 
     Args:
-        connectivity_graph (BoolArray): Boolean adjacency matrix.
+        connectivity_graph (BoolArray): Boolean adjacency matrix of shape (n_source, n_target).
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
-        shape_matrix (FloatArray): NxN matrix of gamma shape parameters (k).
-        scale_matrix (FloatArray): NxN matrix of gamma scale parameters (θ).
+        cell_type_signs (list or ndarray): Signs for each SOURCE cell type (+1/-1). This is used to
+            determine if connections are excitatory or inhibitory based on Dale's law.
+            Length must equal the number of unique source cell types. Can be a list or numpy array.
+        shape_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) of gamma shape parameters (k).
+        scale_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) of gamma scale parameters (θ).
 
     Returns:
         FloatArray: Weighted adjacency matrix with gamma-distributed magnitudes and appropriate signs.
     """
     n_source, n_target = connectivity_graph.shape
-    n_cell_types = len(cell_type_signs)
+    n_source_types = len(cell_type_signs)
 
     assert source_cell_indices.shape[0] == n_source, (
         "Mismatch between source indices and graph rows."
@@ -137,14 +148,20 @@ def assign_weights_gamma(
     assert target_cell_indices.shape[0] == n_target, (
         "Mismatch between target indices and graph columns."
     )
-    assert shape_matrix.shape == (n_cell_types, n_cell_types), (
-        "shape_matrix must be NxN for N cell types."
+
+    # Get the number of unique target types
+    n_target_types = max(target_cell_indices) + 1
+
+    assert shape_matrix.shape == (n_source_types, n_target_types), (
+        f"shape_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
-    assert scale_matrix.shape == (n_cell_types, n_cell_types), (
-        "scale_matrix must be NxN for N cell types."
+    assert scale_matrix.shape == (n_source_types, n_target_types), (
+        f"scale_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
 
-    source_signs = cell_type_signs[source_cell_indices]
+    # Convert cell_type_signs to numpy array if it's not already one
+    cell_type_signs_arr = np.array(cell_type_signs)
+    source_signs = cell_type_signs_arr[source_cell_indices]
     shape = shape_matrix[source_cell_indices][:, target_cell_indices]
     scale = scale_matrix[source_cell_indices][:, target_cell_indices]
 
@@ -158,7 +175,7 @@ def assign_weights_uniform(
     connectivity_graph: BoolArray,
     source_cell_indices: IntArray,
     target_cell_indices: IntArray,
-    cell_type_signs: IntArray,
+    cell_type_signs: list or IntArray,
     low_matrix: FloatArray,
     high_matrix: FloatArray,
 ) -> FloatArray:
@@ -166,18 +183,20 @@ def assign_weights_uniform(
     Assign uniformly distributed weights to a boolean adjacency matrix.
 
     Args:
-        connectivity_graph (BoolArray): Boolean adjacency matrix.
+        connectivity_graph (BoolArray): Boolean adjacency matrix of shape (n_source, n_target).
         source_cell_indices (IntArray): Cell type indices for source neurons (0, 1, 2, ...).
         target_cell_indices (IntArray): Cell type indices for target neurons (0, 1, 2, ...).
-        cell_type_signs (IntArray): Signs for each cell type (+1/-1).
-        low_matrix (FloatArray): NxN matrix of uniform distribution lower bounds.
-        high_matrix (FloatArray): NxN matrix of uniform distribution upper bounds.
+        cell_type_signs (list or ndarray): Signs for each SOURCE cell type (+1/-1). This is used to
+            determine if connections are excitatory or inhibitory based on Dale's law.
+            Length must equal the number of unique source cell types. Can be a list or numpy array.
+        low_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) of uniform distribution lower bounds.
+        high_matrix (FloatArray): Matrix of shape (n_source_types, n_target_types) of uniform distribution upper bounds.
 
     Returns:
         FloatArray: Weighted adjacency matrix with uniformly distributed magnitudes and appropriate signs.
     """
     n_source, n_target = connectivity_graph.shape
-    n_cell_types = len(cell_type_signs)
+    n_source_types = len(cell_type_signs)
 
     assert source_cell_indices.shape[0] == n_source, (
         "Mismatch between source indices and graph rows."
@@ -185,14 +204,20 @@ def assign_weights_uniform(
     assert target_cell_indices.shape[0] == n_target, (
         "Mismatch between target indices and graph columns."
     )
-    assert low_matrix.shape == (n_cell_types, n_cell_types), (
-        "low_matrix must be NxN for N cell types."
+
+    # Get the number of unique target types
+    n_target_types = max(target_cell_indices) + 1
+
+    assert low_matrix.shape == (n_source_types, n_target_types), (
+        f"low_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
-    assert high_matrix.shape == (n_cell_types, n_cell_types), (
-        "high_matrix must be NxN for N cell types."
+    assert high_matrix.shape == (n_source_types, n_target_types), (
+        f"high_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
     )
 
-    source_signs = cell_type_signs[source_cell_indices]
+    # Convert cell_type_signs to numpy array if it's not already one
+    cell_type_signs_arr = np.array(cell_type_signs)
+    source_signs = cell_type_signs_arr[source_cell_indices]
     low = low_matrix[source_cell_indices][:, target_cell_indices]
     high = high_matrix[source_cell_indices][:, target_cell_indices]
 

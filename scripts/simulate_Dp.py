@@ -16,8 +16,7 @@ Overview:
 
 import numpy as np
 import toml
-from synthetic_connectome import topology_generators, weight_assigners
-from synthetic_connectome.cell_types import assign_cell_types
+from synthetic_connectome import topology_generators, weight_assigners, cell_types
 from network_simulators.current_lif_network import CurrentLIFNetwork
 import torch
 import sys
@@ -116,7 +115,7 @@ def main(output_dir, params_file):
     # ==========================================================
 
     # First assign cell types to source and target neurons (same for recurrent)
-    cell_type_indices = assign_cell_types(
+    cell_type_indices = cell_types.assign_cell_types(
         num_neurons=num_neurons,
         cell_type_proportions=cell_type_proportions,
     )
@@ -160,7 +159,7 @@ def main(output_dir, params_file):
     input_spikes = np.random.rand(*shape) < p_spike
 
     # Assign cell types to input layer (all mitral cells are type 0)
-    input_source_indices = assign_cell_types(
+    input_source_indices = cell_types.assign_cell_types(
         num_neurons=input_num_neurons,
         cell_type_proportions=[1.0],  # Input layer: all mitral cells
     )
