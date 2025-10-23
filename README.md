@@ -21,11 +21,11 @@ On the Zenke lab workstations, we need to store virtual environments on ereborfs
 
 ```
 uv venv /ereborfs/bedfrory/venvs/connectome-snns
-source /ereborfs/bedfrory/venvs/connectome-snns/bin/activate
-uv sync --active --extra cu129 --cache-dir /ereborfs/bedfrory/.cache/uv
+ln -s /ereborfs/bedfrory/venvs/connectome-snns .venv
+uv sync --extra cu129 --cache-dir /ereborfs/bedfrory/.cache/uv
 ```
 
-Note the `active` flag makes uv install into the activated environment rather than the default in the project directory, and the `cache` flag makes uv use a non-default cache directory as our home quota on these machines is small.
+Which creates a symlink so the virtual environment isn't stored in our home directory which has a small quota, but keeps uv and VSCode happy. The `cache` flag makes uv use a non-default cache directory, also to save space in home.
 
 ## Development
 
