@@ -14,8 +14,6 @@ Overview:
 4. Finally we run our network and examine the output dynamics.
 """
 
-# ruff: noqa
-
 import numpy as np
 import toml
 from synthetic_connectome import topology_generators, weight_assigners, cell_types
@@ -69,32 +67,45 @@ def main(output_dir, params_file):
     input_w_mu = np.array(params["feedforward"]["weights"]["w_mu"], dtype=float)
     input_w_sigma = np.array(params["feedforward"]["weights"]["w_sigma"], dtype=float)
 
-    # Feedforward activity (firing rates)
+    # Feedforward cell parameters (as list of dicts)
+    # Note: Feedforward cells only have activity parameters (firing_rate), no physiology
+    cell_params_FF = []
     input_firing_rates = {}
-    for ct in input_cell_type_names:
-        input_firing_rates[ct] = float(
-            params["feedforward"]["activity"][ct]["firing_rate"]
+    for cell_id, ct in enumerate(input_cell_type_names):
+        firing_rate = float(params["feedforward"]["activity"][ct]["firing_rate"])
+        input_firing_rates[ct] = firing_rate
+        cell_params_FF.append(
+            {
+                "name": ct,
+                "cell_id": cell_id,
+                "firing_rate": firing_rate,  # Store for later use
+            }
         )
 
-    # Feedforward synapses (cell type specific)
-    synapse_params_FF = {}
-    for ct in input_cell_type_names:
-        synapse_params_FF[ct] = {
-            "names": params["feedforward"]["synapses"][ct]["names"],
-            "tau_rise": np.array(
-                params["feedforward"]["synapses"][ct]["tau_rise"], dtype=float
-            ),
-            "tau_decay": np.array(
-                params["feedforward"]["synapses"][ct]["tau_decay"], dtype=float
-            ),
-            "reversal_potential": np.array(
-                params["feedforward"]["synapses"][ct]["reversal_potential"],
-                dtype=float,
-            ),
-            "g_bar": np.array(
-                params["feedforward"]["synapses"][ct]["g_bar"], dtype=float
-            ),
-        }
+    # Feedforward synapse parameters (as list of dicts, flattened from all cell types)
+    synapse_params_FF = []
+    synapse_id_FF = 0
+    for cell_id, ct in enumerate(input_cell_type_names):
+        synapse_names = params["feedforward"]["synapses"][ct]["names"]
+        tau_rise = params["feedforward"]["synapses"][ct]["tau_rise"]
+        tau_decay = params["feedforward"]["synapses"][ct]["tau_decay"]
+        reversal_potential = params["feedforward"]["synapses"][ct]["reversal_potential"]
+        g_bar = params["feedforward"]["synapses"][ct]["g_bar"]
+
+        # Each synapse type for this cell type gets its own entry
+        for i, syn_name in enumerate(synapse_names):
+            synapse_params_FF.append(
+                {
+                    "name": syn_name,
+                    "synapse_id": synapse_id_FF,
+                    "cell_id": cell_id,
+                    "tau_rise": float(tau_rise[i]),
+                    "tau_decay": float(tau_decay[i]),
+                    "reversal_potential": float(reversal_potential[i]),
+                    "g_bar": float(g_bar[i]),
+                }
+            )
+            synapse_id_FF += 1
 
     # ========== RECURRENT LAYER PARAMETERS ==========
     # Recurrent topology
@@ -113,37 +124,46 @@ def main(output_dir, params_file):
     w_mu = np.array(params["recurrent"]["weights"]["w_mu"], dtype=float)
     w_sigma = np.array(params["recurrent"]["weights"]["w_sigma"], dtype=float)
 
-    # Recurrent physiology (cell type specific)
-    physiology_params = {}
-    for ct in cell_type_names:
-        physiology_params[ct] = {
-            "tau_mem": float(params["recurrent"]["physiology"][ct]["tau_mem"]),
-            "theta": float(params["recurrent"]["physiology"][ct]["theta"]),
-            "U_reset": float(params["recurrent"]["physiology"][ct]["U_reset"]),
-            "E_L": float(params["recurrent"]["physiology"][ct]["E_L"]),
-            "g_L": float(params["recurrent"]["physiology"][ct]["g_L"]),
-            "tau_ref": float(params["recurrent"]["physiology"][ct]["tau_ref"]),
-        }
+    # Recurrent cell parameters (as list of dicts)
+    cell_params = []
+    for cell_id, ct in enumerate(cell_type_names):
+        cell_params.append(
+            {
+                "name": ct,
+                "cell_id": cell_id,
+                "tau_mem": float(params["recurrent"]["physiology"][ct]["tau_mem"]),
+                "theta": float(params["recurrent"]["physiology"][ct]["theta"]),
+                "U_reset": float(params["recurrent"]["physiology"][ct]["U_reset"]),
+                "E_L": float(params["recurrent"]["physiology"][ct]["E_L"]),
+                "g_L": float(params["recurrent"]["physiology"][ct]["g_L"]),
+                "tau_ref": float(params["recurrent"]["physiology"][ct]["tau_ref"]),
+            }
+        )
 
-    # Recurrent synapses (cell type specific)
-    synapse_params = {}
-    for ct in cell_type_names:
-        synapse_params[ct] = {
-            "names": params["recurrent"]["synapses"][ct]["names"],
-            "tau_rise": np.array(
-                params["recurrent"]["synapses"][ct]["tau_rise"], dtype=float
-            ),
-            "tau_decay": np.array(
-                params["recurrent"]["synapses"][ct]["tau_decay"], dtype=float
-            ),
-            "reversal_potential": np.array(
-                params["recurrent"]["synapses"][ct]["reversal_potential"],
-                dtype=float,
-            ),
-            "g_bar": np.array(
-                params["recurrent"]["synapses"][ct]["g_bar"], dtype=float
-            ),
-        }
+    # Recurrent synapse parameters (as list of dicts, flattened from all cell types)
+    synapse_params = []
+    synapse_id = 0
+    for cell_id, ct in enumerate(cell_type_names):
+        synapse_names = params["recurrent"]["synapses"][ct]["names"]
+        tau_rise = params["recurrent"]["synapses"][ct]["tau_rise"]
+        tau_decay = params["recurrent"]["synapses"][ct]["tau_decay"]
+        reversal_potential = params["recurrent"]["synapses"][ct]["reversal_potential"]
+        g_bar = params["recurrent"]["synapses"][ct]["g_bar"]
+
+        # Each synapse type for this cell type gets its own entry
+        for i, syn_name in enumerate(synapse_names):
+            synapse_params.append(
+                {
+                    "name": syn_name,
+                    "synapse_id": synapse_id,
+                    "cell_id": cell_id,
+                    "tau_rise": float(tau_rise[i]),
+                    "tau_decay": float(tau_decay[i]),
+                    "reversal_potential": float(reversal_potential[i]),
+                    "g_bar": float(g_bar[i]),
+                }
+            )
+            synapse_id += 1
 
     # ========== OPTIMIZATION PARAMETERS ==========
     scaling_factors = np.array(params["optimisation"]["scaling_factors"], dtype=float)
@@ -243,49 +263,102 @@ def main(output_dir, params_file):
     # STEP 4: Initialize and Run LIF Network Simulation
     # =================================================
 
-    # TODO: Update model initialization once model accepts new synapse parameters
-    # Initialize LIF network model with corrected arguments
-    # model = ConductanceLIFNetwork(
-    #     weights=weights,
-    #     cell_types=cell_type_names,
-    #     cell_type_indices=cell_type_indices,
-    #     physiology_params=physiology_params,
-    #     synapse_params=synapse_params,
-    #     scaling_factors=scaling_factors,
-    #     surrgrad_scale=surrgrad_scale,
-    #     weights_FF=feedforward_weights,
-    #     cell_types_FF=input_cell_type_names,
-    #     cell_type_indices_FF=input_source_indices,
-    #     synapse_params_FF=synapse_params_FF,
-    #     scaling_factors_FF=scaling_factors_FF,
-    # )
+    # Initialize conductance-based LIF network model
+    model = ConductanceLIFNetwork(
+        weights=weights,
+        cell_type_indices=cell_type_indices,
+        cell_params=cell_params,
+        synapse_params=synapse_params,
+        scaling_factors=scaling_factors,
+        surrgrad_scale=surrgrad_scale,
+        weights_FF=feedforward_weights,
+        cell_type_indices_FF=input_source_indices,
+        cell_params_FF=cell_params_FF,
+        synapse_params_FF=synapse_params_FF,
+        scaling_factors_FF=scaling_factors_FF,
+    )
 
-    # # Move model to device for GPU acceleration
-    # model.to(device)
+    # Debug: Save model attributes and parameters to file
+    debug_file = output_dir / "model_debug_info.txt"
+    with open(debug_file, "w") as f:
+        f.write("=" * 80 + "\n")
+        f.write("MODEL ATTRIBUTES (dir output)\n")
+        f.write("=" * 80 + "\n\n")
+        for attr in dir(model):
+            if not attr.startswith("_"):
+                f.write(f"{attr}\n")
 
-    # # Run inference
-    # with torch.inference_mode():
-    #     output_spikes, output_voltages, output_g, output_g_FF = model.forward(
-    #         n_steps=n_steps,
-    #         dt=dt,
-    #         inputs=input_spikes,
-    #     )
+        f.write("\n" + "=" * 80 + "\n")
+        f.write("MODEL INSTANCE ATTRIBUTES\n")
+        f.write("=" * 80 + "\n\n")
+        for key, value in model.__dict__.items():
+            if not key.startswith("_"):
+                f.write(f"{key}: {type(value).__name__}\n")
+                if hasattr(value, "shape"):
+                    f.write(f"  shape: {value.shape}\n")
+                elif isinstance(value, (list, dict)):
+                    f.write(f"  length/size: {len(value)}\n")
+                    if isinstance(value, list) and len(value) > 0:
+                        f.write(f"  first item: {value[0]}\n")
+                    elif isinstance(value, dict) and len(value) > 0:
+                        f.write(f"  keys: {list(value.keys())[:5]}\n")
 
-    # # Move tensors to CPU for further processing and saving
-    # output_spikes = output_spikes.cpu()
-    # output_voltages = output_voltages.cpu()
-    # output_g = output_g.cpu()
-    # output_g_FF = output_g_FF.cpu()
+        f.write("\n" + "=" * 80 + "\n")
+        f.write("CELL PARAMETERS\n")
+        f.write("=" * 80 + "\n\n")
+        for i, cell in enumerate(cell_params):
+            f.write(f"Cell {i}: {cell}\n")
+
+        f.write("\n" + "=" * 80 + "\n")
+        f.write("SYNAPSE PARAMETERS\n")
+        f.write("=" * 80 + "\n\n")
+        for i, syn in enumerate(synapse_params):
+            f.write(f"Synapse {i}: {syn}\n")
+
+        if cell_params_FF:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FEEDFORWARD CELL PARAMETERS\n")
+            f.write("=" * 80 + "\n\n")
+            for i, cell in enumerate(cell_params_FF):
+                f.write(f"Cell {i}: {cell}\n")
+
+        if synapse_params_FF:
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("FEEDFORWARD SYNAPSE PARAMETERS\n")
+            f.write("=" * 80 + "\n\n")
+            for i, syn in enumerate(synapse_params_FF):
+                f.write(f"Synapse {i}: {syn}\n")
+
+    print(f"✓ Debug info saved to {debug_file}")
+
+    exit()
+
+    # Move model to device for GPU acceleration
+    model.to(device)
+
+    # Run inference
+    with torch.inference_mode():
+        output_spikes, output_voltages, output_g, output_g_FF = model.forward(
+            n_steps=n_steps,
+            dt=dt,
+            inputs=input_spikes,
+        )
+
+    # Move tensors to CPU for further processing and saving
+    output_spikes = output_spikes.cpu()
+    output_voltages = output_voltages.cpu()
+    output_g = output_g.cpu()
+    output_g_FF = output_g_FF.cpu()
 
     # ============================================
     # STEP 5: Save Output Data for Further Analysis
     # ============================================
 
-    # # Save output arrays
-    # np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
-    # np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
-    # np.save(output_dir / "output_g.npy", output_g.numpy())
-    # np.save(output_dir / "output_g_FF.npy", output_g_FF.numpy())
+    # Save output arrays
+    np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
+    np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
+    np.save(output_dir / "output_g.npy", output_g.numpy())
+    np.save(output_dir / "output_g_FF.npy", output_g_FF.numpy())
 
     # Save input data and network structure
     np.save(output_dir / "input_spikes.npy", input_spikes)
@@ -301,15 +374,15 @@ def main(output_dir, params_file):
         f"✓ Generated {num_neurons} neuron recurrent network with {num_assemblies} assemblies"
     )
     print(f"✓ Generated {input_num_neurons} feedforward inputs")
-    print(f"✓ Generated {n_steps} timesteps of input spikes")
-    print(f"✓ Saved network structure to {output_dir}")
-    print("\nNext step: Update model initialization to accept new synapse parameters")
+    print(
+        f"✓ Initialized model with {len(cell_params)} cell types and {len(synapse_params)} synapse types"
+    )
+    print(f"✓ Ran simulation for {n_steps} timesteps")
+    print(f"✓ Saved all outputs to {output_dir}")
 
     # =============================================
     # STEP 6: Generate All Plots and Visualizations
     # =============================================
 
-    # # Call the plotting script to generate all visualizations
-    # conductance_based_Dp_plots.main(output_dir)
-
-    print("✓ Skipping plotting until model simulation is complete")
+    # Call the plotting script to generate all visualizations
+    conductance_based_Dp_plots.main(output_dir)
