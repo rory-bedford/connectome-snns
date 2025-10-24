@@ -141,9 +141,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self.register_buffer("synapse_to_cell_id_FF", None)
 
         # Create neuron-indexed arrays from cell parameters
-        neuron_params = self._create_neuron_param_arrays(
-            cell_params, cell_type_indices, self.n_neurons
-        )
+        neuron_params = self._create_neuron_param_arrays(cell_params, cell_type_indices)
 
         # Register physiological parameters as neuron-indexed buffers
         for param_name, param_array in neuron_params.items():
