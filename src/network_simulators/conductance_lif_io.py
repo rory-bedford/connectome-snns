@@ -17,32 +17,47 @@ class ConductanceLIFNetwork_IO(nn.Module):
     def __init__(
         self,
         weights: FloatArray,
-        cell_types: list[str],
         cell_type_indices: IntArray,
-        physiology_params: dict[str, dict[str, float]],
+        cell_params: list[dict],
+        synapse_params: list[dict],
         scaling_factors: FloatArray,
         surrgrad_scale: float,
         weights_FF: FloatArray | None = None,
-        cell_types_FF: list[str] | None = None,
         cell_type_indices_FF: IntArray | None = None,
-        physiology_params_FF: dict[str, dict[str, float]] | None = None,
+        cell_params_FF: list[dict] | None = None,
+        synapse_params_FF: list[dict] | None = None,
         scaling_factors_FF: FloatArray | None = None,
     ):
         """
-        Initialize the LIF network with explicit parameters.
+        Initialize the conductance-based LIF network with explicit parameters.
 
         Args:
             weights (FloatArray): Recurrent weight matrix of shape (n_neurons, n_neurons).
-            cell_types (list[str]): List of cell type names (e.g., ["excitatory", "inhibitory"]).
             cell_type_indices (IntArray): Array of shape (n_neurons,) with cell type indices (0, 1, 2, ...).
-            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
-            scaling_factors (FloatArray): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling.
-            surrgrad_scale (float): Scale parameter for surrogate gradient function.
+            cell_params (list[dict]): List of cell type parameter dicts. Each dict contains:
+                - 'name' (str): Cell type name (e.g., 'excitatory', 'inhibitory')
+                - 'cell_id' (int): Cell type ID (0, 1, 2, ...)
+                - 'tau_mem' (float): Membrane time constant (ms)
+                - 'theta' (float): Spike threshold voltage (mV)
+                - 'U_reset' (float): Reset potential after spike (mV)
+                - 'E_L' (float): Leak reversal potential (mV)
+                - 'g_L' (float): Leak conductance (nS)
+                - 'tau_ref' (float): Refractory period (ms)
+            synapse_params (list[dict]): List of synapse parameter dicts. Each dict contains:
+                - 'name' (str): Synapse type name (e.g., 'AMPA', 'NMDA', 'GABA_A')
+                - 'synapse_id' (int): Unique synapse type ID (0, 1, 2, ...)
+                - 'cell_id' (int): Presynaptic cell type ID this synapse belongs to
+                - 'tau_rise' (float): Synaptic rise time constant (ms)
+                - 'tau_decay' (float): Synaptic decay time constant (ms)
+                - 'reversal_potential' (float): Synaptic reversal potential (mV)
+                - 'g_bar' (float): Maximum synaptic conductance (nS)
+            scaling_factors (FloatArray): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling (voxel^-1).
+            surrgrad_scale (float): Scale parameter for surrogate gradient fast sigmoid function.
             weights_FF (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
-            cell_types_FF (list[str] | None): List of feedforward cell type names.
             cell_type_indices_FF (IntArray | None): Array of feedforward cell type indices.
-            physiology_params_FF (dict[str, dict[str, float]] | None): Nested dict for feedforward input cell types.
-            scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling.
+            cell_params_FF (list[dict] | None): List of feedforward cell type parameter dicts (same structure as cell_params).
+            synapse_params_FF (list[dict] | None): List of feedforward synapse parameter dicts (same structure as synapse_params).
+            scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling (voxel^-1).
         """
         super(ConductanceLIFNetwork_IO, self).__init__()
 
@@ -52,19 +67,28 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
         # Extract key dimensions for validation
         n_neurons = weights.shape[0] if weights.ndim == 2 else 0
-        n_cell_types = len(cell_types)
         n_inputs = (
             weights_FF.shape[0]
             if weights_FF is not None and weights_FF.ndim == 2
             else 0
         )
-        n_cell_types_FF = len(cell_types_FF) if cell_types_FF is not None else 0
 
-        # Basic type and shape validation
-        assert isinstance(cell_types, list), "cell_types must be a list"
-        assert len(cell_types) > 0, "cell_types must not be empty"
-        assert all(isinstance(ct, str) for ct in cell_types), (
-            "All cell_types must be strings"
+        # Validate cell_params structure
+        assert isinstance(cell_params, list), "cell_params must be a list"
+        assert len(cell_params) > 0, "cell_params must not be empty"
+        assert all(isinstance(p, dict) for p in cell_params), (
+            "All cell_params entries must be dicts"
+        )
+
+        # Extract n_cell_types from cell_params by finding max cell_id
+        cell_ids = [params["cell_id"] for params in cell_params]
+        n_cell_types = max(cell_ids) + 1
+
+        # Validate synapse_params structure
+        assert isinstance(synapse_params, list), "synapse_params must be a list"
+        assert len(synapse_params) > 0, "synapse_params must not be empty"
+        assert all(isinstance(p, dict) for p in synapse_params), (
+            "All synapse_params entries must be dicts"
         )
 
         # Recurrent weights validation
@@ -93,34 +117,21 @@ class ConductanceLIFNetwork_IO(nn.Module):
         )
         assert np.all(scaling_factors > 0), "All scaling factors must be positive"
 
-        # Physiology parameters validation
-        assert isinstance(physiology_params, dict), (
-            "physiology_params must be a dictionary"
-        )
-        for cell_type in cell_types:
-            assert cell_type in physiology_params, (
-                f"Missing physiology parameters for cell type '{cell_type}'"
-            )
-            assert isinstance(physiology_params[cell_type], dict), (
-                f"Physiology parameters for '{cell_type}' must be a dictionary"
-            )
-
         # Feedforward weights validation (all-or-nothing)
         ff_args = [
             weights_FF,
-            cell_types_FF,
             cell_type_indices_FF,
+            cell_params_FF,
+            synapse_params_FF,
             scaling_factors_FF,
-            physiology_params_FF,
         ]
         ff_provided = [arg is not None for arg in ff_args]
         if any(ff_provided):
             assert all(ff_provided), (
                 "If any feedforward argument is provided, all of "
-                "weights_FF, cell_types_FF, cell_type_indices_FF, scaling_factors_FF, and physiology_params_FF must be provided."
+                "weights_FF, cell_type_indices_FF, cell_params_FF, synapse_params_FF, and scaling_factors_FF must be provided."
             )
             assert weights_FF.ndim == 2, "Feedforward weights must be 2D matrix"
-            # Updated asserts to use n_inputs and n_cell_types_FF for readability
             assert weights_FF.shape[1] == n_neurons, (
                 f"Feedforward weights output dimension ({weights_FF.shape[1]}) must match number of neurons ({n_neurons})"
             )
@@ -130,13 +141,27 @@ class ConductanceLIFNetwork_IO(nn.Module):
             assert cell_type_indices_FF.shape[0] == n_inputs, (
                 f"Feedforward cell type indices length ({cell_type_indices_FF.shape[0]}) must match number of inputs ({n_inputs})"
             )
-            assert isinstance(cell_types_FF, list), "cell_types_FF must be a list"
-            assert len(cell_types_FF) > 0, (
-                "cell_types_FF must not be empty when provided"
+
+            # Validate feedforward cell_params structure
+            assert isinstance(cell_params_FF, list), "cell_params_FF must be a list"
+            assert len(cell_params_FF) > 0, "cell_params_FF must not be empty"
+            assert all(isinstance(p, dict) for p in cell_params_FF), (
+                "All cell_params_FF entries must be dicts"
             )
-            assert all(isinstance(ct, str) for ct in cell_types_FF), (
-                "All cell_types_FF must be strings"
+
+            # Extract n_cell_types_FF from cell_params_FF
+            cell_ids_FF = [params["cell_id"] for params in cell_params_FF]
+            n_cell_types_FF = max(cell_ids_FF) + 1
+
+            # Validate feedforward synapse_params structure
+            assert isinstance(synapse_params_FF, list), (
+                "synapse_params_FF must be a list"
             )
+            assert len(synapse_params_FF) > 0, "synapse_params_FF must not be empty"
+            assert all(isinstance(p, dict) for p in synapse_params_FF), (
+                "All synapse_params_FF entries must be dicts"
+            )
+
             assert scaling_factors_FF.ndim == 2, (
                 "Feedforward scaling factors must be 2D matrix"
             )
@@ -146,18 +171,6 @@ class ConductanceLIFNetwork_IO(nn.Module):
             assert np.all(scaling_factors_FF > 0), (
                 "All feedforward scaling factors must be positive"
             )
-
-            # Physiology parameters validation (feedforward)
-            assert isinstance(physiology_params_FF, dict), (
-                "physiology_params_FF must be a dictionary"
-            )
-            for cell_type in cell_types_FF:
-                assert cell_type in physiology_params_FF, (
-                    f"Missing physiology parameters for feedforward cell type '{cell_type}'"
-                )
-                assert isinstance(physiology_params_FF[cell_type], dict), (
-                    f"Physiology parameters for feedforward cell type '{cell_type}' must be a dictionary"
-                )
 
         # Hyperparameter validation
         assert isinstance(surrgrad_scale, (int, float)), (
@@ -171,11 +184,20 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
         self.n_neurons = n_neurons
         self.n_inputs = n_inputs
-        self.cell_types = cell_types
-        if cell_types_FF is not None:
-            self.cell_types_FF = cell_types_FF
+        self.n_cell_types = n_cell_types
+
+        # Store cell and synapse parameter dictionaries
+        self.cell_params = cell_params
+        self.synapse_params = synapse_params
+
+        if cell_params_FF is not None:
+            self.cell_params_FF = cell_params_FF
+            self.synapse_params_FF = synapse_params_FF
+            self.n_cell_types_FF = n_cell_types_FF
         else:
-            self.cell_types_FF = None
+            self.cell_params_FF = None
+            self.synapse_params_FF = None
+            self.n_cell_types_FF = None
 
         # Register weights and cell type indices for recurrent connections
         self.register_buffer("weights", torch.from_numpy(weights).float())
@@ -192,30 +214,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self.register_buffer("weights_FF", None)
             self.register_buffer("cell_type_indices_FF", None)
 
-        # Create neuron-indexed arrays for physiological parameters
-        neuron_params = self._create_neuron_param_arrays(
-            physiology_params, cell_types, cell_type_indices, n_neurons
-        )
-
-        # Create synapse parameter arrays for tau_syn and tau_syn_FF
-        synapse_params = self._create_synapse_param_arrays(
-            physiology_params,
-            cell_types,
-            cell_type_indices,
-            n_neurons,
-            physiology_params_FF,
-            cell_types_FF,
-            cell_type_indices_FF,
-            n_inputs,
-        )
-
-        # Register physiological parameters as neuron-indexed arrays
-        for param_name, param_array in neuron_params.items():
-            self.register_buffer(param_name, param_array)
-
-        # Register synapse parameters (tau_syn and tau_syn_FF)
-        for param_name, param_array in synapse_params.items():
-            self.register_buffer(param_name, param_array)
+        # TODO: Create neuron-indexed arrays and synapse arrays from the parameter dictionaries
+        # This will be implemented in the next step
 
         # ===========================================================
         # OPTIMIZABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
@@ -257,7 +257,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         Returns:
             dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_neurons,).
         """
-        # Required physiological parameters for LIF neurons (excluding tau_syn):
+        # Required physiological parameters for LIF neurons):
         required_param_names = [
             "tau_mem",  # Membrane time constant
             "R",  # Membrane resistance
@@ -393,7 +393,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 (n_cell_types, n_neurons, n_neurons).
         """
         # Initialize a zero tensor for tiered weights
-        n_tiers = len(self.cell_types)
+        n_tiers = self.n_cell_types
         tiered_weights = torch.zeros(
             (n_tiers, self.n_neurons, self.n_neurons),
             dtype=self.weights.dtype,
@@ -428,7 +428,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             )
 
         # Initialize a zero tensor for tiered weights
-        n_tiers = len(self.cell_types_FF)
+        n_tiers = self.n_cell_types_FF
         tiered_weights_FF = torch.zeros(
             (n_tiers, self.n_inputs, self.n_neurons),
             dtype=self.weights_FF.dtype,
