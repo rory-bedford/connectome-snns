@@ -277,61 +277,6 @@ def main(output_dir, params_file):
         scaling_factors_FF=scaling_factors_FF,
     )
 
-    # Debug: Save model attributes and parameters to file
-    debug_file = output_dir / "model_debug_info.txt"
-    with open(debug_file, "w") as f:
-        f.write("=" * 80 + "\n")
-        f.write("MODEL ATTRIBUTES (dir output)\n")
-        f.write("=" * 80 + "\n\n")
-        for attr in dir(model):
-            if not attr.startswith("_"):
-                f.write(f"{attr}\n")
-
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("MODEL INSTANCE ATTRIBUTES\n")
-        f.write("=" * 80 + "\n\n")
-        for key, value in model.__dict__.items():
-            if not key.startswith("_"):
-                f.write(f"{key}: {type(value).__name__}\n")
-                if hasattr(value, "shape"):
-                    f.write(f"  shape: {value.shape}\n")
-                elif isinstance(value, (list, dict)):
-                    f.write(f"  length/size: {len(value)}\n")
-                    if isinstance(value, list) and len(value) > 0:
-                        f.write(f"  first item: {value[0]}\n")
-                    elif isinstance(value, dict) and len(value) > 0:
-                        f.write(f"  keys: {list(value.keys())[:5]}\n")
-
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("CELL PARAMETERS\n")
-        f.write("=" * 80 + "\n\n")
-        for i, cell in enumerate(cell_params):
-            f.write(f"Cell {i}: {cell}\n")
-
-        f.write("\n" + "=" * 80 + "\n")
-        f.write("SYNAPSE PARAMETERS\n")
-        f.write("=" * 80 + "\n\n")
-        for i, syn in enumerate(synapse_params):
-            f.write(f"Synapse {i}: {syn}\n")
-
-        if cell_params_FF:
-            f.write("\n" + "=" * 80 + "\n")
-            f.write("FEEDFORWARD CELL PARAMETERS\n")
-            f.write("=" * 80 + "\n\n")
-            for i, cell in enumerate(cell_params_FF):
-                f.write(f"Cell {i}: {cell}\n")
-
-        if synapse_params_FF:
-            f.write("\n" + "=" * 80 + "\n")
-            f.write("FEEDFORWARD SYNAPSE PARAMETERS\n")
-            f.write("=" * 80 + "\n\n")
-            for i, syn in enumerate(synapse_params_FF):
-                f.write(f"Synapse {i}: {syn}\n")
-
-    print(f"✓ Debug info saved to {debug_file}")
-
-    exit()
-
     # Move model to device for GPU acceleration
     model.to(device)
 

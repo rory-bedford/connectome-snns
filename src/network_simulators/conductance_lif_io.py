@@ -83,14 +83,19 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # FIXED PARAMETERS (NON-TRAINABLE - STORED IN BUFFERS)
         # ====================================================
 
-        n_cell_types = len(cell_params)
-        n_synapse_types = len(synapse_params)
-        n_cell_types_FF = len(cell_params_FF) if cell_params_FF is not None else None
+        self.n_cell_types = len(cell_params)
+        self.n_synapse_types = len(synapse_params)
+        self.n_cell_types_FF = (
+            len(cell_params_FF) if cell_params_FF is not None else None
+        )
+        self.n_synapse_types_FF = (
+            len(synapse_params_FF) if synapse_params_FF is not None else None
+        )
 
         self.n_neurons = weights.shape[0]
         self.n_inputs = weights_FF.shape[0] if weights_FF is not None else 0
-        self.n_cell_types = n_cell_types
-        self.n_synapse_types = n_synapse_types
+        self.n_cell_types = self.n_cell_types
+        self.n_synapse_types = self.n_synapse_types
 
         # Store cell and synapse parameter dictionaries
         self.cell_params = cell_params
@@ -99,7 +104,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         if cell_params_FF is not None:
             self.cell_params_FF = cell_params_FF
             self.synapse_params_FF = synapse_params_FF
-            self.n_cell_types_FF = n_cell_types_FF
+            self.n_cell_types_FF = self.n_cell_types_FF
             self.n_synapse_types_FF = len(synapse_params_FF)
         else:
             self.cell_params_FF = None
@@ -112,7 +117,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self.register_buffer("cell_type_indices", torch.from_numpy(cell_type_indices))
 
         # Create and register mapping from synapse_id to cell_id
-        synapse_to_cell_mapping = np.zeros(n_synapse_types, dtype=np.int64)
+        synapse_to_cell_mapping = np.zeros(self.n_synapse_types, dtype=np.int64)
         for synapse in synapse_params:
             synapse_to_cell_mapping[synapse["synapse_id"]] = synapse["cell_id"]
         self.register_buffer(
