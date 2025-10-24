@@ -291,6 +291,7 @@ def main(output_dir, params_file):
     np.save(output_dir / "input_spikes.npy", input_spikes)
     np.save(output_dir / "neuron_types.npy", neuron_types)
     np.save(output_dir / "cell_type_indices.npy", cell_type_indices)
+    np.save(output_dir / "input_cell_type_indices.npy", input_source_indices)
     np.save(output_dir / "connectivity_graph.npy", connectivity_graph)
     np.save(output_dir / "weights.npy", weights)
     np.save(output_dir / "feedforward_weights.npy", feedforward_weights)

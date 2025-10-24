@@ -22,11 +22,14 @@ import sys
 from visualization import plot_membrane_voltages, plot_synaptic_currents
 
 
-def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
+def plot_assembly_graph(
+    connectivity_graph, cell_type_indices, num_assemblies, save_path
+):
     """Plot the assembly graph structure.
 
     Args:
         connectivity_graph (np.ndarray): Binary connectivity matrix
+        cell_type_indices (np.ndarray): Cell type indices (0=excitatory, 1=inhibitory)
         num_assemblies (int): Number of assemblies in the network
         save_path (Path): Path to save the plot
     """
@@ -35,6 +38,10 @@ def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
     neurons_per_assembly = num_neurons // num_assemblies
     plot_size_neurons = neurons_per_assembly * plot_num_assemblies
 
+    # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
+    cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
+    signed_connectivity = connectivity_graph * cell_type_signs[:, np.newaxis]
+
     # Fixed size in inches for the heatmap
     heatmap_inches = 8  # Bigger fixed size
     fig, ax = plt.subplots(
@@ -42,7 +49,7 @@ def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
     )  # Extra width for colorbar
 
     im = ax.imshow(
-        connectivity_graph[:plot_size_neurons, :plot_size_neurons],
+        signed_connectivity[:plot_size_neurons, :plot_size_neurons],
         cmap="bwr",
         vmin=-1,
         vmax=1,
@@ -67,11 +74,12 @@ def plot_assembly_graph(connectivity_graph, num_assemblies, save_path):
     plt.close()
 
 
-def plot_weighted_connectivity(weights, num_assemblies, save_path):
+def plot_weighted_connectivity(weights, cell_type_indices, num_assemblies, save_path):
     """Plot the weighted connectivity matrix.
 
     Args:
         weights (np.ndarray): Weighted connectivity matrix
+        cell_type_indices (np.ndarray): Cell type indices (0=excitatory, 1=inhibitory)
         num_assemblies (int): Number of assemblies in the network
         save_path (Path): Path to save the plot
     """
@@ -80,6 +88,10 @@ def plot_weighted_connectivity(weights, num_assemblies, save_path):
     neurons_per_assembly = num_neurons // num_assemblies
     plot_size_neurons = neurons_per_assembly * plot_num_assemblies
 
+    # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
+    cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
+    signed_weights = weights * cell_type_signs[:, np.newaxis]
+
     # Fixed size in inches for the heatmap (same as unweighted)
     heatmap_inches = 8  # Bigger fixed size
     fig, ax = plt.subplots(
@@ -87,7 +99,7 @@ def plot_weighted_connectivity(weights, num_assemblies, save_path):
     )  # Extra width for colorbar
 
     im = ax.imshow(
-        weights[:plot_size_neurons, :plot_size_neurons],
+        signed_weights[:plot_size_neurons, :plot_size_neurons],
         cmap="bwr",
         vmin=-10,
         vmax=10,
@@ -112,14 +124,19 @@ def plot_weighted_connectivity(weights, num_assemblies, save_path):
     plt.close()
 
 
-def plot_synaptic_input_histogram(weights, save_path):
+def plot_synaptic_input_histogram(weights, cell_type_indices, save_path):
     """Plot histogram of total synaptic input to each neuron.
 
     Args:
         weights (np.ndarray): Weighted connectivity matrix
+        cell_type_indices (np.ndarray): Cell type indices (0=excitatory, 1=inhibitory)
         save_path (Path): Path to save the plot
     """
-    synaptic_inputs = weights.sum(axis=0)
+    # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
+    cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
+    signed_weights = weights * cell_type_signs[:, np.newaxis]
+
+    synaptic_inputs = signed_weights.sum(axis=0)
     mean_input = synaptic_inputs.mean()
 
     fig, ax = plt.subplots()
@@ -167,11 +184,14 @@ def plot_mitral_cell_spikes(input_spikes, dt, duration, save_path):
     plt.close()
 
 
-def plot_feedforward_connectivity(feedforward_weights, save_path):
+def plot_feedforward_connectivity(
+    feedforward_weights, input_cell_type_indices, save_path
+):
     """Plot feedforward connectivity matrix.
 
     Args:
         feedforward_weights (np.ndarray): Feedforward connectivity weights
+        input_cell_type_indices (np.ndarray): Input cell type indices (0=excitatory, 1=inhibitory)
         save_path (Path): Path to save the plot
     """
     plot_fraction = 0.1  # Fraction of neurons to display
@@ -179,13 +199,19 @@ def plot_feedforward_connectivity(feedforward_weights, save_path):
     n_input_plot = int(n_input * plot_fraction)
     n_output_plot = int(n_output * plot_fraction)
 
+    # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
+    input_cell_type_signs = np.where(input_cell_type_indices == 0, 1, -1)
+    signed_feedforward_weights = (
+        feedforward_weights * input_cell_type_signs[:, np.newaxis]
+    )
+
     # Make plot bigger - use fixed large size
     plot_width = 14
     plot_height = plot_width * n_input_plot / n_output_plot
 
     fig, ax = plt.subplots(figsize=(plot_width, plot_height))
     im = ax.imshow(
-        feedforward_weights[:n_input_plot, :n_output_plot],
+        signed_feedforward_weights[:n_input_plot, :n_output_plot],
         cmap="bwr",
         vmin=-2,
         vmax=2,
@@ -318,13 +344,14 @@ def main(output_dir_path):
     output_voltages = np.load(output_dir / "output_voltages.npy")
     output_g = np.load(output_dir / "output_g.npy")  # Concatenated conductances
     neuron_types = np.load(output_dir / "neuron_types.npy")
+    cell_type_indices = np.load(output_dir / "cell_type_indices.npy")
 
-    # Try to load cell type indices if available (for newer saves)
+    # Load input cell type indices if available (for feedforward plots)
     try:
-        cell_type_indices = np.load(output_dir / "cell_type_indices.npy")
+        input_cell_type_indices = np.load(output_dir / "input_cell_type_indices.npy")
     except FileNotFoundError:
-        # Fall back to deriving from neuron_types and parameters
-        cell_type_indices = None
+        # Assume all inputs are excitatory (type 0) if not found
+        input_cell_type_indices = np.zeros(input_spikes.shape[2], dtype=int)
 
     # Load parameters from the TOML file in the output directory
     params_file = output_dir / "parameters.toml"
@@ -365,13 +392,19 @@ def main(output_dir_path):
 
     # Network structure plots
     plot_assembly_graph(
-        connectivity_graph, num_assemblies, output_dir / "01_assembly_graph.png"
+        connectivity_graph,
+        cell_type_indices,
+        num_assemblies,
+        output_dir / "01_assembly_graph.png",
     )
     plot_weighted_connectivity(
-        weights, num_assemblies, output_dir / "02_weighted_connectivity.png"
+        weights,
+        cell_type_indices,
+        num_assemblies,
+        output_dir / "02_weighted_connectivity.png",
     )
     plot_synaptic_input_histogram(
-        weights, output_dir / "03_synaptic_input_histogram.png"
+        weights, cell_type_indices, output_dir / "03_synaptic_input_histogram.png"
     )
 
     # Input analysis plots
@@ -379,7 +412,9 @@ def main(output_dir_path):
         input_spikes, delta_t, duration, output_dir / "04_mitral_cell_spikes.png"
     )
     plot_feedforward_connectivity(
-        feedforward_weights, output_dir / "05_feedforward_connectivity.png"
+        feedforward_weights,
+        input_cell_type_indices,
+        output_dir / "05_feedforward_connectivity.png",
     )
 
     # Output analysis plots
@@ -394,9 +429,7 @@ def main(output_dir_path):
     )
 
     # Use cell_type_indices if available, otherwise fall back to neuron_types
-    neuron_type_indices = (
-        cell_type_indices if cell_type_indices is not None else neuron_types
-    )
+    neuron_type_indices = cell_type_indices.astype(int)  # Ensure indices are integers
 
     # Detailed neuronal dynamics plots using updated visualization functions
     plot_membrane_voltages(
