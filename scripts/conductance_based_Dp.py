@@ -36,9 +36,9 @@ def main(output_dir, params_file):
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
     """
-    # ============================================
+    # =============================================
     # SETUP: Device selection and parameter loading
-    # ==========================================
+    # =============================================
 
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
