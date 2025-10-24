@@ -1,4 +1,4 @@
-# Parameters for our conductance-based LIF network simulating zebrafish Dp
+# Parameters for use with our current-based LIF network simulating zebrafish Dp
 # Adapted from Meissner-Bernard et al. (2025)
 
 # ========================
@@ -6,26 +6,25 @@
 # ========================
 
 [simulation]
-dt = 0.1                               # ms - Time resolution of the simulation
+dt = 1.0                               # ms - Time resolution of the simulation
 duration = 10000.0                     # ms - Total simulation duration
 seed = 42                              # Random seed for reproducibility
 
-# =========================
-# INPUT LAYER CONFIGURATION
-# =========================
+# ==========================
+# FEEDFORWARD LAYER TOPOLOGY
+# ==========================
 
-[inputs.cell_types]
+[feedforward.cell_types]
 names = ['mitral']                     # Cell type names
-signs = [1]                            # Sign convention (1=excitatory, -1=inhibitory)
 proportion = [1]                       # Relative proportions of each cell type
 
-[inputs.topology]
+[feedforward.topology]
 num_neurons = 1500                     # Total number of input neurons
 conn_inputs = [                        # Connection probabilities to connectome layers
     [0.02, 0.0],
 ]
 
-[inputs.weights]
+[feedforward.weights]
 w_mu = [                               # Log-space mean for input synapse strengths (log-normal)
     [1.0, 0.0],
 ]
@@ -33,22 +32,29 @@ w_sigma = [                            # Log-space std dev for input synapse str
     [0.2, 0.0],
 ]
 
-[inputs.activity]
-firing_rates = [6.0]                   # Hz - Firing rates of input cells (Poisson process)
+# =======================================
+# FEEDFORWARD LAYER ACTIVITY AND SYNAPSES
+# =======================================
 
-[inputs.physiology.mitral]
-tau_syn = 30.0                         # ms - Synaptic time constant
+[feedforward.activity.mitral]
+firing_rate = 6.0                      # Hz - Firing rate of mitral cells (Poisson process)
 
-# =============================
-# RECURRENT LAYER CONFIGURATION  
-# =============================
+[feedforward.synapses.mitral]
+names = ['AMPA', 'NMDA']
+tau_rise = [0.1, 10]                   # ms - Synaptic rise time constants
+tau_decay = [5, 70]                    # ms - Synaptic decay time constants
+reversal_potential = [0.0, 0.0]        # mV - Synaptic reversal potentials
+g_bar = [0.5, 0.1]                     # nS - Maximum synaptic conductances
 
-[connectome.cell_types]
+# ========================
+# RECURRENT LAYER TOPOLOGY 
+# ========================
+
+[recurrent.cell_types]
 names = ['excitatory', 'inhibitory']   # Cell type names
-signs = [1, -1]                        # Sign convention (1=excitatory, -1=inhibitory)
 proportion = [0.8, 0.2]                # Relative proportions of each cell type
 
-[connectome.topology]
+[recurrent.topology]
 num_neurons = 5000                     # Total number of neurons in the network
 num_assemblies = 20                    # Number of assemblies in the network
 
@@ -62,47 +68,61 @@ conn_between = [                       # Connection probabilities between assemb
     [0.01, 0.01],
 ]
 
-[connectome.weights]
-w_mu = [                               # Log-space mean for synapse strengths (log-normal)
-    [1.0, 1.2],
-    [2.4, 1.6],
+[recurrent.weights]
+w_mu = [                               # Mean synapse strengths
+    [1.0, 1.0],
+    [1.0, 1.0],
 ]
-w_sigma = [                            # Log-space std dev for synapse strengths (log-normal)
+w_sigma = [                            # Standard-deviation synapse strengths
     [0.8, 0.8],
     [0.2, 0.2],
 ]
 
-# ==============================
-# NEURONAL PHYSIOLOGY PARAMETERS
-# ==============================
+# =======================================
+# RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
+# =======================================
 
-[physiology.excitatory]
+[recurrent.physiology.excitatory]
 tau_mem = 85.0                         # ms - Membrane time constant
-tau_syn = 30.0                         # ms - Synaptic time constant
-R = 740.74                             # MOhm - Membrane resistance
-U_rest = -60.0                         # mV - Resting membrane potential
 theta = -38.0                          # mV - Spike threshold voltage
-U_reset = -60.0                        # mV - Reset voltage after spike
+U_reset = -60.0                        # mV - Reset potential after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 1.35                             # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
 
-[physiology.inhibitory]
+[recurrent.synapses.excitatory]
+names = ['AMPA', 'NMDA']
+tau_rise = [0.1, 10]                   # ms - Synaptic rise time constants
+tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
+reversal_potential = [0.0, 0.0]        # mV - Synaptic reversal potentials
+g_bar = [0.5, 0.1]                     # nS - Maximum synaptic conductances
+
+[recurrent.physiology.inhibitory]
 tau_mem = 50.0                         # ms - Membrane time constant
-tau_syn = 10.0                         # ms - Synaptic time constant
-R = 1111.11                            # MOhm - Membrane resistance
-U_rest = -60.0                         # mV - Resting membrane potential
 theta = -45.0                          # mV - Spike threshold voltage
 U_reset = -60.0                        # mV - Reset voltage after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 0.9                              # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.inhibitory]
+names = ['GABA_A']
+tau_rise = [1.0]                       # ms - Synaptic rise time constants
+tau_decay = [6.0]                      # ms - Synaptic decay time constants
+reversal_potential = [-70.0]           # mV - Synaptic reversal potentials
+g_bar = [2.0]                          # nS - Maximum synaptic conductances
 
 # ================================
 # OPTIMIZATION AND HYPERPARAMETERS
 # ================================
 
 [optimisation]
-scaling_factors = [                    # pA/voxel - Recurrent scaling factors to be optimised
-    [0.003, 0.003],
-    [0.004, 0.004],
+scaling_factors = [                    # voxel^-1 - Recurrent scaling factors mapping voxels to weights
+    [1.0, 1.0],
+    [1.0, 1.0],
 ]
-scaling_factors_FF = [                 # pA/voxel - Feedforward scaling factors to be optimised
-    [0.004, 0.004],
+scaling_factors_FF = [                 # voxel^-1 - Feedforward scaling factors mapping voxels to weights
+    [1.0, 1.0],
 ]
 
 [hyperparameters]

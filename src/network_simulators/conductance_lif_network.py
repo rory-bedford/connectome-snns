@@ -1,18 +1,19 @@
 """Defines a straightforward simulator of recurrent current-based LIF network"""
+# ruff: noqa
 
 import numpy as np
 import torch
 from numpy.typing import NDArray
 from tqdm import tqdm
-from network_simulators.current_lif_io import CurrentLIFNetwork_IO
+from network_simulators.conductance_lif_io import ConductanceLIFNetwork_IO
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
 FloatArray = NDArray[np.float64]
 
 
-class CurrentLIFNetwork(CurrentLIFNetwork_IO):
-    """Current-based LIF network simulator with connectome-constrained weights."""
+class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
+    """Conductance-based LIF network simulator with connectome-constrained weights."""
 
     def forward(
         self,
@@ -20,8 +21,8 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         dt: float,
         inputs: FloatArray | None = None,
         initial_v: FloatArray | None = None,
-        initial_I: FloatArray | None = None,
-        initial_I_FF: FloatArray | None = None,
+        initial_g: FloatArray | None = None,
+        initial_g_FF: FloatArray | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate the network for a given number of time steps.
@@ -31,14 +32,14 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             dt (float): Time step duration in milliseconds.
             inputs (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batch_size, n_neurons). Defaults to resting potentials.
-            initial_I (FloatArray | None): Initial synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types). Defaults to zeros.
-            initial_I_FF (FloatArray | None): Initial feedforward synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types_FF). Defaults to zeros.
+            initial_g (FloatArray | None): Initial synaptic conductances of shape (batch_size, n_steps, n_neurons, n_cell_types). Defaults to zeros.
+            initial_g_FF (FloatArray | None): Initial feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, n_cell_types_FF). Defaults to zeros.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
                 - all_s: Spike trains of shape (batch_size, n_steps, n_neurons)
                 - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
-                - all_I: Synaptic currents of shape (batch_size, n_steps, n_neurons, n_cell_types)
+                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, n_cell_types)
         """
 
         # Determine batch size
@@ -57,40 +58,40 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
                 "inputs must match the number of feedforward inputs."
             )
 
-        # Validate initial currents if provided
-        if initial_I is not None:
-            assert initial_I.ndim == 4, (
-                "initial_I must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types)."
+        # Validate initial conductances if provided
+        if initial_g is not None:
+            assert initial_g.ndim == 4, (
+                "initial_g must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types)."
             )
-            assert initial_I.shape[0] == batch_size, (
-                "initial_I batch size must match batch_size."
+            assert initial_g.shape[0] == batch_size, (
+                "initial_g batch size must match batch_size."
             )
-            assert initial_I.shape[1] == n_steps, (
-                "initial_I must have n_steps time steps."
+            assert initial_g.shape[1] == n_steps, (
+                "initial_g must have n_steps time steps."
             )
-            assert initial_I.shape[2] == self.n_neurons, (
-                "initial_I must match n_neurons."
+            assert initial_g.shape[2] == self.n_neurons, (
+                "initial_g must match n_neurons."
             )
-            assert initial_I.shape[3] == len(self.cell_types_FF), (
-                "initial_I must match the number of cell types."
+            assert initial_g.shape[3] == len(self.cell_types_FF), (
+                "initial_g must match the number of cell types."
             )
 
-        # Validate initial feedforward currents if provided
-        if initial_I_FF is not None:
-            assert initial_I_FF.ndim == 4, (
-                "initial_I_FF must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types_FF)."
+        # Validate initial feedforward conductances if provided
+        if initial_g_FF is not None:
+            assert initial_g_FF.ndim == 4, (
+                "initial_g_FF must have 4 dimensions (batch_size, n_steps, n_neurons, n_cell_types_FF)."
             )
-            assert initial_I_FF.shape[0] == batch_size, (
-                "initial_I_FF batch size must match batch_size."
+            assert initial_g_FF.shape[0] == batch_size, (
+                "initial_g_FF batch size must match batch_size."
             )
-            assert initial_I_FF.shape[1] == n_steps, (
-                "initial_I_FF must have n_steps time steps."
+            assert initial_g_FF.shape[1] == n_steps, (
+                "initial_g_FF must have n_steps time steps."
             )
-            assert initial_I_FF.shape[2] == self.n_neurons, (
-                "initial_I_FF must match n_neurons."
+            assert initial_g_FF.shape[2] == self.n_neurons, (
+                "initial_g_FF must match n_neurons."
             )
-            assert initial_I_FF.shape[3] == len(self.cell_types_FF), (
-                "initial_I_FF must match the number of feedforward cell types."
+            assert initial_g_FF.shape[3] == len(self.cell_types_FF), (
+                "initial_g_FF must match the number of feedforward cell types."
             )
 
         # Validate initial membrane potentials if provided
@@ -118,21 +119,21 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             v = self.U_rest.clone().detach()
             v = v.repeat(batch_size, 1)
 
-        # Handle initial synaptic currents
-        if initial_I is not None:
-            I = torch.as_tensor(initial_I, dtype=torch.float32, device=self.device)
+        # Handle initial synaptic conductances
+        if initial_g is not None:
+            g = torch.as_tensor(initial_g, dtype=torch.float32, device=self.device)
         else:
-            I = torch.zeros(
+            g = torch.zeros(
                 (batch_size, self.n_neurons, len(self.cell_types)),
                 dtype=torch.float32,
                 device=self.device,
             )
-        if initial_I_FF is not None:
-            I_FF = torch.as_tensor(
-                initial_I_FF, dtype=torch.float32, device=self.device
+        if initial_g_FF is not None:
+            g_FF = torch.as_tensor(
+                initial_g_FF, dtype=torch.float32, device=self.device
             )
         else:
-            I_FF = torch.zeros(
+            g_FF = torch.zeros(
                 (batch_size, self.n_neurons, len(self.cell_types_FF)),
                 dtype=torch.float32,
                 device=self.device,
@@ -144,12 +145,12 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             dtype=torch.float32,
             device=self.device,
         )
-        all_I = torch.zeros(
+        all_g = torch.zeros(
             (batch_size, n_steps, self.n_neurons, len(self.cell_types)),
             dtype=torch.float32,
             device=self.device,
         )
-        all_I_FF = torch.zeros(
+        all_g_FF = torch.zeros(
             (batch_size, n_steps, self.n_neurons, len(self.cell_types_FF)),
             dtype=torch.float32,
             device=self.device,
@@ -169,16 +170,16 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
         # Run simulation
         for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
-            # Compute total current at each neuron
-            I_total = I.sum(dim=-1)  # Shape (batch_size, n_neurons)
+            # Compute total conductance at each neuron
+            g_total = g.sum(dim=-1)  # Shape (batch_size, n_neurons)
             if inputs is not None:
-                I_total += I_FF.sum(dim=-1)
+                g_total += g_FF.sum(dim=-1)
 
             # Update membrane potentials (without reset)
             v = (
                 self.U_rest  # Resting potential
                 + (v - self.U_rest) * beta  # Leak
-                + I_total * self.R * (1 - beta)  # Input current
+                + g_total * self.R * (1 - beta)  # Input conductance
             )
 
             # Generate spikes based on threshold - uses surrogate gradient
@@ -187,16 +188,16 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
             # Reset membrane potentials where spikes occurred
             v = v * (1 - s) + self.U_reset * s
 
-            # Update synaptic currents using self.cell_typed_weights directly
-            I = (
-                I * alpha  # Decay with synapse time constant
+            # Update synaptic conductances using self.cell_typed_weights directly
+            g = (
+                g * alpha  # Decay with synapse time constant
                 + torch.einsum(
                     "bi,cij->bjc", s, self.cell_typed_weights
                 )  # Sum over recurrent spikes with weights
             )
             if inputs is not None:
-                I_FF = (
-                    I_FF * alpha_FF  # Decay with feedforward synapse time constant
+                g_FF = (
+                    g_FF * alpha_FF  # Decay with feedforward synapse time constant
                     + torch.einsum(
                         "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
                     )  # Sum over feedforward spikes with weights
@@ -204,8 +205,8 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
 
             # Store results
             all_v[:, t, :] = v
-            all_I[:, t, :, :] = I
-            all_I_FF[:, t, :, :] = I_FF
+            all_g[:, t, :, :] = g
+            all_g_FF[:, t, :, :] = g_FF
             all_s[:, t, :] = s
 
-        return all_s, all_v, all_I, all_I_FF
+        return all_s, all_v, all_g, all_g_FF
