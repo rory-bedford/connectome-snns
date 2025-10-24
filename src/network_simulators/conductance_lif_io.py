@@ -65,126 +65,32 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # PARAMETER VALIDATION & ASSERTIONS
         # =================================
 
-        # Extract key dimensions for validation
-        n_neurons = weights.shape[0] if weights.ndim == 2 else 0
-        n_inputs = (
-            weights_FF.shape[0]
-            if weights_FF is not None and weights_FF.ndim == 2
-            else 0
+        self._validate(
+            weights=weights,
+            cell_type_indices=cell_type_indices,
+            cell_params=cell_params,
+            synapse_params=synapse_params,
+            scaling_factors=scaling_factors,
+            surrgrad_scale=surrgrad_scale,
+            weights_FF=weights_FF,
+            cell_type_indices_FF=cell_type_indices_FF,
+            cell_params_FF=cell_params_FF,
+            synapse_params_FF=synapse_params_FF,
+            scaling_factors_FF=scaling_factors_FF,
         )
-
-        # Validate cell_params structure
-        assert isinstance(cell_params, list), "cell_params must be a list"
-        assert len(cell_params) > 0, "cell_params must not be empty"
-        assert all(isinstance(p, dict) for p in cell_params), (
-            "All cell_params entries must be dicts"
-        )
-
-        # Extract n_cell_types from cell_params by finding max cell_id
-        cell_ids = [params["cell_id"] for params in cell_params]
-        n_cell_types = max(cell_ids) + 1
-
-        # Validate synapse_params structure
-        assert isinstance(synapse_params, list), "synapse_params must be a list"
-        assert len(synapse_params) > 0, "synapse_params must not be empty"
-        assert all(isinstance(p, dict) for p in synapse_params), (
-            "All synapse_params entries must be dicts"
-        )
-
-        # Recurrent weights validation
-        assert weights.ndim == 2, "Recurrent weights must be 2D matrix"
-        assert weights.shape[0] == weights.shape[1], (
-            "Recurrent weights must be square matrix"
-        )
-        assert n_neurons > 0, "Number of neurons must be positive"
-
-        # Cell type indices validation
-        assert cell_type_indices.ndim == 1, "Cell type indices must be 1D array"
-        assert cell_type_indices.shape[0] == n_neurons, (
-            f"Cell type indices length ({cell_type_indices.shape[0]}) must match number of neurons ({n_neurons})"
-        )
-        assert np.all(cell_type_indices >= 0), (
-            "All cell type indices must be non-negative"
-        )
-        assert np.all(cell_type_indices < n_cell_types), (
-            f"All cell type indices must be less than n_cell_types ({n_cell_types})"
-        )
-
-        # Scaling factors validation (recurrent)
-        assert scaling_factors.ndim == 2, "Scaling factors must be 2D matrix"
-        assert scaling_factors.shape == (n_cell_types, n_cell_types), (
-            f"Scaling factors shape {scaling_factors.shape} must be ({n_cell_types}, {n_cell_types})"
-        )
-        assert np.all(scaling_factors > 0), "All scaling factors must be positive"
-
-        # Feedforward weights validation (all-or-nothing)
-        ff_args = [
-            weights_FF,
-            cell_type_indices_FF,
-            cell_params_FF,
-            synapse_params_FF,
-            scaling_factors_FF,
-        ]
-        ff_provided = [arg is not None for arg in ff_args]
-        if any(ff_provided):
-            assert all(ff_provided), (
-                "If any feedforward argument is provided, all of "
-                "weights_FF, cell_type_indices_FF, cell_params_FF, synapse_params_FF, and scaling_factors_FF must be provided."
-            )
-            assert weights_FF.ndim == 2, "Feedforward weights must be 2D matrix"
-            assert weights_FF.shape[1] == n_neurons, (
-                f"Feedforward weights output dimension ({weights_FF.shape[1]}) must match number of neurons ({n_neurons})"
-            )
-            assert cell_type_indices_FF.ndim == 1, (
-                "Feedforward cell type indices must be 1D array"
-            )
-            assert cell_type_indices_FF.shape[0] == n_inputs, (
-                f"Feedforward cell type indices length ({cell_type_indices_FF.shape[0]}) must match number of inputs ({n_inputs})"
-            )
-
-            # Validate feedforward cell_params structure
-            assert isinstance(cell_params_FF, list), "cell_params_FF must be a list"
-            assert len(cell_params_FF) > 0, "cell_params_FF must not be empty"
-            assert all(isinstance(p, dict) for p in cell_params_FF), (
-                "All cell_params_FF entries must be dicts"
-            )
-
-            # Extract n_cell_types_FF from cell_params_FF
-            cell_ids_FF = [params["cell_id"] for params in cell_params_FF]
-            n_cell_types_FF = max(cell_ids_FF) + 1
-
-            # Validate feedforward synapse_params structure
-            assert isinstance(synapse_params_FF, list), (
-                "synapse_params_FF must be a list"
-            )
-            assert len(synapse_params_FF) > 0, "synapse_params_FF must not be empty"
-            assert all(isinstance(p, dict) for p in synapse_params_FF), (
-                "All synapse_params_FF entries must be dicts"
-            )
-
-            assert scaling_factors_FF.ndim == 2, (
-                "Feedforward scaling factors must be 2D matrix"
-            )
-            assert scaling_factors_FF.shape == (n_cell_types_FF, n_cell_types), (
-                f"Feedforward scaling factors shape {scaling_factors_FF.shape} must be ({n_cell_types_FF}, {n_cell_types})"
-            )
-            assert np.all(scaling_factors_FF > 0), (
-                "All feedforward scaling factors must be positive"
-            )
-
-        # Hyperparameter validation
-        assert isinstance(surrgrad_scale, (int, float)), (
-            "surrgrad_scale must be numeric"
-        )
-        assert surrgrad_scale > 0, "Surrogate gradient scale must be positive"
 
         # ====================================================
         # FIXED PARAMETERS (NON-TRAINABLE - STORED IN BUFFERS)
         # ====================================================
 
-        self.n_neurons = n_neurons
-        self.n_inputs = n_inputs
+        n_cell_types = len(cell_params)
+        n_synapse_types = len(synapse_params)
+        n_cell_types_FF = len(cell_params_FF) if cell_params_FF is not None else None
+
+        self.n_neurons = weights.shape[0]
+        self.n_inputs = weights_FF.shape[0] if weights_FF is not None else 0
         self.n_cell_types = n_cell_types
+        self.n_synapse_types = n_synapse_types
 
         # Store cell and synapse parameter dictionaries
         self.cell_params = cell_params
@@ -194,14 +100,24 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self.cell_params_FF = cell_params_FF
             self.synapse_params_FF = synapse_params_FF
             self.n_cell_types_FF = n_cell_types_FF
+            self.n_synapse_types_FF = len(synapse_params_FF)
         else:
             self.cell_params_FF = None
             self.synapse_params_FF = None
             self.n_cell_types_FF = None
+            self.n_synapse_types_FF = None
 
         # Register weights and cell type indices for recurrent connections
         self.register_buffer("weights", torch.from_numpy(weights).float())
         self.register_buffer("cell_type_indices", torch.from_numpy(cell_type_indices))
+
+        # Create and register mapping from synapse_id to cell_id
+        synapse_to_cell_mapping = np.zeros(n_synapse_types, dtype=np.int64)
+        for synapse in synapse_params:
+            synapse_to_cell_mapping[synapse["synapse_id"]] = synapse["cell_id"]
+        self.register_buffer(
+            "synapse_to_cell_id", torch.from_numpy(synapse_to_cell_mapping)
+        )
 
         # Register feedforward structure (if provided)
         if weights_FF is not None:
@@ -210,12 +126,45 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 "cell_type_indices_FF",
                 torch.from_numpy(cell_type_indices_FF),
             )
+            # Create and register mapping from feedforward synapse_id to cell_id
+            synapse_to_cell_mapping_FF = np.zeros(
+                self.n_synapse_types_FF, dtype=np.int64
+            )
+            for synapse in synapse_params_FF:
+                synapse_to_cell_mapping_FF[synapse["synapse_id"]] = synapse["cell_id"]
+            self.register_buffer(
+                "synapse_to_cell_id_FF", torch.from_numpy(synapse_to_cell_mapping_FF)
+            )
         else:
             self.register_buffer("weights_FF", None)
             self.register_buffer("cell_type_indices_FF", None)
+            self.register_buffer("synapse_to_cell_id_FF", None)
 
-        # TODO: Create neuron-indexed arrays and synapse arrays from the parameter dictionaries
-        # This will be implemented in the next step
+        # Create neuron-indexed arrays from cell parameters
+        neuron_params = self._create_neuron_param_arrays(
+            cell_params, cell_type_indices, self.n_neurons
+        )
+
+        # Register physiological parameters as neuron-indexed buffers
+        for param_name, param_array in neuron_params.items():
+            self.register_buffer(param_name, param_array)
+
+        # Create synapse parameter arrays (shape: n_synapse_types)
+        synapse_param_arrays = self._create_synapse_param_arrays(synapse_params)
+
+        # Register synapse parameters as buffers
+        for param_name, param_array in synapse_param_arrays.items():
+            self.register_buffer(param_name, param_array)
+
+        # Create feedforward synapse parameter arrays (if provided)
+        if synapse_params_FF is not None:
+            synapse_param_arrays_FF = self._create_synapse_param_arrays(
+                synapse_params_FF
+            )
+
+            # Register feedforward synapse parameters as buffers with _FF suffix
+            for param_name, param_array in synapse_param_arrays_FF.items():
+                self.register_buffer(f"{param_name}_FF", param_array)
 
         # ===========================================================
         # OPTIMIZABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
@@ -240,40 +189,49 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
     def _create_neuron_param_arrays(
         self,
-        physiology_params: dict[str, dict[str, float]],
-        cell_types: list[str],
+        cell_params: list[dict],
         cell_type_indices: IntArray,
-        n_neurons: int,
     ) -> dict[str, torch.Tensor]:
         """
         Create neuron-indexed parameter arrays from cell-type-specific parameters.
 
+        This method creates arrays of shape (n_neurons,) where each neuron's parameters
+        are determined by its cell type. The cell_type_indices array maps each neuron
+        to its cell type, enabling efficient broadcasted operations later.
+
         Args:
-            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
-            cell_types (list[str]): List of cell type names.
-            cell_type_indices (IntArray): Array mapping each neuron to its cell type index.
+            cell_params (list[dict]): List of cell parameter dicts, each containing:
+                - 'cell_id': Cell type ID (must be 0-indexed and contiguous)
+                - 'name': Cell type name
+                - Physiological parameters (tau_mem, theta, U_reset, E_L, g_L, tau_ref)
+            cell_type_indices (IntArray): Array of shape (n_neurons,) mapping each neuron to its cell type index.
             n_neurons (int): Total number of neurons.
 
         Returns:
-            dict[str, torch.Tensor]: Dictionary of parameter names to torch tensors of shape (n_neurons,).
+            dict[str, torch.Tensor]: Dictionary mapping parameter names to torch tensors of shape (n_neurons,).
+                Each tensor contains the parameter value for each neuron based on its cell type.
         """
-        # Required physiological parameters for LIF neurons):
+        # Required physiological parameters for conductance-based LIF neurons
         required_param_names = [
-            "tau_mem",  # Membrane time constant
-            "R",  # Membrane resistance
-            "U_rest",  # Resting potential
-            "theta",  # Spike threshold
-            "U_reset",  # Reset potential
+            "tau_mem",  # Membrane time constant (ms)
+            "theta",  # Spike threshold voltage (mV)
+            "U_reset",  # Reset potential after spike (mV)
+            "E_L",  # Leak reversal potential (mV)
+            "g_L",  # Leak conductance (nS)
+            "tau_ref",  # Refractory period (ms)
         ]
+
+        # Extract n_cell_types from the list of dicts
+        n_cell_types = len(cell_params)
 
         neuron_params = {}
 
+        # Initialize parameter lookup array
         for param_name in required_param_names:
-            # Build a lookup array: parameter value for each cell type
-            param_lookup = np.array(
-                [physiology_params[ct][param_name] for ct in cell_types],
-                dtype=np.float32,
-            )
+            param_lookup = np.zeros(n_cell_types, dtype=np.float32)
+            for cell in cell_params:
+                cell_id = cell["cell_id"]
+                param_lookup[cell_id] = cell[param_name]
 
             # Map each neuron to its parameter value using cell_type_indices
             param_array = param_lookup[cell_type_indices]
@@ -283,59 +241,56 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
     def _create_synapse_param_arrays(
         self,
-        physiology_params: dict[str, dict[str, float]],
-        cell_types: list[str],
-        cell_type_indices: IntArray,
-        n_neurons: int,
-        physiology_params_FF: dict[str, dict[str, float]] | None,
-        cell_types_FF: list[str] | None,
-        cell_type_indices_FF: IntArray | None,
-        n_inputs: int,
+        synapse_params: list[dict],
     ) -> dict[str, torch.Tensor]:
         """
-        Create synapse parameter arrays for tau_syn and tau_syn_FF.
+        Create synapse parameter arrays from synapse-type-specific parameters.
+
+        This method creates arrays of shape (n_synapse_types,) for each synapse parameter.
+        Unlike neuron parameters, synapse parameters are indexed only by synapse type,
+        not by individual neurons.
 
         Args:
-            physiology_params (dict[str, dict[str, float]]): Nested dict {cell_type: {param_name: value}}.
-            cell_types (list[str]): List of cell type names.
-            cell_type_indices (IntArray): Array mapping each neuron to its cell type index.
-            n_neurons (int): Total number of neurons.
-            physiology_params_FF (dict[str, dict[str, float]] | None): Nested dict for feedforward input cell types.
-            cell_types_FF (list[str] | None): List of feedforward cell type names.
-            cell_type_indices_FF (IntArray | None): Array mapping each input to its cell type index.
-            n_inputs (int): Total number of inputs.
+            synapse_params (list[dict]): List of synapse parameter dicts, each containing:
+                - 'synapse_id': Synapse type ID (must be 0-indexed and contiguous)
+                - 'name': Synapse type name (e.g., 'AMPA', 'NMDA', 'GABA_A')
+                - 'cell_id': Presynaptic cell type this synapse belongs to
+                - 'tau_rise': Synaptic rise time constant (ms)
+                - 'tau_decay': Synaptic decay time constant (ms)
+                - 'reversal_potential': Synaptic reversal potential (mV)
+                - 'g_bar': Maximum synaptic conductance (nS)
 
         Returns:
-            dict[str, torch.Tensor]: Dictionary containing tau_syn and tau_syn_FF arrays.
+            dict[str, torch.Tensor]: Dictionary mapping parameter names to torch tensors of shape (n_synapse_types,).
+                Each tensor contains the parameter value for each synapse type.
         """
-        synapse_params = {}
+        # Required synapse parameters for conductance-based synapses
+        required_param_names = [
+            "tau_rise",  # Synaptic rise time constant (ms)
+            "tau_decay",  # Synaptic decay time constant (ms)
+            "reversal_potential",  # Synaptic reversal potential (mV)
+            "g_bar",  # Maximum synaptic conductance (nS)
+        ]
 
-        # Create tau_syn for recurrent connections
-        # tau_syn_lookup: (n_cell_types,)
-        tau_syn_lookup = np.array(
-            [physiology_params[ct]["tau_syn"] for ct in cell_types],
-            dtype=np.float32,
-        )
-        # tau_syn_array: (n_cell_types, n_neurons)
-        tau_syn_array = tau_syn_lookup[:, np.newaxis] * np.ones(
-            (len(cell_types), n_neurons), dtype=np.float32
-        )
-        synapse_params["tau_syn"] = torch.from_numpy(tau_syn_array)
+        # Extract n_synapse_types from the list of dicts
+        # Note: synapse_id validation already done in __init__
+        n_synapse_types = len(synapse_params)
 
-        # Create tau_syn_FF for feedforward connections (if provided)
-        if physiology_params_FF is not None and cell_types_FF is not None:
-            # tau_syn_FF_lookup: (n_cell_types_FF,)
-            tau_syn_FF_lookup = np.array(
-                [physiology_params_FF[ct]["tau_syn"] for ct in cell_types_FF],
-                dtype=np.float32,
-            )
-            # tau_syn_FF_array: (n_cell_types_FF, n_neurons)
-            tau_syn_FF_array = tau_syn_FF_lookup[:, np.newaxis] * np.ones(
-                (len(cell_types_FF), n_neurons), dtype=np.float32
-            )
-            synapse_params["tau_syn_FF"] = torch.from_numpy(tau_syn_FF_array)
+        synapse_param_arrays = {}
 
-        return synapse_params
+        # Create lookup array directly indexed by synapse_id (no sorting needed)
+        for param_name in required_param_names:
+            param_lookup = np.zeros(n_synapse_types, dtype=np.float32)
+
+            # Directly index by synapse_id - each synapse_id is used as array index
+            for synapse in synapse_params:
+                synapse_id = synapse["synapse_id"]
+                param_lookup[synapse_id] = synapse[param_name]
+
+            # Store as tensor of shape (n_synapse_types,)
+            synapse_param_arrays[param_name] = torch.from_numpy(param_lookup)
+
+        return synapse_param_arrays
 
     @property
     def device(self):
@@ -383,44 +338,45 @@ class ConductanceLIFNetwork_IO(nn.Module):
     @property
     def cell_typed_weights(self) -> torch.Tensor:
         """
-        Create a tiered structure for the recurrent weight matrix based on cell types.
+        Create a tiered structure for the recurrent weight matrix based on synapse types.
 
-        Each input row of `n_neurons` is placed on the level according to its index
-        in `cell_type_indices`.
+        Each synapse layer contains the weights that belong presynaptically to the
+        cell_id associated with that synapse type.
 
         Returns:
             torch.Tensor: Tiered weight matrix of shape
-                (n_cell_types, n_neurons, n_neurons).
+                (n_synapse_types, n_neurons, n_neurons).
         """
         # Initialize a zero tensor for tiered weights
-        n_tiers = self.n_cell_types
+        n_tiers = self.n_synapse_types
         tiered_weights = torch.zeros(
             (n_tiers, self.n_neurons, self.n_neurons),
             dtype=self.weights.dtype,
             device=self.weights.device,
         )
 
-        # Create a boolean mask for tiering
-        mask = self.cell_type_indices[None, :] == torch.arange(
-            n_tiers, device=self.device
-        ).view(-1, 1)  # Shape: (n_cell_types, n_neurons)
-
-        # Broadcast the mask to tiered_weights and assign scaled weights
-        tiered_weights = mask[:, :, None] * self.scaled_weights[None, :, :]
+        # For each synapse type, get its associated presynaptic cell_id
+        # and mask weights from neurons of that cell type
+        for synapse_id in range(n_tiers):
+            cell_id = self.synapse_to_cell_id[synapse_id]
+            # Create mask for neurons belonging to this cell type
+            mask = self.cell_type_indices == cell_id  # Shape: (n_neurons,)
+            # Apply mask to presynaptic dimension (rows of weight matrix)
+            tiered_weights[synapse_id] = mask[:, None] * self.scaled_weights
 
         return tiered_weights
 
     @property
     def cell_typed_weights_FF(self) -> torch.Tensor:
         """
-        Create a tiered structure for the feedforward weight matrix based on input cell types.
+        Create a tiered structure for the feedforward weight matrix based on synapse types.
 
-        Each input row of `n_inputs` is placed on the level according to its index
-        in `cell_type_indices_FF`.
+        Each synapse layer contains the weights that belong presynaptically to the
+        cell_id associated with that feedforward synapse type.
 
         Returns:
             torch.Tensor: Tiered weight matrix of shape
-                (n_cell_types_FF, n_inputs, n_neurons).
+                (n_synapse_types_FF, n_inputs, n_neurons).
         """
         if self.weights_FF is None or self.cell_type_indices_FF is None:
             raise ValueError(
@@ -428,20 +384,21 @@ class ConductanceLIFNetwork_IO(nn.Module):
             )
 
         # Initialize a zero tensor for tiered weights
-        n_tiers = self.n_cell_types_FF
+        n_tiers = self.n_synapse_types_FF
         tiered_weights_FF = torch.zeros(
             (n_tiers, self.n_inputs, self.n_neurons),
             dtype=self.weights_FF.dtype,
             device=self.weights_FF.device,
         )
 
-        # Create a boolean mask for tiering
-        mask = self.cell_type_indices_FF[None, :] == torch.arange(
-            n_tiers, device=self.device
-        ).view(-1, 1)  # Shape: (n_cell_types_FF, n_inputs)
-
-        # Broadcast the mask to tiered_weights_FF and assign scaled feedforward weights
-        tiered_weights_FF = mask[:, :, None] * self.scaled_weights_FF[None, :, :]
+        # For each feedforward synapse type, get its associated presynaptic cell_id
+        # and mask weights from inputs of that cell type
+        for synapse_id in range(n_tiers):
+            cell_id = self.synapse_to_cell_id_FF[synapse_id]
+            # Create mask for inputs belonging to this cell type
+            mask = self.cell_type_indices_FF == cell_id  # Shape: (n_inputs,)
+            # Apply mask to presynaptic dimension (rows of weight matrix)
+            tiered_weights_FF[synapse_id] = mask[:, None] * self.scaled_weights_FF
 
         return tiered_weights_FF
 
@@ -454,3 +411,244 @@ class ConductanceLIFNetwork_IO(nn.Module):
             Callable: Partial function for SurrGradSpike with configured scale.
         """
         return lambda x: SurrGradSpike.apply(x, self.surrgrad_scale)
+
+    def _validate(
+        self,
+        weights: FloatArray,
+        cell_type_indices: IntArray,
+        cell_params: list[dict],
+        synapse_params: list[dict],
+        scaling_factors: FloatArray,
+        surrgrad_scale: float,
+        weights_FF: FloatArray | None,
+        cell_type_indices_FF: IntArray | None,
+        cell_params_FF: list[dict] | None,
+        synapse_params_FF: list[dict] | None,
+        scaling_factors_FF: FloatArray | None,
+    ) -> tuple[int, int, int | None, int | None]:
+        """
+        Validate all input parameters and return extracted dimensions.
+
+        Args:
+            weights: Recurrent weight matrix
+            cell_type_indices: Neuron-to-cell-type mapping
+            cell_params: List of cell parameter dicts
+            synapse_params: List of synapse parameter dicts
+            scaling_factors: Cell-type-to-cell-type scaling matrix
+            surrgrad_scale: Surrogate gradient scale
+            weights_FF: Feedforward weight matrix (optional)
+            cell_type_indices_FF: Input-to-cell-type mapping (optional)
+            cell_params_FF: List of feedforward cell parameter dicts (optional)
+            synapse_params_FF: List of feedforward synapse parameter dicts (optional)
+            scaling_factors_FF: Input-cell-type-to-cell-type scaling matrix (optional)
+
+        Returns:
+            tuple: (n_cell_types, n_synapse_types, n_cell_types_FF, n_synapse_types_FF)
+                where FF values are None if feedforward is not provided
+        """
+        # Extract key dimensions
+        n_neurons = weights.shape[0] if weights.ndim == 2 else 0
+        n_inputs = (
+            weights_FF.shape[0]
+            if weights_FF is not None and weights_FF.ndim == 2
+            else 0
+        )
+
+        # ========================================
+        # RECURRENT CELL PARAMS VALIDATION
+        # ========================================
+        assert isinstance(cell_params, list), "cell_params must be a list"
+        assert len(cell_params) > 0, "cell_params must not be empty"
+        assert all(isinstance(p, dict) for p in cell_params), (
+            "All cell_params entries must be dicts"
+        )
+
+        # Extract n_cell_types from cell_params by finding max cell_id
+        cell_ids = [params["cell_id"] for params in cell_params]
+        n_cell_types = max(cell_ids) + 1
+
+        # Ensure cell_ids are 0-indexed, contiguous, and complete
+        cell_ids_array = np.array(cell_ids, dtype=np.int32)
+        expected_cell_ids = np.arange(n_cell_types, dtype=np.int32)
+        assert np.array_equal(np.sort(cell_ids_array), expected_cell_ids), (
+            f"cell_ids in cell_params must be 0-indexed and contiguous [0, 1, ..., {n_cell_types - 1}]. "
+            f"Found: {sorted(cell_ids)}, Expected: {expected_cell_ids.tolist()}"
+        )
+
+        # Ensure no duplicate cell_ids
+        assert len(cell_ids) == len(np.unique(cell_ids_array)), (
+            f"Duplicate cell_ids found in cell_params: {cell_ids}"
+        )
+
+        # ========================================
+        # RECURRENT SYNAPSE PARAMS VALIDATION
+        # ========================================
+        assert isinstance(synapse_params, list), "synapse_params must be a list"
+        assert len(synapse_params) > 0, "synapse_params must not be empty"
+        assert all(isinstance(p, dict) for p in synapse_params), (
+            "All synapse_params entries must be dicts"
+        )
+
+        # Extract synapse_ids and validate
+        synapse_ids = [params["synapse_id"] for params in synapse_params]
+        n_synapse_types = max(synapse_ids) + 1
+
+        # Ensure synapse_ids are 0-indexed, contiguous, and complete
+        synapse_ids_array = np.array(synapse_ids, dtype=np.int32)
+        expected_synapse_ids = np.arange(n_synapse_types, dtype=np.int32)
+        assert np.array_equal(np.sort(synapse_ids_array), expected_synapse_ids), (
+            f"synapse_ids in synapse_params must be 0-indexed and contiguous [0, 1, ..., {n_synapse_types - 1}]. "
+            f"Found: {sorted(synapse_ids)}, Expected: {expected_synapse_ids.tolist()}"
+        )
+
+        # Ensure no duplicate synapse_ids
+        assert len(synapse_ids) == len(np.unique(synapse_ids_array)), (
+            f"Duplicate synapse_ids found in synapse_params: {synapse_ids}"
+        )
+
+        # ========================================
+        # RECURRENT WEIGHTS VALIDATION
+        # ========================================
+        assert weights.ndim == 2, "Recurrent weights must be 2D matrix"
+        assert weights.shape[0] == weights.shape[1], (
+            "Recurrent weights must be square matrix"
+        )
+        assert n_neurons > 0, "Number of neurons must be positive"
+
+        # ========================================
+        # RECURRENT CELL TYPE INDICES VALIDATION
+        # ========================================
+        assert cell_type_indices.ndim == 1, "Cell type indices must be 1D array"
+        assert cell_type_indices.shape[0] == n_neurons, (
+            f"Cell type indices length ({cell_type_indices.shape[0]}) must match number of neurons ({n_neurons})"
+        )
+        assert np.all(cell_type_indices >= 0), (
+            "All cell type indices must be non-negative"
+        )
+        assert np.all(cell_type_indices < n_cell_types), (
+            f"All cell type indices must be less than n_cell_types ({n_cell_types})"
+        )
+
+        # ========================================
+        # RECURRENT SCALING FACTORS VALIDATION
+        # ========================================
+        assert scaling_factors.ndim == 2, "Scaling factors must be 2D matrix"
+        assert scaling_factors.shape == (n_cell_types, n_cell_types), (
+            f"Scaling factors shape {scaling_factors.shape} must be ({n_cell_types}, {n_cell_types})"
+        )
+        assert np.all(scaling_factors > 0), "All scaling factors must be positive"
+
+        # ========================================
+        # FEEDFORWARD VALIDATION (ALL-OR-NOTHING)
+        # ========================================
+        ff_args = [
+            weights_FF,
+            cell_type_indices_FF,
+            cell_params_FF,
+            synapse_params_FF,
+            scaling_factors_FF,
+        ]
+        ff_provided = [arg is not None for arg in ff_args]
+
+        if any(ff_provided):
+            assert all(ff_provided), (
+                "If any feedforward argument is provided, all of "
+                "weights_FF, cell_type_indices_FF, cell_params_FF, "
+                "synapse_params_FF, and scaling_factors_FF must be provided."
+            )
+
+            # Feedforward weights validation
+            assert weights_FF.ndim == 2, "Feedforward weights must be 2D matrix"
+            assert weights_FF.shape[1] == n_neurons, (
+                f"Feedforward weights output dimension ({weights_FF.shape[1]}) must match number of neurons ({n_neurons})"
+            )
+
+            # Feedforward cell type indices validation
+            assert cell_type_indices_FF.ndim == 1, (
+                "Feedforward cell type indices must be 1D array"
+            )
+            assert cell_type_indices_FF.shape[0] == n_inputs, (
+                f"Feedforward cell type indices length ({cell_type_indices_FF.shape[0]}) must match number of inputs ({n_inputs})"
+            )
+
+            # Feedforward cell params validation
+            assert isinstance(cell_params_FF, list), "cell_params_FF must be a list"
+            assert len(cell_params_FF) > 0, "cell_params_FF must not be empty"
+            assert all(isinstance(p, dict) for p in cell_params_FF), (
+                "All cell_params_FF entries must be dicts"
+            )
+
+            # Extract n_cell_types_FF from cell_params_FF
+            cell_ids_FF = [params["cell_id"] for params in cell_params_FF]
+            n_cell_types_FF = max(cell_ids_FF) + 1
+
+            # Ensure feedforward cell_ids are 0-indexed, contiguous, and complete
+            cell_ids_FF_array = np.array(cell_ids_FF, dtype=np.int32)
+            expected_cell_ids_FF = np.arange(n_cell_types_FF, dtype=np.int32)
+            assert np.array_equal(np.sort(cell_ids_FF_array), expected_cell_ids_FF), (
+                f"cell_ids in cell_params_FF must be 0-indexed and contiguous [0, 1, ..., {n_cell_types_FF - 1}]. "
+                f"Found: {sorted(cell_ids_FF)}, Expected: {expected_cell_ids_FF.tolist()}"
+            )
+
+            # Ensure no duplicate cell_ids in feedforward
+            assert len(cell_ids_FF) == len(np.unique(cell_ids_FF_array)), (
+                f"Duplicate cell_ids found in cell_params_FF: {cell_ids_FF}"
+            )
+
+            # Feedforward cell type indices range validation
+            assert np.all(cell_type_indices_FF >= 0), (
+                "All feedforward cell type indices must be non-negative"
+            )
+            assert np.all(cell_type_indices_FF < n_cell_types_FF), (
+                f"All feedforward cell type indices must be less than n_cell_types_FF ({n_cell_types_FF})"
+            )
+
+            # Feedforward synapse params validation
+            assert isinstance(synapse_params_FF, list), (
+                "synapse_params_FF must be a list"
+            )
+            assert len(synapse_params_FF) > 0, "synapse_params_FF must not be empty"
+            assert all(isinstance(p, dict) for p in synapse_params_FF), (
+                "All synapse_params_FF entries must be dicts"
+            )
+
+            # Extract synapse_ids_FF and validate
+            synapse_ids_FF = [params["synapse_id"] for params in synapse_params_FF]
+            n_synapse_types_FF = max(synapse_ids_FF) + 1
+
+            # Ensure feedforward synapse_ids are 0-indexed, contiguous, and complete
+            synapse_ids_FF_array = np.array(synapse_ids_FF, dtype=np.int32)
+            expected_synapse_ids_FF = np.arange(n_synapse_types_FF, dtype=np.int32)
+            assert np.array_equal(
+                np.sort(synapse_ids_FF_array), expected_synapse_ids_FF
+            ), (
+                f"synapse_ids in synapse_params_FF must be 0-indexed and contiguous [0, 1, ..., {n_synapse_types_FF - 1}]. "
+                f"Found: {sorted(synapse_ids_FF)}, Expected: {expected_synapse_ids_FF.tolist()}"
+            )
+
+            # Ensure no duplicate synapse_ids in feedforward
+            assert len(synapse_ids_FF) == len(np.unique(synapse_ids_FF_array)), (
+                f"Duplicate synapse_ids found in synapse_params_FF: {synapse_ids_FF}"
+            )
+
+            # Feedforward scaling factors validation
+            assert scaling_factors_FF.ndim == 2, (
+                "Feedforward scaling factors must be 2D matrix"
+            )
+            assert scaling_factors_FF.shape == (n_cell_types_FF, n_cell_types), (
+                f"Feedforward scaling factors shape {scaling_factors_FF.shape} must be ({n_cell_types_FF}, {n_cell_types})"
+            )
+            assert np.all(scaling_factors_FF > 0), (
+                "All feedforward scaling factors must be positive"
+            )
+        else:
+            n_cell_types_FF = None
+            n_synapse_types_FF = None
+
+        # ========================================
+        # HYPERPARAMETER VALIDATION
+        # ========================================
+        assert isinstance(surrgrad_scale, (int, float)), (
+            "surrgrad_scale must be numeric"
+        )
+        assert surrgrad_scale > 0, "Surrogate gradient scale must be positive"

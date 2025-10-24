@@ -68,17 +68,16 @@ def main(output_dir, params_file):
     input_w_sigma = np.array(params["feedforward"]["weights"]["w_sigma"], dtype=float)
 
     # Feedforward cell parameters (as list of dicts)
-    # Note: Feedforward cells only have activity parameters (firing_rate), no physiology
+    # Note: Feedforward cells don't have physiological parameters, just name and id
     cell_params_FF = []
     input_firing_rates = {}
     for cell_id, ct in enumerate(input_cell_type_names):
         firing_rate = float(params["feedforward"]["activity"][ct]["firing_rate"])
-        input_firing_rates[ct] = firing_rate
+        input_firing_rates[ct] = firing_rate  # Store separately for spike generation
         cell_params_FF.append(
             {
                 "name": ct,
                 "cell_id": cell_id,
-                "firing_rate": firing_rate,  # Store for later use
             }
         )
 
