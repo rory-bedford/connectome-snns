@@ -204,9 +204,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             # Compute conductance updates
             g = (
                 g * alpha  # Decay with synapse time constant
-                + torch.einsum(
-                    "bi,cij->bjc", s, self.cell_typed_weights
-                )  # Sum over spikes with weights
+                + torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
+                    :, :, None, :
+                ]  # Sum over spikes with weights
                 * g_scale[
                     None, None, :, :
                 ]  # Scale by g_bar and normalization factor for both rise and decay components
@@ -217,7 +217,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     g_FF * alpha_FF
                     + torch.einsum(
                         "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
-                    )
+                    )[:, :, None, :]
                     * g_scale_FF[None, None, :, :]
                 )
 
