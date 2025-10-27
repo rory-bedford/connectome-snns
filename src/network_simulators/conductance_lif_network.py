@@ -171,8 +171,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             # g_scale_FF:                  (2, n_synapse_types_FF)                        -- maximal feedforward synaptic conductances, stacked for easy summation
             # self.E_syn:                  (n_synapse_types,)                             -- synaptic reversal potentials
             # self.E_syn_FF:               (n_synapse_types_FF,)                          -- feedforward synaptic reversal potentials
-            # self.cell_typed_weights:     (n_neurons, n_neurons, n_synapse_types)        -- recurrent synaptic weights
-            # self.cell_typed_weights_FF:  (n_inputs, n_neurons, n_synapse_types_FF)      -- feedforward synaptic weights
+            # self.cell_typed_weights:     (n_synapse_types, n_neurons, n_neurons)        -- recurrent synaptic weights
+            # self.cell_typed_weights_FF:  (n_synapse_types_FF, n_inputs, n_neurons)      -- feedforward synaptic weights
             # ============================
 
             # Compute spikes
@@ -205,7 +205,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             g = (
                 g * alpha  # Decay with synapse time constant
                 + torch.einsum(
-                    "bi,ijc->bjc", s, self.cell_typed_weights
+                    "bi,cij->bjc", s, self.cell_typed_weights
                 )  # Sum over spikes with weights
                 * g_scale  # Scale by g_bar and normalization factor for both rise and decay components
             )
@@ -214,7 +214,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 g_FF = (
                     g_FF * alpha_FF
                     + torch.einsum(
-                        "bi,ijc->bjc", inputs[:, t, :], self.cell_typed_weights_FF
+                        "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
                     )
                     * g_scale_FF
                 )
