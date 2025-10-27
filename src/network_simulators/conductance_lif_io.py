@@ -658,3 +658,80 @@ class ConductanceLIFNetwork_IO(nn.Module):
             "surrgrad_scale must be numeric"
         )
         assert surrgrad_scale > 0, "Surrogate gradient scale must be positive"
+
+    def _validate_forward(
+        self,
+        n_steps: int,
+        dt: float,
+        inputs: FloatArray | None,
+        initial_v: FloatArray | None,
+        initial_g: FloatArray | None,
+        initial_g_FF: FloatArray | None,
+    ) -> None:
+        """Validate the inputs to the forward method."""
+
+        # Determine batch size
+        batch_size = inputs.shape[0] if inputs is not None else 1
+
+        assert isinstance(dt, float), "dt must be a float."
+
+        # Validate inputs if provided
+        if inputs is not None:
+            assert inputs.ndim == 3, (
+                "inputs must have 3 dimensions (batch_size, n_steps, n_inputs)."
+            )
+            assert inputs.shape[0] == batch_size, (
+                "inputs batch size must match batch_size."
+            )
+            assert inputs.shape[1] == n_steps, "inputs must have n_steps time steps."
+            assert inputs.shape[2] == self.n_inputs, (
+                "inputs must match the number of feedforward inputs."
+            )
+
+        # Validate initial conductances if provided
+        if initial_g is not None:
+            assert initial_g.ndim == 4, (
+                "initial_g must have 4 dimensions (batch_size, n_neurons, 2, n_synapse_types)."
+            )
+            assert initial_g.shape[0] == batch_size, (
+                "initial_g batch size must match batch_size."
+            )
+            assert initial_g.shape[1] == self.n_neurons, (
+                "initial_g must match n_neurons."
+            )
+            assert initial_g.shape[2] == 2, (
+                "initial_g must have 2 for rise/decay components."
+            )
+            assert initial_g.shape[3] == self.n_synapse_types, (
+                "initial_g must match the number of synapse types."
+            )
+
+        # Validate initial feedforward conductances if provided
+        if initial_g_FF is not None:
+            assert initial_g_FF.ndim == 4, (
+                "initial_g_FF must have 4 dimensions (batch_size, n_neurons, 2, n_synapse_types_FF)."
+            )
+            assert initial_g_FF.shape[0] == batch_size, (
+                "initial_g_FF batch size must match batch_size."
+            )
+            assert initial_g_FF.shape[1] == self.n_neurons, (
+                "initial_g_FF must match n_neurons."
+            )
+            assert initial_g_FF.shape[2] == 2, (
+                "initial_g_FF must have 2 for rise/decay components."
+            )
+            assert initial_g_FF.shape[3] == self.n_synapse_types_FF, (
+                "initial_g_FF must match the number of feedforward synapse types."
+            )
+
+        # Validate initial membrane potentials if provided
+        if initial_v is not None:
+            assert initial_v.ndim == 2, (
+                "initial_v must have 2 dimensions (batch_size, n_neurons)."
+            )
+            assert initial_v.shape[1] == self.n_neurons, (
+                "initial_v must match n_neurons."
+            )
+            assert initial_v.shape[0] == batch_size, (
+                "initial_v batch size must match batch_size."
+            )
