@@ -190,8 +190,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
             # Update membrane potentials (without reset)
             v = (
-                self.U_rest  # Resting potential
-                + (v - self.U_rest) * beta  # Leak
+                self.E_L  # Resting potential
+                + (v - self.E_L) * beta  # Leak
                 + I.sum(dim=2) * self.dt / self.C_m  # Recurrent current
                 + (
                     I_FF.sum(dim=2) * self.dt / self.C_m if inputs is not None else 0
