@@ -119,7 +119,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         # Precompute decay factors
         tau_syn = torch.stack(
-            self.tau_rise, self.tau_decay, dim=0
+            (self.tau_rise, self.tau_decay), dim=0
         )  # Shape (2, n_synapse_types)
         alpha = torch.exp(-dt / tau_syn)  # Shape (2, n_synapse_types)
 
