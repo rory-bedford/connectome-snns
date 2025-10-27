@@ -207,7 +207,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 + torch.einsum(
                     "bi,cij->bjc", s, self.cell_typed_weights
                 )  # Sum over spikes with weights
-                * g_scale  # Scale by g_bar and normalization factor for both rise and decay components
+                * g_scale[
+                    None, None, :, :
+                ]  # Scale by g_bar and normalization factor for both rise and decay components
             )
 
             if inputs is not None:
@@ -216,7 +218,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     + torch.einsum(
                         "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
                     )
-                    * g_scale_FF
+                    * g_scale_FF[None, None, :, :]
                 )
 
             # Store variables
