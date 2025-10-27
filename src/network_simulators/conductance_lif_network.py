@@ -64,7 +64,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 initial_v, dtype=torch.float32, device=self.device
             ).clone()
         else:
-            v = self.U_rest.clone().detach()
+            v = self.U_reset.clone().detach()
             v = v.repeat(batch_size, 1)
 
         # Synaptic conductances (batch_size, n_neurons, 2, n_synapse_types)
