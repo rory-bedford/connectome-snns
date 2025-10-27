@@ -88,7 +88,7 @@ def main(output_dir, params_file):
         synapse_names = params["feedforward"]["synapses"][ct]["names"]
         tau_rise = params["feedforward"]["synapses"][ct]["tau_rise"]
         tau_decay = params["feedforward"]["synapses"][ct]["tau_decay"]
-        reversal_potential = params["feedforward"]["synapses"][ct]["reversal_potential"]
+        E_syn = params["feedforward"]["synapses"][ct]["E_syn"]
         g_bar = params["feedforward"]["synapses"][ct]["g_bar"]
 
         # Each synapse type for this cell type gets its own entry
@@ -100,7 +100,7 @@ def main(output_dir, params_file):
                     "cell_id": cell_id,
                     "tau_rise": float(tau_rise[i]),
                     "tau_decay": float(tau_decay[i]),
-                    "reversal_potential": float(reversal_potential[i]),
+                    "E_syn": float(E_syn[i]),
                     "g_bar": float(g_bar[i]),
                 }
             )
@@ -146,7 +146,7 @@ def main(output_dir, params_file):
         synapse_names = params["recurrent"]["synapses"][ct]["names"]
         tau_rise = params["recurrent"]["synapses"][ct]["tau_rise"]
         tau_decay = params["recurrent"]["synapses"][ct]["tau_decay"]
-        reversal_potential = params["recurrent"]["synapses"][ct]["reversal_potential"]
+        E_syn = params["recurrent"]["synapses"][ct]["E_syn"]
         g_bar = params["recurrent"]["synapses"][ct]["g_bar"]
 
         # Each synapse type for this cell type gets its own entry
@@ -158,7 +158,7 @@ def main(output_dir, params_file):
                     "cell_id": cell_id,
                     "tau_rise": float(tau_rise[i]),
                     "tau_decay": float(tau_decay[i]),
-                    "reversal_potential": float(reversal_potential[i]),
+                    "E_syn": float(E_syn[i]),
                     "g_bar": float(g_bar[i]),
                 }
             )

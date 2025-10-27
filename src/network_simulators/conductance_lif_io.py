@@ -49,7 +49,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 - 'cell_id' (int): Presynaptic cell type ID this synapse belongs to
                 - 'tau_rise' (float): Synaptic rise time constant (ms)
                 - 'tau_decay' (float): Synaptic decay time constant (ms)
-                - 'reversal_potential' (float): Synaptic reversal potential (mV)
+                - 'E_syn' (float): Synaptic reversal potential (mV)
                 - 'g_bar' (float): Maximum synaptic conductance (nS)
             scaling_factors (FloatArray): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling (voxel^-1).
             surrgrad_scale (float): Scale parameter for surrogate gradient fast sigmoid function.
@@ -240,6 +240,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
             param_array = param_lookup[cell_type_indices]
             neuron_params[param_name] = torch.from_numpy(param_array)
 
+        # Compute derived parameter: capacitance (C_m = tau_mem * g_L)
+        neuron_params["C_m"] = neuron_params["tau_mem"] * neuron_params["g_L"]
+
         return neuron_params
 
     def _create_synapse_param_arrays(
@@ -260,7 +263,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 - 'cell_id': Presynaptic cell type this synapse belongs to
                 - 'tau_rise': Synaptic rise time constant (ms)
                 - 'tau_decay': Synaptic decay time constant (ms)
-                - 'reversal_potential': Synaptic reversal potential (mV)
+                - 'E_syn': Synaptic reversal potential (mV)
                 - 'g_bar': Maximum synaptic conductance (nS)
 
         Returns:
@@ -271,7 +274,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         required_param_names = [
             "tau_rise",  # Synaptic rise time constant (ms)
             "tau_decay",  # Synaptic decay time constant (ms)
-            "reversal_potential",  # Synaptic reversal potential (mV)
+            "E_syn",  # Synaptic reversal potential (mV)
             "g_bar",  # Maximum synaptic conductance (nS)
         ]
 
