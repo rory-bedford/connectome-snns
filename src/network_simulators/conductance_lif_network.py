@@ -145,7 +145,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 [-self.g_bar_FF, self.g_bar_FF], dim=0
             )  # Shape (2, n_synapse_types_FF)
             norm_alpha_FF = 1 / (
-                self.tau_syn_decay_FF - self.tau_syn_rise_FF
+                self.tau_decay_FF - self.tau_rise_FF
             )  # Shape (n_synapse_types_FF,)
             g_scale_FF /= norm_alpha_FF
 
