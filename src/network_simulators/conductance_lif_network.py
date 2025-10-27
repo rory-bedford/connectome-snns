@@ -125,7 +125,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         if inputs is not None:
             tau_syn_FF = torch.stack(
-                self.tau_rise_FF, self.tau_decay_FF, dim=0
+                (self.tau_rise_FF, self.tau_decay_FF), dim=0
             )  # Shape (2, n_synapse_types_FF)
             alpha_FF = torch.exp(-dt / tau_syn_FF).T  # Shape (2, n_synapse_types_FF)
 
