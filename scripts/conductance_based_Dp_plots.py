@@ -614,6 +614,32 @@ def plot_synaptic_conductances(params: dict, output_dir: Path) -> None:
     cmap = plt.colormaps["tab10"]
     colors = [cmap(i % 10) for i in range(len(all_synapse_names))]
 
+    # Automatically compute nice round y-axis limit based on data
+    max_conductance = 0
+    for neuron_id in range(n_neurons_plot):
+        for syn_idx in range(output_conductances.shape[3]):
+            g_trace = output_conductances[0, :n_steps_plot, neuron_id, syn_idx]
+            max_conductance = max(max_conductance, g_trace.max())
+        for syn_idx in range(input_conductances.shape[3]):
+            g_trace = input_conductances[0, :n_steps_plot, neuron_id, syn_idx]
+            max_conductance = max(max_conductance, g_trace.max())
+
+    # Round to nice limit
+    if max_conductance <= 0:
+        y_lim = 1.0
+    else:
+        magnitude = 10 ** np.floor(np.log10(max_conductance))
+        normalized = max_conductance / magnitude
+        if normalized <= 1:
+            nice_normalized = 1
+        elif normalized <= 2:
+            nice_normalized = 2
+        elif normalized <= 5:
+            nice_normalized = 5
+        else:
+            nice_normalized = 10
+        y_lim = nice_normalized * magnitude
+
     # Create figure with subplots for each neuron
     fig, axes = plt.subplots(
         n_neurons_plot, 1, figsize=(14, 2.5 * n_neurons_plot), sharex=True
@@ -655,7 +681,7 @@ def plot_synaptic_conductances(params: dict, output_dir: Path) -> None:
         # Formatting
         ax.set_ylabel(f"Neuron {neuron_id} ({cell_name})\nConductance (nS)", fontsize=9)
         ax.set_xlim(0, duration * 1e-3 * fraction)
-        ax.set_ylim(0, 5)  # Fixed y-axis from 0 to 5 nS
+        ax.set_ylim(0, y_lim)  # Use computed round y-axis limit
         ax.grid(True, alpha=0.3)
 
         # Add legend to first subplot only

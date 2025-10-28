@@ -7,6 +7,37 @@ import torch
 from typing import Union
 
 
+def _round_to_nice_limit(value: float) -> float:
+    """Round a value up to a nice round number (power of 10 times 1, 2, or 5).
+
+    Args:
+        value (float): The value to round up
+
+    Returns:
+        float: Rounded value
+    """
+    if value <= 0:
+        return 1.0
+
+    # Find the order of magnitude
+    magnitude = 10 ** np.floor(np.log10(value))
+
+    # Normalize to range [1, 10)
+    normalized = value / magnitude
+
+    # Round up to nearest nice number (1, 2, 5, 10)
+    if normalized <= 1:
+        nice_normalized = 1
+    elif normalized <= 2:
+        nice_normalized = 2
+    elif normalized <= 5:
+        nice_normalized = 5
+    else:
+        nice_normalized = 10
+
+    return nice_normalized * magnitude
+
+
 def plot_membrane_voltages(
     voltages: Union[NDArray[np.float32], torch.Tensor],
     spikes: Union[NDArray[np.int32], torch.Tensor],
@@ -166,8 +197,16 @@ def plot_synaptic_currents(
     n_steps = I_exc.shape[1]
     n_steps_plot = int(n_steps * fraction)
 
-    # Fixed y-axis limits at ±1000 pA
-    y_lim = 1000.0
+    # Automatically compute nice round y-axis limits based on data
+    max_current = 0
+    for neuron_id in range(n_neurons_plot):
+        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
+        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
+        max_current = max(
+            max_current, np.abs(I_exc_trace).max(), np.abs(I_inh_trace).max()
+        )
+
+    y_lim = _round_to_nice_limit(max_current)
 
     fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
     time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
