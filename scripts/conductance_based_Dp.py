@@ -214,6 +214,7 @@ def main(output_dir, params_file):
         cell_type_signs=None,  # No signs for conductance-based model
         w_mu_matrix=w_mu,
         w_sigma_matrix=w_sigma,
+        parameter_space="linear",
     )
 
     # ===================================================
