@@ -197,6 +197,7 @@ def main(output_dir, params_file):
         num_assemblies=num_assemblies,
         conn_within=conn_within,
         conn_between=conn_between,
+        method="configuration",  # Ensures exact in-degree/out-degree distributions
     )
 
     # Store cell type indices for later use (no signs needed for conductance-based model)
@@ -245,6 +246,7 @@ def main(output_dir, params_file):
         target_cell_types=cell_type_indices,  # Connectome layer cell assignments
         conn_matrix=input_conn_inputs,  # N_input_types x N_recurrent_types matrix
         allow_self_loops=True,  # Allow for feedforward connections
+        method="configuration",  # Ensures exact in-degree/out-degree distributions
     )
 
     # Assign log-normal weights to feedforward connectivity (no signs for conductance-based)

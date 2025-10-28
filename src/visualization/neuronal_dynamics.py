@@ -237,7 +237,7 @@ def plot_synaptic_currents(
             time_axis,
             I_exc_trace,
             linewidth=0.8,
-            color="#0000FF",
+            color="#FF0000",
             alpha=0.7,
             label="Excitatory",
         )
@@ -245,7 +245,7 @@ def plot_synaptic_currents(
             time_axis,
             I_inh_trace,
             linewidth=0.8,
-            color="#FF0000",
+            color="#0000FF",
             alpha=0.7,
             label="Inhibitory",
         )

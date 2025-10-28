@@ -130,6 +130,123 @@ def plot_weighted_connectivity(params: dict, output_dir: Path) -> None:
     plt.close()
 
 
+def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
+    """Plot histogram of input connection counts to each neuron, separated by presynaptic cell type.
+
+    Shows the distribution of number of incoming connections from each presynaptic cell type
+    (both recurrent and feedforward) across all postsynaptic neurons in the network.
+    No weights are considered, only connection counts.
+
+    Args:
+        params (dict): Parameters dictionary from TOML file
+        output_dir (Path): Directory containing simulation outputs
+    """
+    # Load data
+    weights = np.load(output_dir / "weights.npy")
+    feedforward_weights = np.load(output_dir / "feedforward_weights.npy")
+    cell_type_indices = np.load(output_dir / "cell_type_indices.npy")
+    input_cell_type_indices = np.load(output_dir / "input_cell_type_indices.npy")
+
+    # Extract cell type names
+    cell_type_names = params["recurrent"]["cell_types"]["names"]
+    input_cell_type_names = params["feedforward"]["cell_types"]["names"]
+
+    # Prepare data for histogram
+    unique_recurrent_types = np.unique(cell_type_indices)
+    unique_feedforward_types = np.unique(input_cell_type_indices)
+
+    input_counts_by_type = []
+    subplot_titles = []
+    colors = []
+
+    # Recurrent connections
+    for cell_type_idx in unique_recurrent_types:
+        mask = cell_type_indices == cell_type_idx
+        cell_type_name = cell_type_names[cell_type_idx]
+
+        # Count incoming connections (non-zero weights) from this cell type
+        input_counts = (weights[mask, :] != 0).sum(axis=0)
+        input_counts_by_type.append(input_counts)
+        subplot_titles.append(f"{cell_type_name}")
+
+        # Color: red for excitatory, blue for inhibitory
+        if "excit" in cell_type_name.lower():
+            colors.append("#FF0000")
+        else:
+            colors.append("#0000FF")
+
+    # Feedforward connections
+    for cell_type_idx in unique_feedforward_types:
+        mask = input_cell_type_indices == cell_type_idx
+        cell_type_name = input_cell_type_names[cell_type_idx]
+
+        # Count incoming connections from this cell type
+        # Only count inputs to excitatory postsynaptic neurons (exclude inhibitory at index 1)
+        excitatory_mask = cell_type_indices == 0
+        input_counts = (feedforward_weights[mask, :][:, excitatory_mask] != 0).sum(
+            axis=0
+        )
+        input_counts_by_type.append(input_counts)
+        subplot_titles.append(f"{cell_type_name}")
+        colors.append("#FF0000")  # Feedforward assumed excitatory
+
+    # Plot
+    n_types = len(input_counts_by_type)
+
+    # Calculate global max for shared x-axis
+    global_x_max = max([counts.max() for counts in input_counts_by_type])
+
+    # Create subplots (one per cell type)
+    fig, axes = plt.subplots(1, n_types, figsize=(6 * n_types, 4), sharey=True)
+    if n_types == 1:
+        axes = [axes]
+
+    # Calculate global y-max across all histograms
+    max_count = 0
+    for input_counts in input_counts_by_type:
+        counts, _ = np.histogram(input_counts, bins=20, range=(0, global_x_max))
+        max_count = max(max_count, counts.max())
+
+    # Plot each cell type
+    for i, (input_counts, title, color) in enumerate(
+        zip(input_counts_by_type, subplot_titles, colors)
+    ):
+        ax = axes[i]
+        mean_count = input_counts.mean()
+
+        ax.hist(
+            input_counts,
+            bins=20,
+            range=(0, global_x_max),
+            color=color,
+            edgecolor="black",
+            alpha=0.6,
+        )
+        ax.axvline(
+            mean_count,
+            color="black",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.6,
+            label=f"Mean = {mean_count:.1f}",
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Number of Inputs")
+        ax.set_xlim(0, global_x_max)
+        ax.set_ylim(0, max_count * 1.1)
+        ax.legend()
+
+    axes[0].set_ylabel("Number of Postsynaptic Neurons")
+    fig.suptitle(
+        "Input Connection Counts by Presynaptic Cell Type", fontsize=14, y=1.02
+    )
+    plt.tight_layout()
+    plt.savefig(
+        output_dir / "03_input_count_histogram.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+
 def plot_synaptic_input_histogram(params: dict, output_dir: Path) -> None:
     """Plot histogram of total synaptic input to each neuron, separated by presynaptic cell type.
 
@@ -181,7 +298,11 @@ def plot_synaptic_input_histogram(params: dict, output_dir: Path) -> None:
         total_g_bar = sum(g_bar_values)
 
         # Sum incoming weights and multiply by total g_bar
-        conductances = feedforward_weights[mask, :].sum(axis=0) * total_g_bar
+        # Only include inputs to excitatory postsynaptic neurons (exclude inhibitory at index 1)
+        excitatory_mask = cell_type_indices == 0
+        conductances = (
+            feedforward_weights[mask, :][:, excitatory_mask].sum(axis=0) * total_g_bar
+        )
         scaled_conductances_by_type.append(conductances)
         subplot_titles.append(f"Feedforward: {cell_type_name}")
 
@@ -236,7 +357,7 @@ def plot_synaptic_input_histogram(params: dict, output_dir: Path) -> None:
     fig.suptitle("Input Conductances by Presynaptic Cell Type", fontsize=14, y=1.02)
     plt.tight_layout()
     plt.savefig(
-        output_dir / "03_synaptic_input_histogram.png", dpi=300, bbox_inches="tight"
+        output_dir / "04_synaptic_input_histogram.png", dpi=300, bbox_inches="tight"
     )
     plt.close()
 
@@ -265,7 +386,7 @@ def plot_mitral_cell_spikes(params: dict, output_dir: Path) -> None:
     ax.set_yticks(range(n_neurons_plot))
     ax.set_xlim(0, duration * 1e-3 * fraction)
     plt.tight_layout()
-    plt.savefig(output_dir / "04_mitral_cell_spikes.png", dpi=300, bbox_inches="tight")
+    plt.savefig(output_dir / "05_mitral_cell_spikes.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -315,7 +436,7 @@ def plot_feedforward_connectivity(params: dict, output_dir: Path) -> None:
     ax.set_yticks([])
     plt.tight_layout()
     plt.savefig(
-        output_dir / "05_feedforward_connectivity.png", dpi=300, bbox_inches="tight"
+        output_dir / "06_feedforward_connectivity.png", dpi=300, bbox_inches="tight"
     )
     plt.close()
 
@@ -370,7 +491,7 @@ def plot_dp_network_spikes(params: dict, output_dir: Path) -> None:
     ax.set_yticks(range(n_neurons_plot))
     ax.set_xlim(0, duration * 1e-3 * fraction)
     plt.tight_layout()
-    plt.savefig(output_dir / "06_dp_network_spikes.png", dpi=300, bbox_inches="tight")
+    plt.savefig(output_dir / "07_dp_network_spikes.png", dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -462,7 +583,7 @@ def plot_firing_rate_distribution(params: dict, output_dir: Path) -> None:
     fig.suptitle("Firing Rate Distribution", fontsize=14, y=1.02)
     plt.tight_layout()
     plt.savefig(
-        output_dir / "07_firing_rate_distribution.png", dpi=300, bbox_inches="tight"
+        output_dir / "08_firing_rate_distribution.png", dpi=300, bbox_inches="tight"
     )
     plt.close()
 
@@ -507,7 +628,7 @@ def plot_membrane_voltages_wrapper(params: dict, output_dir: Path) -> None:
         neuron_params=neuron_params,
         n_neurons_plot=5,
         fraction=1,
-        save_path=str(output_dir / "08_membrane_voltages.png"),
+        save_path=str(output_dir / "09_membrane_voltages.png"),
     )
 
 
@@ -542,8 +663,8 @@ def plot_synaptic_currents_wrapper(params: dict, output_dir: Path) -> None:
 
     # Split into excitatory and inhibitory currents
     # Assuming index 0 = excitatory, index 1 = inhibitory
-    I_exc = output_currents[..., 0]
-    I_inh = output_currents[..., 1]
+    I_exc = -output_currents[..., 0] - output_currents[..., 1]
+    I_inh = -output_currents[..., 2]
 
     # Call the neuronal_dynamics function
     plot_synaptic_currents(
@@ -555,7 +676,7 @@ def plot_synaptic_currents_wrapper(params: dict, output_dir: Path) -> None:
         fraction=1.0,
         neuron_types=cell_type_indices,
         neuron_params=neuron_params,
-        save_path=str(output_dir / "09_synaptic_currents.png"),
+        save_path=str(output_dir / "10_synaptic_currents.png"),
     )
 
 
@@ -692,7 +813,7 @@ def plot_synaptic_conductances(params: dict, output_dir: Path) -> None:
     fig.suptitle(f"Synaptic Conductances (First {n_neurons_plot} Neurons)", fontsize=14)
     plt.tight_layout()
     plt.savefig(
-        output_dir / "10_synaptic_conductances.png", dpi=600, bbox_inches="tight"
+        output_dir / "11_synaptic_conductances.png", dpi=600, bbox_inches="tight"
     )
     plt.close()
 
@@ -721,6 +842,7 @@ def main(output_dir_path):
     # Network structure plots
     plot_assembly_graph(params, output_dir)
     plot_weighted_connectivity(params, output_dir)
+    plot_input_count_histogram(params, output_dir)
     plot_synaptic_input_histogram(params, output_dir)
 
     # Input analysis plots
