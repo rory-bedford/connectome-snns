@@ -97,14 +97,14 @@ def plot_membrane_voltages(
                     [spike_t, spike_t],
                     [threshold, 0],
                     color="black",
-                    linewidth=1.5,
+                    linewidth=0.5,
                     alpha=0.7,
                     zorder=5,
                 )
 
         # Create ylabel with cell type info
-        ylabel = f"U_{neuron_id} ({cell_name})"
-        axes[neuron_id].set_ylabel(ylabel, fontsize=8)
+        ylabel = f"Neuron {neuron_id} ({cell_name})\nVoltage (mV)"
+        axes[neuron_id].set_ylabel(ylabel, fontsize=9)
         axes[neuron_id].set_xlim(0, duration * 1e-3 * fraction)
         axes[neuron_id].set_ylim(y_min, y_max)
         axes[neuron_id].set_yticks(y_ticks)
@@ -121,7 +121,7 @@ def plot_membrane_voltages(
     )
     plt.tight_layout()
     if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=600, bbox_inches="tight")
         plt.close()
     else:
         plt.show()
@@ -135,6 +135,8 @@ def plot_synaptic_currents(
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
     show_total: bool = False,
+    neuron_types: Union[NDArray[np.int32], torch.Tensor, None] = None,
+    neuron_params: dict | None = None,
     figsize: tuple[float, float] = (12, 12),
     save_path: str | None = None,
 ) -> None:
@@ -149,6 +151,8 @@ def plot_synaptic_currents(
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         show_total (bool): Whether to show total current trace in grey. Defaults to False.
+        neuron_types (Union[NDArray[np.int32], torch.Tensor, None]): Array indicating neuron type indices. Defaults to None.
+        neuron_params (dict | None): Dictionary mapping cell type indices to parameters. Defaults to None.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
         save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
     """
@@ -157,21 +161,14 @@ def plot_synaptic_currents(
         I_exc = I_exc.detach().cpu().numpy()
     if isinstance(I_inh, torch.Tensor):
         I_inh = I_inh.detach().cpu().numpy()
+    if isinstance(neuron_types, torch.Tensor):
+        neuron_types = neuron_types.detach().cpu().numpy()
 
     n_steps = I_exc.shape[1]
     n_steps_plot = int(n_steps * fraction)
 
-    # Calculate max absolute value across all neurons for consistent scaling
-    max_current = 0
-    for neuron_id in range(n_neurons_plot):
-        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
-        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
-        max_current = max(
-            max_current, np.abs(I_exc_trace).max(), np.abs(I_inh_trace).max()
-        )
-
-    # Round up to nearest 0.1
-    y_lim = np.ceil(max_current / 0.1) * 0.1
+    # Fixed y-axis limits at ±1000 pA
+    y_lim = 1000.0
 
     fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
     time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
@@ -237,9 +234,15 @@ def plot_synaptic_currents(
             color="black",
         )
 
-        # Add units only to first ylabel
-        ylabel = "I_0 (pA)" if neuron_id == 0 else f"I_{neuron_id}"
-        axes[neuron_id].set_ylabel(ylabel, fontsize=8)
+        # Add ylabel with cell type info
+        cell_type_idx = neuron_types[neuron_id] if neuron_types is not None else None
+        if cell_type_idx is not None and neuron_params is not None:
+            cell_name = neuron_params[cell_type_idx]["name"]
+            ylabel = f"Neuron {neuron_id} ({cell_name})\nCurrent (pA)"
+        else:
+            ylabel = f"Neuron {neuron_id}\nCurrent (pA)"
+
+        axes[neuron_id].set_ylabel(ylabel, fontsize=9)
         axes[neuron_id].set_xlim(0, duration * 1e-3 * fraction)
         axes[neuron_id].set_ylim(-y_lim, y_lim)
         axes[neuron_id].grid(True, alpha=0.3)
@@ -254,7 +257,7 @@ def plot_synaptic_currents(
     )
     plt.tight_layout()
     if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=600, bbox_inches="tight")
         plt.close()
     else:
         plt.show()
