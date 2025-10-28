@@ -141,7 +141,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             tau_syn_FF = torch.stack(
                 (self.tau_rise_FF, self.tau_decay_FF), dim=0
             )  # Shape (2, n_synapse_types_FF)
-            alpha_FF = torch.exp(-dt / tau_syn_FF).T  # Shape (2, n_synapse_types_FF)
+            alpha_FF = torch.exp(-dt / tau_syn_FF)  # Shape (2, n_synapse_types_FF)
 
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
@@ -223,8 +223,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             v = v * (1 - s) + self.U_reset * s
 
             # Compute conductance updates
-            print(f"{g.shape=}")
-            print(f"{alpha.shape=}")
             g = (
                 g * alpha  # Decay with synapse time constant
                 + torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
@@ -236,8 +234,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             )
 
             if inputs is not None:
-                print(f"{g_FF.shape=}")
-                print(f"{alpha_FF.shape=}")
                 g_FF = (
                     g_FF * alpha_FF
                     + torch.einsum(
