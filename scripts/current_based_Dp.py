@@ -148,10 +148,6 @@ def main(output_dir, params_file):
         w_sigma_matrix=w_sigma,
     )
 
-    print(
-        f"weights.mean(): {weights.mean().item()}, weights.std(): {weights.std().item()}"
-    )
-
     # ===================================================
     # STEP 3: Create Feedforward Inputs from Mitral Cells
     # ===================================================
