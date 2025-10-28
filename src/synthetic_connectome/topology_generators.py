@@ -210,6 +210,7 @@ def assembly_generator(
         For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
         The "configuration" method uses configuration model for both within-assembly and between-assembly connections.
         For between-assembly connections, each source assembly connects to targets across all other assemblies.
+        Assemblies are made equal-sized; any remaining neurons are discarded.
     """
     assert method in ["erdos-renyi", "configuration"], (
         f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
@@ -217,6 +218,14 @@ def assembly_generator(
 
     n_source = len(source_cell_types)
     n_target = len(target_cell_types)
+
+    # Calculate equal assembly sizes
+    source_assembly_size = n_source // num_assemblies
+    target_assembly_size = n_target // num_assemblies
+
+    # Use only neurons that fit evenly into assemblies
+    n_source_used = source_assembly_size * num_assemblies
+    n_target_used = target_assembly_size * num_assemblies
 
     # Basic assertions
     assert num_assemblies <= min(n_source, n_target), (
@@ -237,37 +246,41 @@ def assembly_generator(
         f"target_cell_types max {target_cell_types.max()} exceeds conn_within columns {n_target_types}"
     )
 
-    # Create assembly assignments
-    assembly_assignments_source = np.array_split(np.arange(n_source), num_assemblies)
-    assembly_assignments_target = np.array_split(np.arange(n_target), num_assemblies)
+    # Create equal-sized assembly assignments
+    assembly_assignments_source = [
+        np.arange(i * source_assembly_size, (i + 1) * source_assembly_size)
+        for i in range(num_assemblies)
+    ]
+    assembly_assignments_target = [
+        np.arange(i * target_assembly_size, (i + 1) * target_assembly_size)
+        for i in range(num_assemblies)
+    ]
 
-    # Create assembly membership arrays
-    source_assembly_id = np.zeros(n_source, dtype=int)
-    target_assembly_id = np.zeros(n_target, dtype=int)
-
-    for assembly_id, (source_indices, target_indices) in enumerate(
-        zip(assembly_assignments_source, assembly_assignments_target)
-    ):
-        source_assembly_id[source_indices] = assembly_id
-        target_assembly_id[target_indices] = assembly_id
+    # Create assembly membership arrays (only for neurons in assemblies)
+    source_assembly_id = np.repeat(np.arange(num_assemblies), source_assembly_size)
+    target_assembly_id = np.repeat(np.arange(num_assemblies), target_assembly_size)
 
     # Create within-assembly mask using broadcasting
-    # Shape: (n_source, n_target)
+    # Shape: (n_source_used, n_target_used)
     within_assembly_mask = source_assembly_id[:, None] == target_assembly_id
 
     if method == "erdos-renyi":
         # Get probability matrices for all connections using advanced indexing
-        prob_within = conn_within_np[source_cell_types[:, None], target_cell_types]
-        prob_between = conn_between_np[source_cell_types[:, None], target_cell_types]
+        # Only use neurons that are in assemblies
+        source_types_used = source_cell_types[:n_source_used]
+        target_types_used = target_cell_types[:n_target_used]
+
+        prob_within = conn_within_np[source_types_used[:, None], target_types_used]
+        prob_between = conn_between_np[source_types_used[:, None], target_types_used]
 
         # Select appropriate probabilities based on assembly membership
         prob_matrix = np.where(within_assembly_mask, prob_within, prob_between)
 
         # Generate random matrix and compare to probabilities
-        adjacency = np.random.random((n_source, n_target)) < prob_matrix
+        adjacency = np.random.random((n_source_used, n_target_used)) < prob_matrix
 
     else:  # method == "configuration"
-        adjacency = np.zeros((n_source, n_target), dtype=bool)
+        adjacency = np.zeros((n_source_used, n_target_used), dtype=bool)
 
         # Process within-assembly connections using configuration model
         for assembly_id in range(num_assemblies):
@@ -301,9 +314,6 @@ def assembly_generator(
                 src_indices = assembly_assignments_source[src_assembly_id]
                 tgt_indices = assembly_assignments_target[tgt_assembly_id]
 
-                if len(src_indices) == 0 or len(tgt_indices) == 0:
-                    continue
-
                 # Get cell types for neurons in this source and target assembly pair
                 src_types = source_cell_types[src_indices]
                 tgt_types = target_cell_types[tgt_indices]
@@ -321,7 +331,7 @@ def assembly_generator(
                 adjacency[np.ix_(src_indices, tgt_indices)] = between_adjacency
 
     # Mask out self-loops if not allowed
-    if not allow_self_loops and n_source == n_target:
+    if not allow_self_loops and n_source_used == n_target_used:
         np.fill_diagonal(adjacency, False)
 
     return adjacency
