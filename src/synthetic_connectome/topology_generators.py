@@ -208,7 +208,8 @@ def assembly_generator(
 
     Note:
         For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
-        The "configuration" method uses configuration model within assemblies and Erdős-Rényi between assemblies.
+        The "configuration" method uses configuration model for both within-assembly and between-assembly connections.
+        For between-assembly connections, each source assembly connects to targets across all other assemblies.
     """
     assert method in ["erdos-renyi", "configuration"], (
         f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
@@ -273,14 +274,14 @@ def assembly_generator(
             src_indices = assembly_assignments_source[assembly_id]
             tgt_indices = assembly_assignments_target[assembly_id]
 
-            # Get cell types for this assembly
-            assembly_src_types = source_cell_types[src_indices]
-            assembly_tgt_types = target_cell_types[tgt_indices]
+            # Get cell types for neurons in this assembly
+            src_types = source_cell_types[src_indices]
+            tgt_types = target_cell_types[tgt_indices]
 
             # Use sparse_graph_generator with configuration method for this assembly
             assembly_adjacency = sparse_graph_generator(
-                assembly_src_types,
-                assembly_tgt_types,
+                src_types,
+                tgt_types,
                 conn_within,
                 allow_self_loops=allow_self_loops,
                 method="configuration",
@@ -289,14 +290,38 @@ def assembly_generator(
             # Map assembly adjacency back to global adjacency matrix
             adjacency[np.ix_(src_indices, tgt_indices)] = assembly_adjacency
 
-        # Process between-assembly connections using Erdős-Rényi
-        prob_between = conn_between_np[source_cell_types[:, None], target_cell_types]
-        between_assembly_mask = ~within_assembly_mask
+        # Process between-assembly connections using configuration model
+        # For each source assembly, connect to targets across all other assemblies
+        for src_assembly_id in range(num_assemblies):
+            src_indices = assembly_assignments_source[src_assembly_id]
 
-        # Generate random connections for between-assembly pairs
-        random_matrix = np.random.random((n_source, n_target))
-        between_connections = (random_matrix < prob_between) & between_assembly_mask
-        adjacency = adjacency | between_connections
+            # Get all target indices that are NOT in this source assembly
+            tgt_indices = np.concatenate(
+                [
+                    assembly_assignments_target[tgt_assembly_id]
+                    for tgt_assembly_id in range(num_assemblies)
+                    if tgt_assembly_id != src_assembly_id
+                ]
+            )
+
+            if len(tgt_indices) == 0:
+                continue
+
+            # Get cell types for source neurons in this assembly and all target neurons
+            src_types = source_cell_types[src_indices]
+            tgt_types = target_cell_types[tgt_indices]
+
+            # Use configuration model for between-assembly connections
+            between_adjacency = sparse_graph_generator(
+                src_types,
+                tgt_types,
+                conn_between,
+                allow_self_loops=False,  # Never allow self-loops between assemblies
+                method="configuration",
+            )
+
+            # Map between-assembly adjacency back to global adjacency matrix
+            adjacency[np.ix_(src_indices, tgt_indices)] = between_adjacency
 
     # Mask out self-loops if not allowed
     if not allow_self_loops and n_source == n_target:
