@@ -207,15 +207,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 else 0
             )
 
-            print(f"g.sum(dim=2): {g.sum(dim=2)}")  # Debugging line
-            print(f"g_FF.sum(dim=2): {g_FF.sum(dim=2)}")  # Debugging line
-            print(f"v[:, :, None]: {v[:, :, None]}")  # Debugging line
-            print(
-                f"self.E_syn[None, None, :]: {self.E_syn[None, None, :]}"
-            )  # Debugging line
-            print(f"I: {I}")  # Debugging line
-            print(f"I_FF: {I_FF}")  # Debugging line
-
             # Update membrane potentials (without reset)
             v = (
                 self.E_L  # Resting potential

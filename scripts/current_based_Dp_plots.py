@@ -415,8 +415,12 @@ def main(output_dir_path):
     )
 
     plot_synaptic_currents(
-        I_exc=output_I[..., 0],  # Slice for excitatory currents
-        I_inh=output_I[..., 1],  # Slice for inhibitory currents
+        I_exc=-output_I[
+            ..., 0
+        ],  # Negate excitatory currents (positive inward convention)
+        I_inh=-output_I[
+            ..., 1
+        ],  # Negate inhibitory currents (positive inward convention)
         delta_t=delta_t,
         duration=duration,
         n_neurons_plot=10,
