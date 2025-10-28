@@ -194,10 +194,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
             # Compute currents
             I = (
-                g.sum(dim=2) * (v[:, :, None] - self.E_syn[None, :])
+                g.sum(dim=2) * (v[:, :, None] - self.E_syn[None, None, :])
             )  # Conductance times driving force (conductance is difference of rise and decay here)
             I_FF = (
-                g_FF.sum(dim=2) * (v[:, :, None] - self.E_syn_FF[None, :])
+                g_FF.sum(dim=2) * (v[:, :, None] - self.E_syn_FF[None, None, :])
                 if inputs is not None
                 else 0
             )
