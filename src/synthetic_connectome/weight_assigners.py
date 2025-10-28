@@ -139,16 +139,22 @@ def assign_weights_lognormal(
             # Only compute stats for non-zero weights (actual connections)
             nonzero_weights = cell_type_weights[cell_type_weights != 0]
 
+            # Get the specified parameters for this cell type combination
+            specified_mu = w_mu_matrix[src_type, tgt_type]
+            specified_sigma = w_sigma_matrix[src_type, tgt_type]
+
             if len(nonzero_weights) > 0:
                 mean_weight = np.mean(nonzero_weights)
                 var_weight = np.var(nonzero_weights)
                 print(
                     f"Source type {src_type} → Target type {tgt_type}: "
-                    f"mean={mean_weight:.4f}, var={var_weight:.4f}, n_connections={len(nonzero_weights)}"
+                    f"mean={mean_weight:.4f}, var={var_weight:.4f}, n_connections={len(nonzero_weights)} "
+                    f"(specified: mu={specified_mu:.4f}, sigma={specified_sigma:.4f})"
                 )
             else:
                 print(
-                    f"Source type {src_type} → Target type {tgt_type}: No connections"
+                    f"Source type {src_type} → Target type {tgt_type}: No connections "
+                    f"(specified: mu={specified_mu:.4f}, sigma={specified_sigma:.4f})"
                 )
     print("=" * 38 + "\n")
 
