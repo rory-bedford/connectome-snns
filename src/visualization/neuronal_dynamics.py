@@ -51,8 +51,7 @@ def plot_membrane_voltages(
     y_max: float = 0.0,
     y_tick_step: float = 50.0,
     figsize: tuple[float, float] = (12, 12),
-    save_path: str | None = None,
-) -> None:
+) -> plt.Figure:
     """
     Visualize membrane voltage traces with spike markers.
 
@@ -70,7 +69,9 @@ def plot_membrane_voltages(
         y_max (float): Maximum y-axis value in mV. Defaults to 0.0.
         y_tick_step (float): Step size for y-axis ticks. Defaults to 50.0.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
-        save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
+
+    Returns:
+        plt.Figure: Matplotlib figure object containing the voltage traces.
     """
     # Convert PyTorch tensors to NumPy arrays if needed
     if isinstance(voltages, torch.Tensor):
@@ -150,11 +151,8 @@ def plot_membrane_voltages(
         f"Membrane Potential Traces (First {n_neurons_plot} Neurons)", fontsize=12
     )
     plt.tight_layout()
-    if save_path is not None:
-        plt.savefig(save_path, dpi=600, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+
+    return fig
 
 
 def plot_synaptic_currents(
@@ -168,8 +166,7 @@ def plot_synaptic_currents(
     neuron_types: Union[NDArray[np.int32], torch.Tensor, None] = None,
     neuron_params: dict | None = None,
     figsize: tuple[float, float] = (12, 12),
-    save_path: str | None = None,
-) -> None:
+) -> plt.Figure:
     """
     Visualize excitatory and inhibitory synaptic currents.
 
@@ -184,7 +181,9 @@ def plot_synaptic_currents(
         neuron_types (Union[NDArray[np.int32], torch.Tensor, None]): Array indicating neuron type indices. Defaults to None.
         neuron_params (dict | None): Dictionary mapping cell type indices to parameters. Defaults to None.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
-        save_path (str | None): Path to save the figure. If None, figure is not saved. Defaults to None.
+
+    Returns:
+        plt.Figure: Matplotlib figure object containing the current traces.
     """
     # Convert PyTorch tensors to NumPy arrays if needed
     if isinstance(I_exc, torch.Tensor):
@@ -294,8 +293,5 @@ def plot_synaptic_currents(
         f"Synaptic Current Inputs (First {n_neurons_plot} Neurons)", fontsize=12
     )
     plt.tight_layout()
-    if save_path is not None:
-        plt.savefig(save_path, dpi=600, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+
+    return fig
