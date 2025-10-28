@@ -223,6 +223,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             v = v * (1 - s) + self.U_reset * s
 
             # Compute conductance updates
+            print(f"{g.shape=}")
+            print(f"{alpha.shape=}")
             g = (
                 g * alpha  # Decay with synapse time constant
                 + torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
@@ -234,6 +236,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             )
 
             if inputs is not None:
+                print(f"{g_FF.shape=}")
+                print(f"{alpha_FF.shape=}")
                 g_FF = (
                     g_FF * alpha_FF
                     + torch.einsum(
