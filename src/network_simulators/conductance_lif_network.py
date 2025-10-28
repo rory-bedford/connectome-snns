@@ -213,8 +213,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             v = (
                 self.E_L  # Resting potential
                 + (v - self.E_L) * beta  # Leak
-                + I.sum(dim=2) * dt / self.C_m  # Recurrent current
-                + (
+                - I.sum(dim=2) * dt / self.C_m  # Recurrent current
+                - (
                     I_FF.sum(dim=2) * dt / self.C_m if inputs is not None else 0
                 )  # Feedforward current
             )
