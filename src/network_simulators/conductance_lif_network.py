@@ -240,7 +240,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
             all_I_FF[:, t, :, :] = I_FF
-            all_g[:, t, :, :] = g
-            all_g_FF[:, t, :, :] = g_FF
+            all_g[:, t, :, :] = g.sum(dim=2)
+            all_g_FF[:, t, :, :] = g_FF.sum(dim=2)
 
         return all_s, all_v, all_I, all_I_FF, all_g, all_g_FF
