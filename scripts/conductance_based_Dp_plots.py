@@ -21,6 +21,10 @@ from pathlib import Path
 import sys
 from visualization import plot_membrane_voltages, plot_synaptic_currents
 
+# Hardcode indices for plots
+excitatory = 0
+inhibitory = 1
+
 
 def plot_assembly_graph(
     connectivity_graph, cell_type_indices, num_assemblies, save_path
@@ -342,16 +346,10 @@ def main(output_dir_path):
     input_spikes = np.load(output_dir / "input_spikes.npy")
     output_spikes = np.load(output_dir / "output_spikes.npy")
     output_voltages = np.load(output_dir / "output_voltages.npy")
-    output_g = np.load(output_dir / "output_g.npy")  # Concatenated conductances
+    output_currents = np.load(output_dir / "output_currents.npy")
     neuron_types = np.load(output_dir / "neuron_types.npy")
     cell_type_indices = np.load(output_dir / "cell_type_indices.npy")
-
-    # Load input cell type indices if available (for feedforward plots)
-    try:
-        input_cell_type_indices = np.load(output_dir / "input_cell_type_indices.npy")
-    except FileNotFoundError:
-        # Assume all inputs are excitatory (type 0) if not found
-        input_cell_type_indices = np.zeros(input_spikes.shape[2], dtype=int)
+    input_cell_type_indices = np.load(output_dir / "input_cell_type_indices.npy")
 
     # Load parameters from the TOML file in the output directory
     params_file = output_dir / "parameters.toml"
@@ -448,8 +446,12 @@ def main(output_dir_path):
     )
 
     plot_synaptic_currents(
-        I_exc=output_g[..., 0],  # Slice for excitatory conductances
-        I_inh=output_g[..., 1],  # Slice for inhibitory conductances
+        I_exc=output_currents[
+            ..., excitatory
+        ],  # Excitatory currents from recurrent connections
+        I_inh=output_currents[
+            ..., inhibitory
+        ],  # Inhibitory currents from recurrent connections
         delta_t=delta_t,
         duration=duration,
         n_neurons_plot=10,

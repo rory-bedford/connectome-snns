@@ -311,10 +311,10 @@ def main(output_dir, params_file):
     np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
     np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
     np.save(output_dir / "output_currents.npy", output_currents.numpy())
-    np.save(output_dir / "output_currents_feedforward.npy", output_currents_FF.numpy())
+    np.save(output_dir / "input_currents.npy", output_currents_FF.numpy())
     np.save(output_dir / "output_conductances.npy", output_conductances.numpy())
     np.save(
-        output_dir / "output_conductances_feedforward.npy",
+        output_dir / "input_conductances.npy",
         output_conductances_FF.numpy(),
     )
 
