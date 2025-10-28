@@ -121,23 +121,6 @@ def sparse_graph_generator(
                     int
                 )
 
-                # Balance stubs for this cell type pair (may not be perfectly balanced due to rounding)
-                total_out = out_degrees.sum()
-                total_in = in_degrees.sum()
-
-                if total_out > total_in:
-                    deficit = total_out - total_in
-                    indices = np.random.choice(
-                        n_tgt, min(deficit, n_tgt), replace=False
-                    )
-                    in_degrees[indices] += 1
-                elif total_in > total_out:
-                    deficit = total_in - total_out
-                    indices = np.random.choice(
-                        n_src, min(deficit, n_src), replace=False
-                    )
-                    out_degrees[indices] += 1
-
                 # Create stub lists for this cell type pair
                 out_stubs = np.repeat(src_indices, out_degrees)
                 in_stubs = np.repeat(tgt_indices, in_degrees)
@@ -145,6 +128,11 @@ def sparse_graph_generator(
                 # Shuffle stubs
                 np.random.shuffle(out_stubs)
                 np.random.shuffle(in_stubs)
+
+                # Due to rounding, the number of stubs may not match
+                n_stubs = min(len(out_stubs), len(in_stubs))
+                out_stubs = out_stubs[:n_stubs]
+                in_stubs = in_stubs[:n_stubs]
 
                 # Match stubs - lengths are equal after balancing
                 adjacency[out_stubs, in_stubs] = True
