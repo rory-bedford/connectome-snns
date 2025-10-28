@@ -161,6 +161,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             )  # Shape (n_synapse_types_FF,)
             g_scale_FF /= norm_alpha_FF
 
+        print(f"{g_scale=}")
+        print(f"{g_scale_FF=}")
+
         # ==============
         # Run simulation
         # ==============
@@ -201,13 +204,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 if inputs is not None
                 else 0
             )
-            print(f"{I=}")
-            print(f"{I_FF=}")
-            print(f"{v=}")
-            print(f"{g=}")
-            print(f"{g_FF=}")
-            print(f"{self.E_syn=}")
-            print(f"{self.E_syn_FF=}")
 
             # Update membrane potentials (without reset)
             v = (
