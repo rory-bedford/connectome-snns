@@ -212,8 +212,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             print(f"{I_FF.shape=}")
             print(f"{self.E_syn.shape=}")
             print(f"{self.E_syn_FF.shape=}")
-            print(f"{g=}")
-            print(f"{g_FF=}")
+            print(f"{g[0,0,:,:]=}")
+            print(f"{g_FF[0,0,:,:]=}")
             driving_force = v[:, :, None] - self.E_syn[None, None, :]
             print(f"{driving_force=}")
             driving_force_FF = (
