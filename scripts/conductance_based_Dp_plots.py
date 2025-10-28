@@ -105,8 +105,8 @@ def plot_weighted_connectivity(weights, cell_type_indices, num_assemblies, save_
     im = ax.imshow(
         signed_weights[:plot_size_neurons, :plot_size_neurons],
         cmap="bwr",
-        vmin=-10,
-        vmax=10,
+        vmin=-1,
+        vmax=1,
         aspect="equal",
     )
 
@@ -115,8 +115,8 @@ def plot_weighted_connectivity(weights, cell_type_indices, num_assemblies, save_
     ax.set_position([pos.x0, pos.y0, pos.height, pos.height])
 
     # Add colorbar after positioning
-    cbar = plt.colorbar(im, ax=ax, ticks=[-10, -5, 0, 5, 10])
-    cbar.ax.set_yticklabels(["-10", "-5", "0", "+5", "+10"])
+    cbar = plt.colorbar(im, ax=ax, ticks=[-1, -0.5, 0, 0.5, 1])
+    cbar.ax.set_yticklabels(["-1", "-0.5", "0", "+0.5", "+1"])
 
     ax.set_title(
         f"Weighted Connectivity Matrix (showing {plot_num_assemblies}/{num_assemblies} assemblies)"
@@ -128,37 +128,68 @@ def plot_weighted_connectivity(weights, cell_type_indices, num_assemblies, save_
     plt.close()
 
 
-def plot_synaptic_input_histogram(weights, cell_type_indices, save_path):
-    """Plot histogram of total synaptic input to each neuron.
+def plot_synaptic_input_histogram(
+    scaled_conductances_by_type, subplot_titles, save_path
+):
+    """Plot histogram of total synaptic input to each neuron, separated by presynaptic cell type.
+
+    Shows the distribution of input conductances from each presynaptic cell type
+    (both recurrent and feedforward) across all postsynaptic neurons in the network.
 
     Args:
-        weights (np.ndarray): Weighted connectivity matrix
-        cell_type_indices (np.ndarray): Cell type indices (0=excitatory, 1=inhibitory)
+        scaled_conductances_by_type (list[np.ndarray]): List of conductance arrays per cell type
+        subplot_titles (list[str]): Titles for each subplot
         save_path (Path): Path to save the plot
     """
-    # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
-    cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
-    signed_weights = weights * cell_type_signs[:, np.newaxis]
+    n_types = len(scaled_conductances_by_type)
 
-    synaptic_inputs = signed_weights.sum(axis=0)
-    mean_input = synaptic_inputs.mean()
+    # Calculate global min/max for shared axes (excluding zeros)
+    all_positive = np.concatenate([c[c > 0] for c in scaled_conductances_by_type])
+    global_x_min = all_positive.min() if len(all_positive) > 0 else 1e-3
+    global_x_max = all_positive.max() if len(all_positive) > 0 else 1.0
 
-    fig, ax = plt.subplots()
-    ax.hist(
-        synaptic_inputs, bins=20, color="#0000FF", edgecolor="black", alpha=0.6
-    )  # Blue from bwr colormap
-    ax.axvline(
-        mean_input,
-        color="#FF0000",
-        linestyle="--",
-        linewidth=2,
-        alpha=0.6,
-        label=f"Mean = {mean_input:.2f}",
-    )  # Red from bwr
-    ax.set_title("Histogram of Total Synaptic Input to Each Neuron")
-    ax.set_xlabel("Total Synaptic Input")
-    ax.set_ylabel("Number of Neurons")
-    ax.legend()
+    # Create logarithmically-spaced bins
+    log_bins = np.logspace(np.log10(global_x_min), np.log10(global_x_max), 21)
+
+    # Create subplots (one per cell type)
+    fig, axes = plt.subplots(1, n_types, figsize=(6 * n_types, 4), sharey=True)
+    if n_types == 1:
+        axes = [axes]
+
+    # Calculate global y-max across all histograms
+    max_count = 0
+    for conductances in scaled_conductances_by_type:
+        counts, _ = np.histogram(conductances, bins=log_bins)
+        max_count = max(max_count, counts.max())
+
+    # Plot each cell type
+    for i, (conductances, title) in enumerate(
+        zip(scaled_conductances_by_type, subplot_titles)
+    ):
+        ax = axes[i]
+        mean_conductance = conductances.mean()
+
+        ax.hist(
+            conductances, bins=log_bins, color="#0000FF", edgecolor="black", alpha=0.6
+        )
+        ax.axvline(
+            mean_conductance,
+            color="#FF0000",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.6,
+            label=f"Mean = {mean_conductance:.2f} nS",
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Conductance (nS)")
+        ax.set_xscale("log")
+        ax.set_xlim(global_x_min, global_x_max)
+        ax.set_ylim(0, max_count * 1.1)
+        ax.legend()
+
+    axes[0].set_ylabel("Number of Postsynaptic Neurons")
+    fig.suptitle("Input Conductances by Presynaptic Cell Type", fontsize=14, y=1.02)
+    plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
 
@@ -368,6 +399,9 @@ def main(output_dir_path):
     # Extract neuron parameters for plotting
     cell_type_names = params["recurrent"]["cell_types"]["names"]
 
+    # Extract input cell type names
+    input_cell_type_names = params["feedforward"]["cell_types"]["names"]
+
     # Infer signs from cell type names (excitatory=+1, inhibitory=-1)
     cell_type_signs = [
         1 if "excitatory" in name.lower() else -1 for name in cell_type_names
@@ -401,8 +435,46 @@ def main(output_dir_path):
         num_assemblies,
         output_dir / "02_weighted_connectivity.png",
     )
+
+    # Prepare data for synaptic input histogram
+    unique_recurrent_types = np.unique(cell_type_indices)
+    unique_feedforward_types = np.unique(input_cell_type_indices)
+
+    scaled_conductances_by_type = []
+    subplot_titles = []
+
+    # Recurrent connections
+    for cell_type_idx in unique_recurrent_types:
+        mask = cell_type_indices == cell_type_idx
+        cell_type_name = cell_type_names[cell_type_idx]
+
+        # Get g_bar values for this cell type and sum them
+        g_bar_values = params["recurrent"]["synapses"][cell_type_name]["g_bar"]
+        total_g_bar = sum(g_bar_values)
+
+        # Sum incoming weights and multiply by total g_bar
+        conductances = weights[mask, :].sum(axis=0) * total_g_bar
+        scaled_conductances_by_type.append(conductances)
+        subplot_titles.append(f"Recurrent: {cell_type_name}")
+
+    # Feedforward connections
+    for cell_type_idx in unique_feedforward_types:
+        mask = input_cell_type_indices == cell_type_idx
+        cell_type_name = input_cell_type_names[cell_type_idx]
+
+        # Get g_bar values for this cell type and sum them
+        g_bar_values = params["feedforward"]["synapses"][cell_type_name]["g_bar"]
+        total_g_bar = sum(g_bar_values)
+
+        # Sum incoming weights and multiply by total g_bar
+        conductances = feedforward_weights[mask, :].sum(axis=0) * total_g_bar
+        scaled_conductances_by_type.append(conductances)
+        subplot_titles.append(f"Feedforward: {cell_type_name}")
+
     plot_synaptic_input_histogram(
-        weights, cell_type_indices, output_dir / "03_synaptic_input_histogram.png"
+        scaled_conductances_by_type,
+        subplot_titles,
+        output_dir / "03_synaptic_input_histogram.png",
     )
 
     # Input analysis plots
