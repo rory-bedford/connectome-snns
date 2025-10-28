@@ -18,13 +18,6 @@ def compute_spike_train_cv(spike_trains: torch.Tensor, dt: float = 1.0) -> torch
     Returns:
         torch.Tensor: CV values of shape (batch_size, n_neurons).
             Returns NaN for neurons with fewer than 2 spikes.
-
-    Example:
-        >>> spike_trains = torch.zeros(2, 1000, 50)  # 2 batches, 1000 steps, 50 neurons
-        >>> spike_trains[0, [10, 25, 60], 0] = 1  # Add some spikes to neuron 0
-        >>> cv = compute_spike_train_cv(spike_trains, dt=0.1)
-        >>> print(cv.shape)
-        torch.Size([2, 50])
     """
     batch_size, n_steps, n_neurons = spike_trains.shape
     device = spike_trains.device
@@ -57,3 +50,55 @@ def compute_spike_train_cv(spike_trains: torch.Tensor, dt: float = 1.0) -> torch
                 cv_values[batch_idx, neuron_idx] = std_isi / mean_isi
 
     return cv_values
+
+
+def compute_spike_train_fano_factor(
+    spike_trains: torch.Tensor, window_size: int
+) -> torch.Tensor:
+    """
+    Compute Fano factor for spike trains for each neuron.
+
+    The Fano factor is computed as the variance of spike counts divided by the
+    mean spike count across time windows. Fano factor is computed separately
+    for each neuron in each batch.
+
+    Args:
+        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        window_size (int): Size of the time window (in steps) for counting spikes.
+
+    Returns:
+        torch.Tensor: Fano factor values of shape (batch_size, n_neurons).
+            Returns NaN for neurons with zero mean spike count.
+    """
+    batch_size, n_steps, n_neurons = spike_trains.shape
+    device = spike_trains.device
+
+    # Initialize Fano factor values with NaN
+    fano_values = torch.full((batch_size, n_neurons), float("nan"), device=device)
+
+    # Calculate number of complete windows
+    n_windows = n_steps // window_size
+
+    if n_windows < 1:
+        return fano_values
+
+    for batch_idx in range(batch_size):
+        for neuron_idx in range(n_neurons):
+            # Extract spike train for this neuron
+            neuron_spikes = spike_trains[
+                batch_idx, : n_windows * window_size, neuron_idx
+            ]
+
+            # Reshape into windows and count spikes per window
+            # Shape: (n_windows, window_size) -> (n_windows,)
+            spike_counts = (
+                neuron_spikes.reshape(n_windows, window_size).sum(dim=1).float()
+            )
+
+            # Compute Fano factor = var(spike_counts) / mean(spike_counts)
+            mean_count = spike_counts.mean()
+            if mean_count > 0:
+                var_count = spike_counts.var(unbiased=True)
+                fano_values[batch_idx, neuron_idx] = var_count / mean_count
+
+    return fano_values
