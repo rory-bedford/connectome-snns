@@ -168,9 +168,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             norm_factor_FF = norm_peak_FF / (self.tau_decay_FF - self.tau_rise_FF)
             g_scale_FF /= norm_factor_FF
 
-        print(f"{g_scale=}")
-        print(f"{g_scale_FF=}")
-
         # ==============
         # Run simulation
         # ==============
