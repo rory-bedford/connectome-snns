@@ -154,8 +154,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         norm_peak = (self.tau_decay / self.tau_rise) ** (
             self.tau_rise / (self.tau_decay - self.tau_rise)
         )
-        norm_factor = norm_peak / (self.tau_decay - self.tau_rise)
-        g_scale /= norm_factor
+        g_scale /= norm_peak
 
         if inputs is not None:
             g_scale_FF = torch.stack(
@@ -165,8 +164,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             norm_peak_FF = (self.tau_decay_FF / self.tau_rise_FF) ** (
                 self.tau_rise_FF / (self.tau_decay_FF - self.tau_rise_FF)
             )
-            norm_factor_FF = norm_peak_FF / (self.tau_decay_FF - self.tau_rise_FF)
-            g_scale_FF /= norm_factor_FF
+            g_scale_FF /= norm_peak_FF
 
         # ==============
         # Run simulation
