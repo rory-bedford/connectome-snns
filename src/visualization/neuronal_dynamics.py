@@ -115,7 +115,6 @@ def plot_membrane_voltages(
             axes[neuron_id].legend(loc="upper right", fontsize=7)
 
     axes[-1].set_xlabel("Time (s)")
-    axes[0].set_ylabel("U_0 (mV)", fontsize=8)  # Add unit to first ylabel only
     fig.suptitle(
         f"Membrane Potential Traces (First {n_neurons_plot} Neurons)", fontsize=12
     )

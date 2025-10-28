@@ -208,6 +208,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 if inputs is not None
                 else 0
             )
+            print(f"{I.shape=}")
+            print(f"{I_FF.shape=}")
 
             # Update membrane potentials (without reset)
             v = (
