@@ -282,7 +282,14 @@ def main(output_dir, params_file):
 
     # Run inference
     with torch.inference_mode():
-        output_spikes, output_voltages, output_g, output_g_FF = model.forward(
+        (
+            output_spikes,
+            output_voltages,
+            output_currents,
+            output_currents_FF,
+            output_conductances,
+            output_conductances_FF,
+        ) = model.forward(
             n_steps=n_steps,
             dt=dt,
             inputs=input_spikes,
@@ -291,8 +298,10 @@ def main(output_dir, params_file):
     # Move tensors to CPU for further processing and saving
     output_spikes = output_spikes.cpu()
     output_voltages = output_voltages.cpu()
-    output_g = output_g.cpu()
-    output_g_FF = output_g_FF.cpu()
+    output_currents = output_currents.cpu()
+    output_currents_FF = output_currents_FF.cpu()
+    output_conductances = output_conductances.cpu()
+    output_conductances_FF = output_conductances_FF.cpu()
 
     # ============================================
     # STEP 5: Save Output Data for Further Analysis
@@ -301,8 +310,13 @@ def main(output_dir, params_file):
     # Save output arrays
     np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
     np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
-    np.save(output_dir / "output_g.npy", output_g.numpy())
-    np.save(output_dir / "output_g_FF.npy", output_g_FF.numpy())
+    np.save(output_dir / "output_currents.npy", output_currents.numpy())
+    np.save(output_dir / "output_currents_feedforward.npy", output_currents_FF.numpy())
+    np.save(output_dir / "output_conductances.npy", output_conductances.numpy())
+    np.save(
+        output_dir / "output_conductances_feedforward.npy",
+        output_conductances_FF.numpy(),
+    )
 
     # Save input data and network structure
     np.save(output_dir / "input_spikes.npy", input_spikes)

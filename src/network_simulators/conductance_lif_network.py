@@ -96,6 +96,20 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             device=self.device,
         )
 
+        # Synaptic conductance storage (batch_size, n_steps, n_neurons, n_synapse_types)
+        all_g = torch.zeros(
+            (batch_size, n_steps, self.n_neurons, self.n_synapse_types),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        # Feedforward synaptic conductance storage (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+        all_g_FF = torch.zeros(
+            (batch_size, n_steps, self.n_neurons, self.n_synapse_types_FF),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
         # Synaptic input current storage (batch_size, n_steps, n_neurons, n_synapse_types)
         all_I = torch.zeros(
             (batch_size, n_steps, self.n_neurons, self.n_synapse_types),
@@ -226,5 +240,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
             all_I_FF[:, t, :, :] = I_FF
+            all_g[:, t, :, :] = g.sum(dim=2)
+            all_g_FF[:, t, :, :] = g_FF.sum(dim=2)
 
-        return all_s, all_v, all_I, all_I_FF
+        return all_s, all_v, all_I, all_I_FF, all_g, all_g_FF

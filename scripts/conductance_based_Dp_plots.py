@@ -365,25 +365,25 @@ def main(output_dir_path):
     # Extract needed parameters
     delta_t = params["simulation"]["dt"]
     duration = params["simulation"]["duration"]
-    num_assemblies = int(params["connectome"]["topology"]["num_assemblies"])
+    num_assemblies = int(params["recurrent"]["topology"]["num_assemblies"])
 
     # Extract neuron parameters for plotting
-    cell_type_names = params["connectome"]["cell_types"]["names"]
-    cell_type_signs = params["connectome"]["cell_types"]["signs"]
+    cell_type_names = params["recurrent"]["cell_types"]["names"]
+
+    # Infer signs from cell type names (excitatory=+1, inhibitory=-1)
+    cell_type_signs = [
+        1 if "excitatory" in name.lower() else -1 for name in cell_type_names
+    ]
 
     # Extract LIF parameters for each cell type
     neuron_params = {}
     for i, name in enumerate(cell_type_names):
         sign = cell_type_signs[i]
         neuron_params[i] = {  # Use integer keys to match cell_type_idx
-            "tau_mem": params["physiology"][name]["tau_mem"],
-            "tau_syn": params["physiology"][name]["tau_syn"],
-            "R": params["physiology"][name]["R"],
-            "rest": params["physiology"][name]["U_rest"],  # Updated to match 'rest'
-            "threshold": params["physiology"][name][
-                "theta"
-            ],  # Updated to match 'threshold'
-            "reset": params["physiology"][name]["U_reset"],  # Updated to match 'reset'
+            "tau_mem": params["recurrent"]["physiology"][name]["tau_mem"],
+            "rest": params["recurrent"]["physiology"][name]["E_L"],
+            "threshold": params["recurrent"]["physiology"][name]["theta"],
+            "reset": params["recurrent"]["physiology"][name]["U_reset"],
             "name": name,
             "sign": sign,
         }
