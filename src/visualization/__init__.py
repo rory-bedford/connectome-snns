@@ -1,7 +1,7 @@
 """Visualization utilities for connectome-constrained SNN models."""
 
 from .neuronal_dynamics import plot_membrane_voltages, plot_synaptic_currents
-from .network_plots import (
+from .connectivity import (
     plot_assembly_graph,
     plot_weighted_connectivity,
     plot_input_count_histogram,

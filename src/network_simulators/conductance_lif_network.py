@@ -1,5 +1,4 @@
 """Defines a straightforward simulator of recurrent current-based LIF network"""
-# ruff: noqa
 
 import numpy as np
 import torch
