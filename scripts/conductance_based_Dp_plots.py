@@ -131,11 +131,13 @@ def plot_weighted_connectivity(params: dict, output_dir: Path) -> None:
 
 
 def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
-    """Plot histogram of input connection counts to each neuron, separated by presynaptic cell type.
+    """Plot histogram of input connection counts split by input and output cell types.
 
-    Shows the distribution of number of incoming connections from each presynaptic cell type
-    (both recurrent and feedforward) across all postsynaptic neurons in the network.
-    No weights are considered, only connection counts.
+    Creates a 2D grid of histograms where:
+    - Y-axis (rows): Input (presynaptic) cell types
+    - X-axis (columns): Output (postsynaptic) cell types
+    Each subplot shows the distribution of connection counts from a specific
+    input type to a specific output type.
 
     Args:
         params (dict): Parameters dictionary from TOML file
@@ -151,100 +153,158 @@ def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
     cell_type_names = params["recurrent"]["cell_types"]["names"]
     input_cell_type_names = params["feedforward"]["cell_types"]["names"]
 
-    # Prepare data for histogram
+    # Get unique types
     unique_recurrent_types = np.unique(cell_type_indices)
     unique_feedforward_types = np.unique(input_cell_type_indices)
+    unique_output_types = np.unique(cell_type_indices)
 
-    input_counts_by_type = []
-    subplot_titles = []
-    colors = []
+    # Combine all input types (recurrent + feedforward)
+    all_input_types = []
+    all_input_names = []
 
-    # Recurrent connections
     for cell_type_idx in unique_recurrent_types:
-        mask = cell_type_indices == cell_type_idx
-        cell_type_name = cell_type_names[cell_type_idx]
+        all_input_types.append(("recurrent", cell_type_idx))
+        all_input_names.append(cell_type_names[cell_type_idx])
 
-        # Count incoming connections (non-zero weights) from this cell type
-        input_counts = (weights[mask, :] != 0).sum(axis=0)
-        input_counts_by_type.append(input_counts)
-        subplot_titles.append(f"{cell_type_name}")
-
-        # Color: red for excitatory, blue for inhibitory
-        if "excit" in cell_type_name.lower():
-            colors.append("#FF0000")
-        else:
-            colors.append("#0000FF")
-
-    # Feedforward connections
     for cell_type_idx in unique_feedforward_types:
-        mask = input_cell_type_indices == cell_type_idx
-        cell_type_name = input_cell_type_names[cell_type_idx]
+        all_input_types.append(("feedforward", cell_type_idx))
+        all_input_names.append(input_cell_type_names[cell_type_idx])
 
-        # Count incoming connections from this cell type
-        # Only count inputs to excitatory postsynaptic neurons (exclude inhibitory at index 1)
-        excitatory_mask = cell_type_indices == 0
-        input_counts = (feedforward_weights[mask, :][:, excitatory_mask] != 0).sum(
-            axis=0
-        )
-        input_counts_by_type.append(input_counts)
-        subplot_titles.append(f"{cell_type_name}")
-        colors.append("#FF0000")  # Feedforward assumed excitatory
+    n_input_types = len(all_input_types)
+    n_output_types = len(unique_output_types)
 
-    # Plot
-    n_types = len(input_counts_by_type)
+    # Compute all input counts for each (input_type, output_type) pair
+    input_counts_grid = {}
+    for i, (input_source, input_idx) in enumerate(all_input_types):
+        for j, output_idx in enumerate(unique_output_types):
+            output_mask = cell_type_indices == output_idx
+
+            if input_source == "recurrent":
+                input_mask = cell_type_indices == input_idx
+                counts = (weights[input_mask, :][:, output_mask] != 0).sum(axis=0)
+            else:  # feedforward
+                input_mask = input_cell_type_indices == input_idx
+                counts = (feedforward_weights[input_mask, :][:, output_mask] != 0).sum(
+                    axis=0
+                )
+
+            input_counts_grid[(i, j)] = counts
 
     # Calculate global max for shared x-axis
-    global_x_max = max([counts.max() for counts in input_counts_by_type])
+    global_x_max = max(
+        [counts.max() for counts in input_counts_grid.values() if len(counts) > 0]
+    )
 
     # Create bins of size 1
     bins = (
         np.arange(0, global_x_max + 2) - 0.5
     )  # Offset by 0.5 to center bins on integers
 
-    # Create subplots (one per cell type)
-    fig, axes = plt.subplots(1, n_types, figsize=(6 * n_types, 4), sharey=True)
-    if n_types == 1:
-        axes = [axes]
-
     # Calculate global y-max across all histograms
     max_count = 0
-    for input_counts in input_counts_by_type:
-        counts, _ = np.histogram(input_counts, bins=bins)
-        max_count = max(max_count, counts.max())
+    for counts in input_counts_grid.values():
+        if len(counts) > 0:
+            hist_counts, _ = np.histogram(counts, bins=bins)
+            max_count = max(max_count, hist_counts.max())
 
-    # Plot each cell type
-    for i, (input_counts, title, color) in enumerate(
-        zip(input_counts_by_type, subplot_titles, colors)
-    ):
-        ax = axes[i]
-        mean_count = input_counts.mean()
-
-        ax.hist(
-            input_counts,
-            bins=bins,
-            color=color,
-            edgecolor="black",
-            alpha=0.6,
-        )
-        ax.axvline(
-            mean_count,
-            color="black",
-            linestyle="--",
-            linewidth=2,
-            alpha=0.6,
-            label=f"Mean = {mean_count:.1f}",
-        )
-        ax.set_title(title)
-        ax.set_xlabel("Number of Inputs")
-        ax.set_xlim(0, global_x_max)
-        ax.set_ylim(0, max_count * 1.1)
-        ax.legend()
-
-    axes[0].set_ylabel("Number of Postsynaptic Neurons")
-    fig.suptitle(
-        "Input Connection Counts by Presynaptic Cell Type", fontsize=14, y=1.02
+    # Create 2D grid of subplots
+    fig, axes = plt.subplots(
+        n_input_types,
+        n_output_types,
+        figsize=(4 * n_output_types, 3 * n_input_types),
+        sharex=True,
+        sharey=True,
     )
-    plt.tight_layout()
+
+    # Ensure axes is always 2D
+    if n_input_types == 1 and n_output_types == 1:
+        axes = np.array([[axes]])
+    elif n_input_types == 1:
+        axes = axes.reshape(1, -1)
+    elif n_output_types == 1:
+        axes = axes.reshape(-1, 1)
+
+    # Plot each (input, output) pair
+    for i in range(n_input_types):
+        for j in range(n_output_types):
+            ax = axes[i, j]
+            counts = input_counts_grid[(i, j)]
+
+            if len(counts) > 0:
+                mean_count = counts.mean()
+
+                # Color based on input type
+                input_source, input_idx = all_input_types[i]
+                if input_source == "recurrent":
+                    cell_name = cell_type_names[input_idx]
+                    color = "#FF0000" if "excit" in cell_name.lower() else "#0000FF"
+                else:
+                    color = "#FF0000"  # Feedforward assumed excitatory
+
+                ax.hist(
+                    counts,
+                    bins=bins,
+                    color=color,
+                    edgecolor="black",
+                    alpha=0.6,
+                )
+                ax.axvline(
+                    mean_count,
+                    color="black",
+                    linestyle="--",
+                    linewidth=2,
+                    alpha=0.6,
+                )
+
+                # Add mean as text annotation
+                ax.text(
+                    0.95,
+                    0.95,
+                    f"μ={mean_count:.1f}",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7),
+                )
+
+            ax.set_xlim(0, global_x_max)
+            ax.set_ylim(0, max_count * 1.1)
+            ax.grid(True, alpha=0.3)
+
+            # Add titles only to top row and left column
+            if i == 0:
+                ax.set_title(
+                    cell_type_names[unique_output_types[j]], fontsize=10, pad=10
+                )
+            if j == 0:
+                ax.set_ylabel(all_input_names[i], fontsize=10)
+
+    # Add shared axis labels with proper spacing
+    fig.text(0.5, 0.04, "Number of Inputs", ha="center", fontsize=12)
+    # Calculate center position of the actual plot area (between left=0.14 and right=0.98)
+    plot_center_x = 0.14 + (0.98 - 0.14) / 2
+    fig.text(
+        plot_center_x, 0.92, "Output (Postsynaptic) Cell Type", ha="center", fontsize=12
+    )
+
+    # Add row label
+    fig.text(
+        0.01,
+        0.5,
+        "Input (Presynaptic) Cell Type",
+        va="center",
+        rotation="vertical",
+        fontsize=12,
+    )
+
+    fig.suptitle(
+        "Input Connection Counts by Cell Type", fontsize=14, x=plot_center_x, y=0.97
+    )
+
+    plt.subplots_adjust(
+        left=0.14, right=0.98, top=0.88, bottom=0.10, hspace=0.3, wspace=0.3
+    )
     plt.savefig(
         output_dir / "03_input_count_histogram.png", dpi=300, bbox_inches="tight"
     )
