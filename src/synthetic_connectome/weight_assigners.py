@@ -125,7 +125,34 @@ def assign_weights_lognormal(
     else:
         weights = weight_magnitudes
 
-    return weights * connectivity_graph
+    final_weights = weights * connectivity_graph
+
+    # Debug: Print statistics for each cell type combination
+    print("\n=== Weight Statistics by Cell Type ===")
+    for src_type in range(n_source_types):
+        for tgt_type in range(n_target_types):
+            # Get mask for this cell type combination
+            src_mask = source_cell_indices == src_type
+            tgt_mask = target_cell_indices == tgt_type
+            cell_type_weights = final_weights[src_mask][:, tgt_mask]
+
+            # Only compute stats for non-zero weights (actual connections)
+            nonzero_weights = cell_type_weights[cell_type_weights != 0]
+
+            if len(nonzero_weights) > 0:
+                mean_weight = np.mean(nonzero_weights)
+                var_weight = np.var(nonzero_weights)
+                print(
+                    f"Source type {src_type} → Target type {tgt_type}: "
+                    f"mean={mean_weight:.4f}, var={var_weight:.4f}, n_connections={len(nonzero_weights)}"
+                )
+            else:
+                print(
+                    f"Source type {src_type} → Target type {tgt_type}: No connections"
+                )
+    print("=" * 38 + "\n")
+
+    return final_weights
 
 
 def assign_weights_gamma(
