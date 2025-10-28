@@ -210,6 +210,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             )
             print(f"{I.shape=}")
             print(f"{I_FF.shape=}")
+            print(f"{self.E_syn.shape=}")
+            print(f"{self.E_syn_FF.shape=}")
 
             # Update membrane potentials (without reset)
             v = (
