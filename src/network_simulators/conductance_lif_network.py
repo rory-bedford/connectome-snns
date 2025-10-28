@@ -212,6 +212,16 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             print(f"{I_FF.shape=}")
             print(f"{self.E_syn.shape=}")
             print(f"{self.E_syn_FF.shape=}")
+            print(f"{g=}")
+            print(f"{g_FF=}")
+            driving_force = v[:, :, None] - self.E_syn[None, None, :]
+            print(f"{driving_force=}")
+            driving_force_FF = (
+                v[:, :, None] - self.E_syn_FF[None, None, :]
+                if inputs is not None
+                else 0
+            )
+            print(f"{driving_force_FF=}")
 
             # Update membrane potentials (without reset)
             v = (
