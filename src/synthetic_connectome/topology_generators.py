@@ -291,37 +291,34 @@ def assembly_generator(
             adjacency[np.ix_(src_indices, tgt_indices)] = assembly_adjacency
 
         # Process between-assembly connections using configuration model
-        # For each source assembly, connect to targets across all other assemblies
+        # Loop over all pairs of source and target assemblies
         for src_assembly_id in range(num_assemblies):
-            src_indices = assembly_assignments_source[src_assembly_id]
+            for tgt_assembly_id in range(num_assemblies):
+                # Skip within-assembly connections (already handled above)
+                if src_assembly_id == tgt_assembly_id:
+                    continue
 
-            # Get all target indices that are NOT in this source assembly
-            tgt_indices = np.concatenate(
-                [
-                    assembly_assignments_target[tgt_assembly_id]
-                    for tgt_assembly_id in range(num_assemblies)
-                    if tgt_assembly_id != src_assembly_id
-                ]
-            )
+                src_indices = assembly_assignments_source[src_assembly_id]
+                tgt_indices = assembly_assignments_target[tgt_assembly_id]
 
-            if len(tgt_indices) == 0:
-                continue
+                if len(src_indices) == 0 or len(tgt_indices) == 0:
+                    continue
 
-            # Get cell types for source neurons in this assembly and all target neurons
-            src_types = source_cell_types[src_indices]
-            tgt_types = target_cell_types[tgt_indices]
+                # Get cell types for neurons in this source and target assembly pair
+                src_types = source_cell_types[src_indices]
+                tgt_types = target_cell_types[tgt_indices]
 
-            # Use configuration model for between-assembly connections
-            between_adjacency = sparse_graph_generator(
-                src_types,
-                tgt_types,
-                conn_between,
-                allow_self_loops=False,  # Never allow self-loops between assemblies
-                method="configuration",
-            )
+                # Use configuration model for between-assembly connections
+                between_adjacency = sparse_graph_generator(
+                    src_types,
+                    tgt_types,
+                    conn_between,
+                    allow_self_loops=False,  # Never allow self-loops between assemblies
+                    method="configuration",
+                )
 
-            # Map between-assembly adjacency back to global adjacency matrix
-            adjacency[np.ix_(src_indices, tgt_indices)] = between_adjacency
+                # Map between-assembly adjacency back to global adjacency matrix
+                adjacency[np.ix_(src_indices, tgt_indices)] = between_adjacency
 
     # Mask out self-loops if not allowed
     if not allow_self_loops and n_source == n_target:

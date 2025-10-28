@@ -196,6 +196,11 @@ def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
     # Calculate global max for shared x-axis
     global_x_max = max([counts.max() for counts in input_counts_by_type])
 
+    # Create bins of size 1
+    bins = (
+        np.arange(0, global_x_max + 2) - 0.5
+    )  # Offset by 0.5 to center bins on integers
+
     # Create subplots (one per cell type)
     fig, axes = plt.subplots(1, n_types, figsize=(6 * n_types, 4), sharey=True)
     if n_types == 1:
@@ -204,7 +209,7 @@ def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
     # Calculate global y-max across all histograms
     max_count = 0
     for input_counts in input_counts_by_type:
-        counts, _ = np.histogram(input_counts, bins=20, range=(0, global_x_max))
+        counts, _ = np.histogram(input_counts, bins=bins)
         max_count = max(max_count, counts.max())
 
     # Plot each cell type
@@ -216,8 +221,7 @@ def plot_input_count_histogram(params: dict, output_dir: Path) -> None:
 
         ax.hist(
             input_counts,
-            bins=20,
-            range=(0, global_x_max),
+            bins=bins,
             color=color,
             edgecolor="black",
             alpha=0.6,
