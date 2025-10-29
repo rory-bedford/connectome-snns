@@ -127,6 +127,9 @@ def plot_fano_factor_vs_window_size(
         ax.set_ylabel("Mean Fano Factor", fontsize=12)
         ax.set_title(f"{cell_type_names[cell_type_idx]}", fontsize=14)
         ax.set_xscale("log")
+        ax.axhline(
+            1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.7, zorder=1
+        )
         ax.grid(True, alpha=0.3, which="both")
 
     fig.suptitle("Fano Factor vs Window Size", fontsize=16, y=1.02)
