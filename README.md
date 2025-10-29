@@ -40,6 +40,8 @@ Interactive Jupyter notebooks demonstrating key experiments and analyses are ava
 
 Special care is taken to make all our simulations fully reproducible. In particular, we perform full tracking of the exact code and parameters used to run each experiment, which are stored in metadata files alongside the experiment outputs.
 
+### Single script
+
 To use these features, you need to write and run your python scripts as follows:
 
 * Make sure your script has a `main(output_dir, params_file)` function that accepts two arguments:
@@ -56,6 +58,18 @@ Note the experiment running scripts can be passed a filepath to your `experiment
 With this system, we can perform full provenance tracking of our experiments and easily rerun them even years later.
 
 For examples of usage please see `scripts/`.
+
+### Grid search
+
+To run a grid search over parameters reproducibly, please do the following:
+
+* Copy the `run_grid_search.py` script into your workspace folder
+* Edit the generator in python to any custom search functionality you wish
+* This should always yield your full parameter dictionary and a brief unique description string for naming folders
+* Edit the visible devices if running on GPUs
+* Run using `./run --grid`
+
+This will run your script in parallel (depending on the number of devices), outputting separate results folders with full provenance tracking within each folder as above, and metadata in the parent folder to repeat the grid search.
 
 ## GPUs
 

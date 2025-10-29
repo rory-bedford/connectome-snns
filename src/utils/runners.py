@@ -6,6 +6,7 @@ from concurrent.futures import ProcessPoolExecutor
 import sys
 from datetime import datetime
 import importlib.util
+import shutil
 from utils.reproducibility import ExperimentTracker
 from tqdm import tqdm  # Add tqdm for progress bar
 
@@ -87,8 +88,27 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     grid_parent = parent_output.parent / parent_output.name
     grid_parent.mkdir(parents=True, exist_ok=True)
 
+    # Copy the run_grid_search.py script to the target directory
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    grid_search_script = repo_root / "run_grid_search.py"
+    if grid_search_script.exists():
+        shutil.copy2(grid_search_script, grid_parent / "run_grid_search.py")
+        print(f"✓ Copied {grid_search_script.name} to {grid_parent}")
+    else:
+        print(f"⚠ Warning: {grid_search_script} not found, skipping copy")
+
     print(f"\nGrid search parent: {grid_parent}")
-    print("Generating configurations...\n")
+
+    # Count total simulations first
+    config_list = list(config_generator(base_params))
+    total_simulations = len(config_list)
+
+    print(f"\n{'=' * 60}")
+    print(f"GRID SEARCH: {total_simulations} simulations will be run")
+    print(f"GPUs: {cuda_devices} ({len(cuda_devices)} workers)")
+    print(f"{'=' * 60}\n")
+
+    print("Generating configurations...")
 
     # Generate all experiment configs
     workspace = Path("workspace/temp_grid_configs")
@@ -97,7 +117,7 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     experiment_configs = []
     all_runs = []
 
-    for i, (params, description) in enumerate(config_generator(base_params)):
+    for i, (params, description) in enumerate(config_list):
         # Save modified parameters file
         params_file = workspace / f"params_{i:03d}.toml"
         with open(params_file, "w") as f:
@@ -124,9 +144,7 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
             }
         )
 
-    print(f"✓ Generated {len(experiment_configs)} configurations")
-    print(f"  GPUs: {cuda_devices}")
-    print(f"  Workers: {len(cuda_devices)}\n")
+    print(f"✓ Generated {len(experiment_configs)} configurations\n")
 
     # Write initial README and parameters file
     def write_readme_and_params():
