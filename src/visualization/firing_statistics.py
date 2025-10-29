@@ -434,7 +434,9 @@ def plot_firing_rate_distribution(
         ax = axes[i]
         cell_type_rates = firing_rates[cell_type_indices == i]
         cell_type_rates_nonzero = cell_type_rates[cell_type_rates > 0]
+        n_silent = (cell_type_rates == 0).sum()
 
+        # Plot histogram for non-zero rates
         ax.hist(
             cell_type_rates_nonzero,
             bins=log_bins,
@@ -443,6 +445,32 @@ def plot_firing_rate_distribution(
             label=f"n={len(cell_type_rates)}",
             edgecolor="black",
         )
+
+        # Add a separate bar for silent neurons at position 0 on the x-axis
+        if n_silent > 0:
+            # Place bar just to the left of the visible range with annotation
+            bar_position = global_x_min * 0.6
+            bar_width = global_x_min * 0.2
+            ax.bar(
+                bar_position,
+                n_silent,
+                width=bar_width,
+                alpha=0.6,
+                color=colors_map[i],
+                edgecolor="black",
+                linewidth=1.0,
+                label=f"Silent: {n_silent}",
+                hatch="//",
+            )
+            # Add text annotation below the bar
+            ax.text(
+                bar_position,
+                -ax.get_ylim()[1] * 0.05,
+                "0",
+                ha="center",
+                va="top",
+                fontsize=10,
+            )
 
         # Add mean line
         if len(cell_type_rates_nonzero) > 0:
@@ -458,13 +486,39 @@ def plot_firing_rate_distribution(
 
         ax.set_xlabel("Firing Rate (Hz)")
         ax.set_title(cell_type_names[i])
+
+        # Use regular log scale - bar at 0 will be handled separately
         ax.set_xscale("log")
-        ax.set_xlim(global_x_min, global_x_max)
+        ax.set_xlim(global_x_min * 0.5, global_x_max)
+
+        # Set nice round x-ticks: 0.01, 0.1, 1, 10, 100, etc.
+        log_min = np.floor(np.log10(global_x_min))
+        log_max = np.ceil(np.log10(global_x_max))
+
+        xticks = []
+        for i_tick in range(int(log_min), int(log_max) + 1):
+            tick_val = 10**i_tick
+            if tick_val >= global_x_min * 0.9 and tick_val <= global_x_max:
+                xticks.append(tick_val)
+
+        ax.set_xticks(xticks)
+
+        # Format tick labels nicely
+        xticklabels = []
+        for tick in xticks:
+            if tick < 1:
+                xticklabels.append(f"{tick:.2f}")
+            elif tick < 10:
+                xticklabels.append(f"{tick:.0f}")
+            else:
+                xticklabels.append(f"{int(tick)}")
+        ax.set_xticklabels(xticklabels)
+
         ax.legend()
         ax.grid(True, alpha=0.3)
 
     axes[0].set_ylabel("Number of Neurons")
-    fig.suptitle("Firing Rate Distribution", fontsize=14, y=1.02)
+    fig.suptitle("Firing Rate Distribution (log scale)", fontsize=14, y=1.02)
     plt.tight_layout()
 
     return fig
