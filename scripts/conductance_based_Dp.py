@@ -311,25 +311,29 @@ def main(output_dir, params_file):
     # STEP 5: Save Output Data for Further Analysis
     # ============================================
 
-    # Save output arrays
-    np.save(output_dir / "output_spikes.npy", output_spikes.numpy())
-    np.save(output_dir / "output_voltages.npy", output_voltages.numpy())
-    np.save(output_dir / "output_currents.npy", output_currents.numpy())
-    np.save(output_dir / "input_currents.npy", output_currents_FF.numpy())
-    np.save(output_dir / "output_conductances.npy", output_conductances.numpy())
+    # Create results directory if it doesn't exist
+    results_dir = output_dir / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save output arrays to results/
+    np.save(results_dir / "output_spikes.npy", output_spikes.numpy())
+    np.save(results_dir / "output_voltages.npy", output_voltages.numpy())
+    np.save(results_dir / "output_currents.npy", output_currents.numpy())
+    np.save(results_dir / "input_currents.npy", output_currents_FF.numpy())
+    np.save(results_dir / "output_conductances.npy", output_conductances.numpy())
     np.save(
-        output_dir / "input_conductances.npy",
+        results_dir / "input_conductances.npy",
         output_conductances_FF.numpy(),
     )
 
-    # Save input data and network structure
-    np.save(output_dir / "input_spikes.npy", input_spikes)
-    np.save(output_dir / "neuron_types.npy", neuron_types)
-    np.save(output_dir / "cell_type_indices.npy", cell_type_indices)
-    np.save(output_dir / "input_cell_type_indices.npy", input_source_indices)
-    np.save(output_dir / "connectivity_graph.npy", connectivity_graph)
-    np.save(output_dir / "weights.npy", weights)
-    np.save(output_dir / "feedforward_weights.npy", feedforward_weights)
+    # Save input data and network structure to results/
+    np.save(results_dir / "input_spikes.npy", input_spikes)
+    np.save(results_dir / "neuron_types.npy", neuron_types)
+    np.save(results_dir / "cell_type_indices.npy", cell_type_indices)
+    np.save(results_dir / "input_cell_type_indices.npy", input_source_indices)
+    np.save(results_dir / "connectivity_graph.npy", connectivity_graph)
+    np.save(results_dir / "weights.npy", weights)
+    np.save(results_dir / "feedforward_weights.npy", feedforward_weights)
 
     print("\n✓ Successfully loaded all parameters from TOML file")
     print(
@@ -340,7 +344,7 @@ def main(output_dir, params_file):
         f"✓ Initialized model with {len(cell_params)} cell types and {len(synapse_params)} synapse types"
     )
     print(f"✓ Ran simulation for {n_steps} timesteps")
-    print(f"✓ Saved all outputs to {output_dir}")
+    print(f"✓ Saved all arrays to {results_dir}")
 
     # =============================================
     # STEP 6: Generate All Plots and Visualizations

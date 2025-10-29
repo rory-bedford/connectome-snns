@@ -61,5 +61,5 @@ dev = [
     "ruff>=0.14.0",
 ]
 
-[tool.ruff]
+[tool.ruff.lint]
 ignore = ["E741"]
