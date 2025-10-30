@@ -126,7 +126,9 @@ def plot_fano_factor_vs_window_size(
         ax.set_xlabel("Window Size (s)", fontsize=12)
         ax.set_ylabel("Mean Fano Factor", fontsize=12)
         ax.set_title(f"{cell_type_names[cell_type_idx]}", fontsize=14)
-        ax.set_xscale("log")
+        # Only set log scale if we have positive window sizes
+        if len(window_sizes_s) > 0 and np.all(np.array(window_sizes_s) > 0):
+            ax.set_xscale("log")
         ax.axhline(
             1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.7, zorder=1
         )
@@ -488,31 +490,35 @@ def plot_firing_rate_distribution(
         ax.set_title(cell_type_names[i])
 
         # Use regular log scale - bar at 0 will be handled separately
-        ax.set_xscale("log")
-        ax.set_xlim(global_x_min * 0.5, global_x_max)
+        # Only set log scale if we have positive values
+        if len(cell_type_rates_nonzero) > 0 and global_x_min > 0:
+            ax.set_xscale("log")
+            ax.set_xlim(global_x_min * 0.5, global_x_max)
 
-        # Set nice round x-ticks: 0.01, 0.1, 1, 10, 100, etc.
-        log_min = np.floor(np.log10(global_x_min))
-        log_max = np.ceil(np.log10(global_x_max))
+            # Set nice round x-ticks: 0.01, 0.1, 1, 10, 100, etc.
+            log_min = np.floor(np.log10(global_x_min))
+            log_max = np.ceil(np.log10(global_x_max))
 
-        xticks = []
-        for i_tick in range(int(log_min), int(log_max) + 1):
-            tick_val = 10**i_tick
-            if tick_val >= global_x_min * 0.9 and tick_val <= global_x_max:
-                xticks.append(tick_val)
+            xticks = []
+            for i_tick in range(int(log_min), int(log_max) + 1):
+                tick_val = 10**i_tick
+                if tick_val >= global_x_min * 0.9 and tick_val <= global_x_max:
+                    xticks.append(tick_val)
 
-        ax.set_xticks(xticks)
+            ax.set_xticks(xticks)
 
-        # Format tick labels nicely
-        xticklabels = []
-        for tick in xticks:
-            if tick < 1:
-                xticklabels.append(f"{tick:.2f}")
-            elif tick < 10:
-                xticklabels.append(f"{tick:.0f}")
-            else:
-                xticklabels.append(f"{int(tick)}")
-        ax.set_xticklabels(xticklabels)
+            # Format tick labels nicely
+            xticklabels = []
+            for tick in xticks:
+                if tick < 1:
+                    xticklabels.append(f"{tick:.2f}")
+                elif tick < 10:
+                    xticklabels.append(f"{tick:.0f}")
+                else:
+                    xticklabels.append(f"{int(tick)}")
+            ax.set_xticklabels(xticklabels)
+        else:
+            ax.set_xlim(0, 1)
 
         ax.legend()
         ax.grid(True, alpha=0.3)
