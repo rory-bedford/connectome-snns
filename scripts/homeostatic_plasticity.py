@@ -48,6 +48,7 @@ def main(output_dir, params_file):
 
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
 
     # Load all network parameters from TOML file
     with open(params_file, "r") as f:
