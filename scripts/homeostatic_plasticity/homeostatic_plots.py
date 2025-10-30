@@ -116,12 +116,9 @@ def generate_training_plots(
     figures = {}
     duration = spikes.shape[1] * dt
 
-    # Convert tensors to numpy for plotting
-    # Sum over rise/decay dimension (dim=3) to get total conductance
-    spikes_np = spikes.cpu().numpy()
-    voltages_np = voltages.cpu().numpy()
-    conductances_np = conductances.sum(dim=3).cpu().numpy()
-    conductances_FF_np = conductances_FF.sum(dim=3).cpu().numpy()
+    # Sum over rise/decay dimension (axis=3) to get total conductance
+    conductances = conductances.sum(axis=3)
+    conductances_FF = conductances_FF.sum(axis=3)
 
     # Network structure plots
     figures["assembly_graph"] = plot_assembly_graph(
@@ -181,7 +178,7 @@ def generate_training_plots(
 
     # Output analysis
     figures["dp_network_spikes"] = plot_dp_network_spikes(
-        output_spikes=spikes_np,
+        output_spikes=spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
@@ -189,7 +186,7 @@ def generate_training_plots(
     )
 
     figures["firing_rate_distribution"] = plot_firing_rate_distribution(
-        output_spikes=spikes_np,
+        output_spikes=spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         duration=duration,
@@ -208,8 +205,8 @@ def generate_training_plots(
         }
 
     figures["membrane_voltages"] = plot_membrane_voltages(
-        voltages=voltages_np,
-        spikes=spikes_np,
+        voltages=voltages,
+        spikes=spikes,
         neuron_types=cell_type_indices,
         delta_t=dt,
         duration=duration,
@@ -240,8 +237,8 @@ def generate_training_plots(
         ]["names"]
 
     figures["synaptic_conductances"] = plot_synaptic_conductances(
-        output_conductances=conductances_np,
-        input_conductances=conductances_FF_np,
+        output_conductances=conductances,
+        input_conductances=conductances_FF,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         input_cell_type_names=input_cell_type_names,
