@@ -572,10 +572,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(
-                spikes=chunk_s,
-                voltages=chunk_v,
-                conductances=chunk_g,
-                conductances_FF=chunk_g_FF,
+                spikes=chunk_s.detach(),
+                voltages=chunk_v.detach(),
+                conductances=chunk_g.detach(),
+                conductances_FF=chunk_g_FF.detach(),
                 input_spikes=input_spikes.cpu().numpy(),
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
