@@ -505,7 +505,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             initial_g_FF=initial_g_FF,
         )
 
-        # Compute losses (keep chunk_s on GPU for gradient computation)
+        # Compute losses
         cv_loss = cv_loss_fn(chunk_s)
         fr_loss = firing_rate_loss_fn(chunk_s)
         total_loss = (
@@ -602,10 +602,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  Saved plots to {figures_dir}")
 
         # Create inputs to next chunk - detached so gradients don't flow across chunks
-        # Use CPU versions and move back to device for next iteration
-        initial_v = chunk_v[:, -1, :]
-        initial_g = chunk_g[:, -1, :, :, :]
-        initial_g_FF = chunk_g_FF[:, -1, :, :, :]
+        initial_v = chunk_v[:, -1, :].detach()
+        initial_g = chunk_g[:, -1, :, :, :].detach()
+        initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up
