@@ -7,7 +7,7 @@
 
 [wandb]
 enabled = true                         # Whether to use Weights & Biases for logging
-project = "connectome-snns-homeostatic"  # W&B project name
+project = "homeostatic-plasticity"     # W&B project name
 entity = ""                            # W&B entity (leave empty for default)
 tags = []                              # Tags for the run (optional)
 notes = ""                             # Notes for the run (optional)
