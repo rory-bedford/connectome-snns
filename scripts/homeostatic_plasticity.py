@@ -330,7 +330,9 @@ def main(output_dir, params_file):
         # Compute losses
         cv_loss = cv_loss_fn(chunk_s)
         fr_loss = firing_rate_loss_fn(chunk_s)
-        total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
+        total_loss = (
+            loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
+        ) / accumulation_interval
 
         # Compute gradients
         total_loss.backward()
