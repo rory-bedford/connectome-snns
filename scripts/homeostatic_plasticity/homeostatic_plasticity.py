@@ -606,9 +606,6 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         initial_g = chunk_g[:, -1, :, :, :].detach()
         initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
 
-        print(f"{initial_g.shape=}")
-        print(f"{initial_g_FF.shape=}")
-
     # =====================================
     # STEP 8: Save Final Model and Clean Up
     # =====================================

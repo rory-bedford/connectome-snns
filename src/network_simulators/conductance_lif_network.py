@@ -48,7 +48,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Validate inputs
         # ===============
 
-        self._validate_forward(n_steps, dt, inputs, initial_v, initial_g, initial_g)
+        self._validate_forward(n_steps, dt, inputs, initial_v, initial_g, initial_g_FF)
 
         # ==========================
         # Initialize state variables
