@@ -123,6 +123,7 @@ def compute_firing_rate_by_cell_type(
         dict[int, dict[str, float]]: Dictionary mapping cell type index to a dict with:
             - "mean_firing_rate_hz": Mean firing rate across neurons of this type (Hz)
             - "std_firing_rate_hz": Standard deviation of firing rates (Hz)
+            - "n_silent_cells": Number of cells that don't fire at all
     """
     batch_size, n_steps, n_neurons = spike_trains.shape
 
@@ -154,9 +155,13 @@ def compute_firing_rate_by_cell_type(
             else 0.0
         )
 
+        # Count cells that don't fire at all (firing rate = 0)
+        n_silent = (cell_type_rates == 0).sum().item()
+
         stats_by_type[cell_type] = {
             "mean_firing_rate_hz": mean_rate,
             "std_firing_rate_hz": std_rate,
+            "n_silent_cells": n_silent,
         }
 
     return stats_by_type

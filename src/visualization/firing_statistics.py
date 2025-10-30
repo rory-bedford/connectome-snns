@@ -454,7 +454,7 @@ def plot_firing_rate_distribution(
             ax.bar(
                 bar_position,
                 n_silent,
-                width=bar_width,
+                width=bar_width / 2,
                 alpha=0.6,
                 color=colors_map[i],
                 edgecolor="black",

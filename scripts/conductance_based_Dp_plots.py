@@ -350,6 +350,7 @@ def main(output_dir_path):
             "cell_type_name",
             "mean_firing_rate_hz",
             "std_firing_rate_hz",
+            "n_silent_cells",
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -360,6 +361,7 @@ def main(output_dir_path):
                     "cell_type_name": cell_type_names[cell_type_idx],
                     "mean_firing_rate_hz": stats["mean_firing_rate_hz"],
                     "std_firing_rate_hz": stats["std_firing_rate_hz"],
+                    "n_silent_cells": stats["n_silent_cells"],
                 }
             )
     print(f"  Saved firing rate statistics to {firing_rate_csv_path}")

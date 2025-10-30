@@ -2,8 +2,10 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
-    "python_full_version >= '3.14' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129'",
-    "python_full_version < '3.14' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129'",
+    "(python_full_version >= '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version >= '3.14' and platform_machine != 'aarch64' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version >= '3.14' and platform_python_implementation != 'CPython' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version >= '3.14' and sys_platform != 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')",
+    "python_full_version == '3.14.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129'",
+    "(python_full_version < '3.14' and platform_machine != 'aarch64' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and platform_python_implementation != 'CPython' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and sys_platform != 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')",
+    "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129'",
     "python_full_version >= '3.14' and sys_platform != 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129'",
     "(python_full_version < '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129')",
     "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129'",
@@ -282,20 +284,22 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "tabulate" },
     { name = "toml" },
     { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
 cpu = [
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
-    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
-    { name = "torchvision", version = "0.23.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_python_implementation != 'CPython' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
-    { name = "torchvision", version = "0.23.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version >= '3.14' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version < '3.14' and sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version >= '3.14' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'darwin' and extra == 'extra-15-connectome-snns-cpu')" },
+    { name = "torchvision", version = "0.23.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "torchvision", version = "0.23.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version >= '3.14' and sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
 ]
 cu129 = [
     { name = "torch", version = "2.9.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" } },
-    { name = "torchvision", version = "0.24.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" } },
+    { name = "torchvision", version = "0.24.0", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "(python_full_version < '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version >= '3.15' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_python_implementation != 'CPython' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "torchvision", version = "0.24.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "(python_full_version >= '3.15' and extra == 'extra-15-connectome-snns-cu129') or (python_full_version < '3.15' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and extra == 'extra-15-connectome-snns-cu129') or (platform_python_implementation != 'CPython' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cu129')" },
 ]
 
 [package.dev-dependencies]
@@ -310,6 +314,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.3.3" },
     { name = "pandas", specifier = ">=2.3.3" },
+    { name = "tabulate", specifier = ">=0.9.0" },
     { name = "toml", specifier = ">=0.10.2" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "connectome-snns", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cu129'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cu129", conflict = { package = "connectome-snns", extra = "cu129" } },
@@ -846,7 +851,7 @@ dependencies = [
     { name = "nbformat" },
     { name = "packaging" },
     { name = "prometheus-client" },
-    { name = "pywinpty", marker = "(python_full_version >= '3.14' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "pywinpty", marker = "(python_full_version >= '3.15' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
     { name = "pyzmq" },
     { name = "send2trash" },
     { name = "terminado" },
@@ -864,7 +869,7 @@ name = "jupyter-server-terminals"
 version = "0.5.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywinpty", marker = "(python_full_version >= '3.14' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "pywinpty", marker = "(python_full_version >= '3.15' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
     { name = "terminado" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fc/d5/562469734f476159e99a55426d697cbf8e7eb5efe89fb0e0b4f83a3d3459/jupyter_server_terminals-0.5.3.tar.gz", hash = "sha256:5ae0295167220e9ace0edcfdb212afd2b01ee8d179fe6f23c899590e9b8a5269", size = 31430, upload-time = "2024-03-12T14:37:03.049Z" }
@@ -2052,12 +2057,21 @@ wheels = [
 ]
 
 [[package]]
+name = "tabulate"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/fe/802052aecb21e3797b8f7902564ab6ea0d60ff8ca23952079064155d1ae1/tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c", size = 81090, upload-time = "2022-10-06T17:21:48.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/44/4a5f08c96eb108af5cb50b41f76142f0afa346dfa99d5296fe7202a11854/tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f", size = 35252, upload-time = "2022-10-06T17:21:44.262Z" },
+]
+
+[[package]]
 name = "terminado"
 version = "0.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ptyprocess", marker = "os_name != 'nt' or (extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
-    { name = "pywinpty", marker = "(python_full_version >= '3.14' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "pywinpty", marker = "(python_full_version >= '3.15' and os_name == 'nt' and sys_platform == 'linux') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version == '3.14.*' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and os_name == 'nt' and sys_platform == 'linux' and extra != 'extra-15-connectome-snns-cpu' and extra != 'extra-15-connectome-snns-cu129') or (python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (os_name == 'nt' and platform_machine != 'aarch64' and sys_platform == 'linux') or (os_name == 'nt' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (os_name == 'nt' and sys_platform != 'darwin' and sys_platform != 'linux') or (os_name == 'nt' and sys_platform == 'darwin' and extra != 'extra-15-connectome-snns-cpu') or (os_name != 'nt' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
     { name = "tornado" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8a/11/965c6fd8e5cc254f1fe142d547387da17a8ebfd75a3455f637c663fb38a0/terminado-0.18.1.tar.gz", hash = "sha256:de09f2c4b85de4765f7714688fff57d3e75bad1f909b589fde880460c753fd2e", size = 32701, upload-time = "2024-03-12T14:34:39.026Z" }
@@ -2091,17 +2105,16 @@ name = "torch"
 version = "2.8.0"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'darwin'",
     "python_full_version < '3.14' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock", marker = "sys_platform == 'darwin'" },
-    { name = "fsspec", marker = "sys_platform == 'darwin'" },
-    { name = "jinja2", marker = "sys_platform == 'darwin'" },
-    { name = "networkx", marker = "sys_platform == 'darwin'" },
-    { name = "setuptools", marker = "sys_platform == 'darwin'" },
-    { name = "sympy", marker = "sys_platform == 'darwin'" },
-    { name = "typing-extensions", marker = "sys_platform == 'darwin'" },
+    { name = "filelock", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "networkx", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "sympy", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.14' and sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cpu/torch-2.8.0-cp313-cp313t-macosx_14_0_arm64.whl", hash = "sha256:fbe2e149c5174ef90d29a5f84a554dfaf28e003cb4f61fa2c8c024c17ec7ca58" },
@@ -2116,15 +2129,16 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
     "(python_full_version < '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.14' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux')",
     "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "python_full_version >= '3.14' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock", marker = "sys_platform != 'darwin'" },
-    { name = "fsspec", marker = "sys_platform != 'darwin'" },
-    { name = "jinja2", marker = "sys_platform != 'darwin'" },
-    { name = "networkx", marker = "sys_platform != 'darwin'" },
-    { name = "setuptools", marker = "sys_platform != 'darwin'" },
-    { name = "sympy", marker = "sys_platform != 'darwin'" },
-    { name = "typing-extensions", marker = "sys_platform != 'darwin'" },
+    { name = "filelock", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "fsspec", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "jinja2", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "networkx", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "setuptools", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "sympy", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.14' or sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp313-cp313-linux_s390x.whl", hash = "sha256:8b5882276633cf91fe3d2d7246c743b94d44a7e660b27f1308007fdb1bb89f7d" },
@@ -2142,29 +2156,31 @@ name = "torch"
 version = "2.9.0+cu129"
 source = { registry = "https://download.pytorch.org/whl/cu129" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
+    "(python_full_version >= '3.14' and platform_machine != 'aarch64') or (python_full_version >= '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_python_implementation != 'CPython') or (python_full_version >= '3.14' and sys_platform != 'linux')",
+    "python_full_version == '3.14.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "(python_full_version < '3.14' and platform_machine != 'aarch64') or (python_full_version < '3.14' and platform_python_implementation != 'CPython') or (python_full_version < '3.14' and sys_platform != 'linux')",
+    "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
 ]
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },
     { name = "networkx" },
-    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cufile-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-cusparselt-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-nvshmem-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "nvidia-nvtx-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cublas-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cusparselt-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-nvshmem-cu12", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "sys_platform == 'linux'" },
     { name = "setuptools" },
     { name = "sympy" },
     { name = "triton", marker = "sys_platform == 'linux'" },
@@ -2191,13 +2207,12 @@ version = "0.23.0"
 source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
     "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
-    "python_full_version >= '3.14' and sys_platform == 'darwin'",
     "python_full_version < '3.14' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
-    { name = "pillow", marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'" },
-    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
+    { name = "numpy", marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform == 'darwin')" },
+    { name = "pillow", marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform == 'darwin')" },
+    { name = "torch", version = "2.8.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version < '3.14' and sys_platform == 'darwin' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'darwin' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-15-connectome-snns-cpu') or (python_full_version >= '3.14' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_machine != 'aarch64' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (platform_python_implementation != 'CPython' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129') or (sys_platform != 'linux' and extra == 'extra-15-connectome-snns-cpu' and extra == 'extra-15-connectome-snns-cu129')" },
 ]
 wheels = [
@@ -2214,11 +2229,12 @@ source = { registry = "https://download.pytorch.org/whl/cpu" }
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
     "(python_full_version < '3.14' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.14' and platform_python_implementation != 'CPython' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version >= '3.14' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "numpy", marker = "(python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
-    { name = "pillow", marker = "(python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
-    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "numpy", marker = "(python_full_version >= '3.14' and sys_platform == 'darwin') or (python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "pillow", marker = "(python_full_version >= '3.14' and sys_platform == 'darwin') or (python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(python_full_version >= '3.14' and sys_platform == 'darwin') or (python_full_version >= '3.14' and sys_platform == 'linux') or (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cpu/torchvision-0.23.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:dea90a67d60a5366b0358a0b8d6bf267805278697d6fd950cf0e31139e56d1be" },
@@ -2229,16 +2245,36 @@ wheels = [
 
 [[package]]
 name = "torchvision"
+version = "0.24.0"
+source = { registry = "https://download.pytorch.org/whl/cu129" }
+resolution-markers = [
+    "python_full_version == '3.14.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+    "python_full_version < '3.14' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'",
+]
+dependencies = [
+    { name = "numpy", marker = "python_full_version < '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "pillow", marker = "python_full_version < '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+    { name = "torch", version = "2.9.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "python_full_version < '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://download.pytorch.org/whl/cu129/torchvision-0.24.0-cp313-cp313-manylinux_2_28_aarch64.whl" },
+    { url = "https://download.pytorch.org/whl/cu129/torchvision-0.24.0-cp313-cp313t-manylinux_2_28_aarch64.whl" },
+    { url = "https://download.pytorch.org/whl/cu129/torchvision-0.24.0-cp314-cp314-manylinux_2_28_aarch64.whl" },
+    { url = "https://download.pytorch.org/whl/cu129/torchvision-0.24.0-cp314-cp314t-manylinux_2_28_aarch64.whl" },
+]
+
+[[package]]
+name = "torchvision"
 version = "0.24.0+cu129"
 source = { registry = "https://download.pytorch.org/whl/cu129" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
+    "(python_full_version >= '3.14' and platform_machine != 'aarch64') or (python_full_version >= '3.15' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or (python_full_version >= '3.14' and platform_python_implementation != 'CPython') or (python_full_version >= '3.14' and sys_platform != 'linux')",
+    "(python_full_version < '3.14' and platform_machine != 'aarch64') or (python_full_version < '3.14' and platform_python_implementation != 'CPython') or (python_full_version < '3.14' and sys_platform != 'linux')",
 ]
 dependencies = [
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "torch", version = "2.9.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" } },
+    { name = "numpy", marker = "python_full_version >= '3.15' or platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "pillow", marker = "python_full_version >= '3.15' or platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
+    { name = "torch", version = "2.9.0+cu129", source = { registry = "https://download.pytorch.org/whl/cu129" }, marker = "python_full_version >= '3.15' or platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cu129/torchvision-0.24.0%2Bcu129-cp313-cp313-manylinux_2_28_x86_64.whl" },
