@@ -40,8 +40,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
                 - all_I: Synaptic input currents of shape (batch_size, n_steps, n_neurons, n_cell_types)
                 - all_I_FF: Feedforward synaptic input currents of shape (batch_size, n_steps, n_neurons, n_cell_types_FF)
-                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, n_cell_types)
-                - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, n_cell_types_FF)
+                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_cell_types) where dim 3 is [rise, decay]
+                - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_cell_types_FF) where dim 3 is [rise, decay]
         """
 
         # ===============
@@ -98,16 +98,16 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             device=self.device,
         )
 
-        # Synaptic conductance storage (batch_size, n_steps, n_neurons, n_synapse_types)
+        # Synaptic conductance storage (batch_size, n_steps, n_neurons, 2, n_synapse_types)
         all_g = torch.zeros(
-            (batch_size, n_steps, self.n_neurons, self.n_synapse_types),
+            (batch_size, n_steps, self.n_neurons, 2, self.n_synapse_types),
             dtype=torch.float32,
             device=self.device,
         )
 
-        # Feedforward synaptic conductance storage (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+        # Feedforward synaptic conductance storage (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF)
         all_g_FF = torch.zeros(
-            (batch_size, n_steps, self.n_neurons, self.n_synapse_types_FF),
+            (batch_size, n_steps, self.n_neurons, 2, self.n_synapse_types_FF),
             dtype=torch.float32,
             device=self.device,
         )
@@ -247,7 +247,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
             all_I_FF[:, t, :, :] = I_FF
-            all_g[:, t, :, :] = g.sum(dim=2)
-            all_g_FF[:, t, :, :] = g_FF.sum(dim=2)
+            all_g[:, t, :, :, :] = g
+            all_g_FF[:, t, :, :, :] = g_FF
 
         return all_s, all_v, all_I, all_I_FF, all_g, all_g_FF

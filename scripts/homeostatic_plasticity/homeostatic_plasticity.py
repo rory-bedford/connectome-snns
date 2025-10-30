@@ -603,8 +603,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
         # Create inputs to next chunk - detached so gradients don't flow across chunks
         initial_v = chunk_v[:, -1, :].detach()
-        initial_g = chunk_g[:, -1, :].detach()
-        initial_g_FF = chunk_g_FF[:, -1, :].detach()
+        initial_g = chunk_g[:, -1, :, :, :].detach()
+        initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up
