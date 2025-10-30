@@ -515,6 +515,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         # Compute gradients
         total_loss.backward()
 
+        # Detach losses to avoid memory leaks
+        chunk_g = chunk_g.detach()
+        chunk_g_FF = chunk_g_FF.detach()
+        chunk_v = chunk_v.detach()
+        chunk_s = chunk_s.detach()
+
         # Perform optimisation step every accumulation_interval epochs
         if (epoch + 1) % accumulation_interval == 0:
             optimiser.step()
@@ -572,7 +578,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(
-                spikes=chunk_s.detach().cpu(),
+                spikes=chunk_s.cpu().numpy(),
                 voltages=chunk_v.cpu().numpy(),
                 conductances=chunk_g.cpu().numpy(),
                 conductances_FF=chunk_g_FF.cpu().numpy(),
@@ -602,9 +608,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  Saved plots to {figures_dir}")
 
         # Create inputs to next chunk - detached so gradients don't flow across chunks
-        initial_v = chunk_v[:, -1, :].detach()
-        initial_g = chunk_g[:, -1, :, :, :].detach()
-        initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
+        initial_v = chunk_v[:, -1, :]
+        initial_g = chunk_g[:, -1, :, :, :]
+        initial_g_FF = chunk_g_FF[:, -1, :, :, :]
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up
