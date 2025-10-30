@@ -292,7 +292,7 @@ def main(output_dir, params_file):
 
     # Initialize loss functions
     cv_loss_fn = CVLoss(target_cv=target_cv_tensor, penalty_value=cv_high_loss)
-    firing_rate_loss_fn = FiringRateLoss(target_rate=target_rate_tensor, delta_t=dt)
+    firing_rate_loss_fn = FiringRateLoss(target_rate=target_rate_tensor, dt=dt)
 
     initial_v = None
     initial_g = None
