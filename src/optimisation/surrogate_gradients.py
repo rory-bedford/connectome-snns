@@ -38,4 +38,4 @@ class SurrGradSpike(torch.autograd.Function):
         (input,) = ctx.saved_tensors
         grad_input = grad_output.clone()
         grad = grad_input / (ctx.scale * torch.abs(input) + 1.0) ** 2
-        return grad
+        return grad, None
