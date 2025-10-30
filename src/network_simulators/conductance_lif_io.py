@@ -22,8 +22,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
         cell_type_indices: IntArray,
         cell_params: list[dict],
         synapse_params: list[dict],
-        scaling_factors: FloatArray,
         surrgrad_scale: float,
+        scaling_factors: FloatArray | None = None,
         weights_FF: FloatArray | None = None,
         cell_type_indices_FF: IntArray | None = None,
         cell_params_FF: list[dict] | None = None,
@@ -54,13 +54,15 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 - 'tau_decay' (float): Synaptic decay time constant (ms)
                 - 'E_syn' (float): Synaptic reversal potential (mV)
                 - 'g_bar' (float): Maximum synaptic conductance (nS)
-            scaling_factors (FloatArray): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling (voxel^-1).
             surrgrad_scale (float): Scale parameter for surrogate gradient fast sigmoid function.
+            scaling_factors (FloatArray | None): Matrix of shape (n_cell_types, n_cell_types) for recurrent scaling (voxel^-1).
+                If None, no scaling is applied (identity scaling).
             weights_FF (FloatArray | None): Feedforward weight matrix of shape (n_inputs, n_neurons) or None.
             cell_type_indices_FF (IntArray | None): Array of feedforward cell type indices.
             cell_params_FF (list[dict] | None): List of feedforward cell type parameter dicts (same structure as cell_params).
             synapse_params_FF (list[dict] | None): List of feedforward synapse parameter dicts (same structure as synapse_params).
             scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling (voxel^-1).
+                If None, no scaling is applied (identity scaling).
             optimisable (OptimisableParams): What to optimise during training. Options:
                 - "weights": Optimise connection weights (weights and weights_FF)
                 - "scaling_factors": Optimise scaling factors (scaling_factors and scaling_factors_FF)
@@ -130,6 +132,10 @@ class ConductanceLIFNetwork_IO(nn.Module):
             "cell_type_indices", cell_type_indices, trainable=False
         )
 
+        # Create and register weights mask (always non-trainable)
+        weights_mask = weights != 0
+        self.register_buffer("weights_mask", torch.from_numpy(weights_mask))
+
         # Create and register mapping from synapse_id to cell_id
         synapse_to_cell_mapping = np.zeros(self.n_synapse_types, dtype=np.int64)
         for synapse in synapse_params:
@@ -146,6 +152,11 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self._register_parameter_or_buffer(
                 "cell_type_indices_FF", cell_type_indices_FF, trainable=False
             )
+
+            # Create and register feedforward weights mask (always non-trainable)
+            weights_mask_FF = weights_FF != 0
+            self.register_buffer("weights_mask_FF", torch.from_numpy(weights_mask_FF))
+
             # Create and register mapping from feedforward synapse_id to cell_id
             synapse_to_cell_mapping_FF = np.zeros(
                 self.n_synapse_types_FF, dtype=np.int64
@@ -159,6 +170,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self.register_buffer("weights_FF", None)
             self.register_buffer("cell_type_indices_FF", None)
             self.register_buffer("synapse_to_cell_id_FF", None)
+            self.register_buffer("weights_mask_FF", None)
 
         # Create neuron-indexed arrays from cell parameters
         neuron_params = self._create_neuron_param_arrays(cell_params, cell_type_indices)
@@ -189,11 +201,15 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # ===========================================================
 
         # Register scaling factors (trainable if optimising scaling_factors)
-        self._register_parameter_or_buffer(
-            "scaling_factors",
-            scaling_factors,
-            trainable=(self.optimisable == "scaling_factors"),
-        )
+        if scaling_factors is not None:
+            self._register_parameter_or_buffer(
+                "scaling_factors",
+                scaling_factors,
+                trainable=(self.optimisable == "scaling_factors"),
+            )
+        else:
+            self.register_buffer("scaling_factors", None)
+
         if scaling_factors_FF is not None:
             self._register_parameter_or_buffer(
                 "scaling_factors_FF",
@@ -344,40 +360,55 @@ class ConductanceLIFNetwork_IO(nn.Module):
     @property
     def scaled_weights(self) -> torch.Tensor:
         """
-        Get the recurrent weights scaled by the scaling_factors matrix.
+        Get the recurrent weights scaled by the scaling_factors matrix and masked by connectivity.
 
         The scaling_factors matrix is of shape (n_cell_types, n_cell_types) where
         scaling_factors[i, j] scales connections from cell type i to cell type j.
 
+        If scaling_factors is None, returns the raw weights without scaling.
+
+        The weights_mask ensures that zero connections remain zero and do not accumulate gradients.
+
         Returns:
-            torch.Tensor: Scaled recurrent weight matrix of shape (n_neurons, n_neurons).
+            torch.Tensor: Scaled and masked recurrent weight matrix of shape (n_neurons, n_neurons).
         """
+        if self.scaling_factors is None:
+            return self.weights * self.weights_mask
+
         source_types = self.cell_type_indices[:, None]  # shape (n_neurons, 1)
         target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
         scaling_matrix = self.scaling_factors[
             source_types, target_types
         ]  # (n_neurons, n_neurons)
-        return self.weights * scaling_matrix
+        return self.weights * scaling_matrix * self.weights_mask
 
     @property
     def scaled_weights_FF(self) -> torch.Tensor:
         """
-        Get the feedforward weights scaled by the scaling_factors_FF matrix.
+        Get the feedforward weights scaled by the scaling_factors_FF matrix and masked by connectivity.
 
         The scaling_factors_FF matrix is of shape (n_cell_types_FF, n_cell_types) where
         scaling_factors_FF[i, j] scales connections from input cell type i to cell type j.
 
+        If scaling_factors_FF is None, returns the raw feedforward weights without scaling.
+
+        The weights_mask_FF ensures that zero connections remain zero and do not accumulate gradients.
+
         Returns:
-            torch.Tensor: Scaled feedforward weight matrix of shape (n_inputs, n_neurons).
+            torch.Tensor: Scaled and masked feedforward weight matrix of shape (n_inputs, n_neurons).
         """
         if self.weights_FF is None:
             raise ValueError("weights_FF must be provided for feedforward scaling.")
+
+        if self.scaling_factors_FF is None:
+            return self.weights_FF * self.weights_mask_FF
+
         input_types = self.cell_type_indices_FF[:, None]  # shape (n_inputs, 1)
         target_types = self.cell_type_indices[None, :]  # shape (1, n_neurons)
         scaling_matrix = self.scaling_factors_FF[
             input_types, target_types
         ]  # (n_inputs, n_neurons)
-        return self.weights_FF * scaling_matrix
+        return self.weights_FF * scaling_matrix * self.weights_mask_FF
 
     @property
     def cell_typed_weights(self) -> torch.Tensor:
@@ -462,7 +493,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         cell_type_indices: IntArray,
         cell_params: list[dict],
         synapse_params: list[dict],
-        scaling_factors: FloatArray,
+        scaling_factors: FloatArray | None,
         surrgrad_scale: float,
         weights_FF: FloatArray | None,
         cell_type_indices_FF: IntArray | None,
@@ -478,7 +509,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             cell_type_indices: Neuron-to-cell-type mapping
             cell_params: List of cell parameter dicts
             synapse_params: List of synapse parameter dicts
-            scaling_factors: Cell-type-to-cell-type scaling matrix
+            scaling_factors: Cell-type-to-cell-type scaling matrix (optional)
             surrgrad_scale: Surrogate gradient scale
             weights_FF: Feedforward weight matrix (optional)
             cell_type_indices_FF: Input-to-cell-type mapping (optional)
@@ -576,11 +607,12 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # ========================================
         # RECURRENT SCALING FACTORS VALIDATION
         # ========================================
-        assert scaling_factors.ndim == 2, "Scaling factors must be 2D matrix"
-        assert scaling_factors.shape == (n_cell_types, n_cell_types), (
-            f"Scaling factors shape {scaling_factors.shape} must be ({n_cell_types}, {n_cell_types})"
-        )
-        assert np.all(scaling_factors > 0), "All scaling factors must be positive"
+        if scaling_factors is not None:
+            assert scaling_factors.ndim == 2, "Scaling factors must be 2D matrix"
+            assert scaling_factors.shape == (n_cell_types, n_cell_types), (
+                f"Scaling factors shape {scaling_factors.shape} must be ({n_cell_types}, {n_cell_types})"
+            )
+            assert np.all(scaling_factors > 0), "All scaling factors must be positive"
 
         # ========================================
         # FEEDFORWARD VALIDATION (ALL-OR-NOTHING)
@@ -590,7 +622,6 @@ class ConductanceLIFNetwork_IO(nn.Module):
             cell_type_indices_FF,
             cell_params_FF,
             synapse_params_FF,
-            scaling_factors_FF,
         ]
         ff_provided = [arg is not None for arg in ff_args]
 
@@ -598,7 +629,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             assert all(ff_provided), (
                 "If any feedforward argument is provided, all of "
                 "weights_FF, cell_type_indices_FF, cell_params_FF, "
-                "synapse_params_FF, and scaling_factors_FF must be provided."
+                "and synapse_params_FF must be provided."
             )
 
             # Feedforward weights validation
@@ -675,16 +706,17 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 f"Duplicate synapse_ids found in synapse_params_FF: {synapse_ids_FF}"
             )
 
-            # Feedforward scaling factors validation
-            assert scaling_factors_FF.ndim == 2, (
-                "Feedforward scaling factors must be 2D matrix"
-            )
-            assert scaling_factors_FF.shape == (n_cell_types_FF, n_cell_types), (
-                f"Feedforward scaling factors shape {scaling_factors_FF.shape} must be ({n_cell_types_FF}, {n_cell_types})"
-            )
-            assert np.all(scaling_factors_FF > 0), (
-                "All feedforward scaling factors must be positive"
-            )
+            # Feedforward scaling factors validation (optional)
+            if scaling_factors_FF is not None:
+                assert scaling_factors_FF.ndim == 2, (
+                    "Feedforward scaling factors must be 2D matrix"
+                )
+                assert scaling_factors_FF.shape == (n_cell_types_FF, n_cell_types), (
+                    f"Feedforward scaling factors shape {scaling_factors_FF.shape} must be ({n_cell_types_FF}, {n_cell_types})"
+                )
+                assert np.all(scaling_factors_FF > 0), (
+                    "All feedforward scaling factors must be positive"
+                )
         else:
             n_cell_types_FF = None
             n_synapse_types_FF = None

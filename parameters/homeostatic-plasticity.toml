@@ -1,0 +1,133 @@
+# Parameters for use with our current-based LIF network simulating zebrafish Dp
+# Adapted from Meissner-Bernard et al. (2025)
+
+# ====================
+# OPTIMISATION TARGETS
+# ====================
+
+[targets]
+firing_rates = 0.5                     # Hz - Target firing rate for all neuron types
+cvs = 1.0                              # Target correlation coefficient for all neuron types
+
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+dt = 0.5                               # ms - Time resolution of the simulation
+chunk_size = 10000                     # ms - Chunk size for training
+seed = 42                              # Random seed for reproducibility
+epochs = 500                           # Number of epochs to simulate for
+accumulation_interval = 5              # How many epochs to run before updating gradient
+
+# ===============
+# HYPERPARAMETERS
+# ===============
+
+[hyperparameters]
+surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
+cv_high_loss = 10.0                    # Penalty in CV loss for spiketrains with fewer than two spikes
+loss_ratio = 0.5                       # Ratio of firing rate to CV losses
+learning_rate = 5e-4                   # Learning rate for ADAM optimiser
+
+# ==========================
+# FEEDFORWARD LAYER TOPOLOGY
+# ==========================
+
+[feedforward.cell_types]
+names = ['mitral']                     # Cell type names
+proportion = [1]                       # Relative proportions of each cell type
+
+[feedforward.topology]
+num_neurons = 1500                     # Total number of input neurons
+conn_inputs = [                        # Connection probabilities to connectome layers
+    [0.02, 0.0],
+]
+
+[feedforward.weights]
+w_mu = [                               # Mean for input synapse strengths
+    [0.4, 0.0],
+]
+w_sigma = [                            # Std dev for input synapse strengths
+    [0.2, 0.0],
+]
+
+# =======================================
+# FEEDFORWARD LAYER ACTIVITY AND SYNAPSES
+# =======================================
+
+[feedforward.activity.mitral]
+firing_rate = 6.0                      # Hz - Firing rate of mitral cells (Poisson process)
+
+[feedforward.synapses.mitral]
+names = ['AMPA', 'NMDA']
+tau_rise = [0.1, 10.0]                 # ms - Synaptic rise time constants
+tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
+E_syn = [0.0, 0.0]                     # mV - Synaptic reversal potentials
+g_bar = [0.7, 0.1]                     # nS - Maximum synaptic conductances
+
+# ========================
+# RECURRENT LAYER TOPOLOGY 
+# ========================
+
+[recurrent.cell_types]
+names = ['excitatory', 'inhibitory']   # Cell type names
+proportion = [0.8, 0.2]                # Relative proportions of each cell type
+
+[recurrent.topology]
+num_neurons = 5000                     # Total number of neurons in the network
+num_assemblies = 20                    # Number of assemblies in the network
+
+conn_within = [                        # Connection probabilities within assemblies
+    [0.2, 0.2],
+    [0.4, 0.2],
+]
+
+conn_between = [                       # Connection probabilities between assemblies
+    [0.02, 0.02],
+    [0.02, 0.02],
+]
+
+[recurrent.weights]
+w_mu = [                               # Mean synapse strengths
+    [0.3, 0.3],
+    [0.5, 0.3],
+]
+w_sigma = [                            # Standard-deviation synapse strengths
+    [0.2, 0.2],
+    [0.1, 0.1],
+]
+
+# =======================================
+# RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
+# =======================================
+
+[recurrent.physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset potential after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 1.35                             # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.excitatory]
+names = ['AMPA', 'NMDA']
+tau_rise = [0.1, 10.0]                 # ms - Synaptic rise time constants
+tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
+E_syn = [0.0, 0.0]                     # mV - Synaptic reversal potentials
+g_bar = [0.7, 0.1]                     # nS - Synaptic conductances (per spike)
+
+[recurrent.physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 0.9                              # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.inhibitory]
+names = ['GABA_A']
+tau_rise = [1.0]                       # ms - Synaptic rise time constants
+tau_decay = [6.0]                      # ms - Synaptic decay time constants
+E_syn = [-70.0]                        # mV - Synaptic reversal potentials
+g_bar = [1.5]                          # nS - Synaptic conductances (per spike)
