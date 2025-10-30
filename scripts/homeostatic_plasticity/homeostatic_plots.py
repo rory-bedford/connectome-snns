@@ -50,7 +50,7 @@ def compute_network_statistics(
     cvs = []
     for neuron_idx in range(spikes.shape[2]):
         spike_times = torch.nonzero(spikes[0, :, neuron_idx]).squeeze()
-        if len(spike_times) > 1:
+        if spike_times.ndim > 0 and len(spike_times) > 1:
             isis = torch.diff(spike_times.float()) * dt
             if len(isis) > 0:
                 cv = torch.std(isis) / torch.mean(isis)
