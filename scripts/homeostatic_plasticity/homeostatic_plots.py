@@ -73,10 +73,10 @@ def compute_network_statistics(
 
 
 def generate_training_plots(
-    spikes: torch.Tensor,
-    voltages: torch.Tensor,
-    conductances: torch.Tensor,
-    conductances_FF: torch.Tensor,
+    spikes: np.ndarray,
+    voltages: np.ndarray,
+    conductances: np.ndarray,
+    conductances_FF: np.ndarray,
     input_spikes: np.ndarray,
     cell_type_indices: np.ndarray,
     input_cell_type_indices: np.ndarray,
@@ -94,10 +94,10 @@ def generate_training_plots(
     Args:
         output_dir (Path): Directory where plots will be saved
         epoch (int): Current epoch number
-        spikes (torch.Tensor): Network spike trains
-        voltages (torch.Tensor): Membrane voltages
-        conductances (torch.Tensor): Recurrent synaptic conductances
-        conductances_FF (torch.Tensor): Feedforward synaptic conductances
+        spikes (np.ndarray): Network spike trains
+        voltages (np.ndarray): Membrane voltages
+        conductances (np.ndarray): Recurrent synaptic conductances
+        conductances_FF (np.ndarray): Feedforward synaptic conductances
         input_spikes (np.ndarray): Input spike trains
         cell_type_indices (np.ndarray): Cell type assignments
         input_cell_type_indices (np.ndarray): Input cell type assignments
@@ -250,7 +250,10 @@ def generate_training_plots(
         fraction=0.1,
     )
 
-    # Firing statistics
+    # Firing statistics (these functions expect torch tensors)
+    spikes_tensor = torch.from_numpy(spikes)
+    cell_type_indices_tensor = torch.from_numpy(cell_type_indices)
+
     window_sizes = [
         int(0.01 * 1000 / dt),
         int(0.02 * 1000 / dt),
@@ -261,24 +264,24 @@ def generate_training_plots(
         int(1.0 * 1000 / dt),
     ]
     figures["fano_factor"] = plot_fano_factor_vs_window_size(
-        spike_trains=spikes,
+        spike_trains=spikes_tensor,
         window_sizes=window_sizes,
-        cell_type_indices=cell_type_indices,
+        cell_type_indices=cell_type_indices_tensor,
         cell_type_names=cell_type_names,
         dt=dt,
     )
 
     figures["cv_histogram"] = plot_cv_histogram(
-        spike_trains=spikes,
-        cell_type_indices=cell_type_indices,
+        spike_trains=spikes_tensor,
+        cell_type_indices=cell_type_indices_tensor,
         cell_type_names=cell_type_names,
         dt=dt,
         bins=50,
     )
 
     figures["isi_histogram"] = plot_isi_histogram(
-        spike_trains=spikes,
-        cell_type_indices=cell_type_indices,
+        spike_trains=spikes_tensor,
+        cell_type_indices=cell_type_indices_tensor,
         cell_type_names=cell_type_names,
         dt=dt,
         bins=100,
