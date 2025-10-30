@@ -4,11 +4,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from numpy.typing import NDArray
+from typing import Literal
 from optimisation.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
 FloatArray = NDArray[np.float64]
+OptimisableParams = Literal["weights", "scaling_factors", None]
 
 
 class ConductanceLIFNetwork_IO(nn.Module):
@@ -27,6 +29,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         cell_params_FF: list[dict] | None = None,
         synapse_params_FF: list[dict] | None = None,
         scaling_factors_FF: FloatArray | None = None,
+        optimisable: OptimisableParams = None,
     ):
         """
         Initialize the conductance-based LIF network with explicit parameters.
@@ -58,8 +61,15 @@ class ConductanceLIFNetwork_IO(nn.Module):
             cell_params_FF (list[dict] | None): List of feedforward cell type parameter dicts (same structure as cell_params).
             synapse_params_FF (list[dict] | None): List of feedforward synapse parameter dicts (same structure as synapse_params).
             scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling (voxel^-1).
+            optimisable (OptimisableParams): What to optimise during training. Options:
+                - "weights": Optimise connection weights (weights and weights_FF)
+                - "scaling_factors": Optimise scaling factors (scaling_factors and scaling_factors_FF)
+                - None: Don't optimise anything (all parameters are fixed) [default]
         """
         super(ConductanceLIFNetwork_IO, self).__init__()
+
+        # Store optimisation mode
+        self.optimisable = optimisable
 
         # =================================
         # PARAMETER VALIDATION & ASSERTIONS
@@ -113,8 +123,12 @@ class ConductanceLIFNetwork_IO(nn.Module):
             self.n_synapse_types_FF = None
 
         # Register weights and cell type indices for recurrent connections
-        self.register_buffer("weights", torch.from_numpy(weights).float())
-        self.register_buffer("cell_type_indices", torch.from_numpy(cell_type_indices))
+        self._register_parameter_or_buffer(
+            "weights", weights, trainable=(self.optimisable == "weights")
+        )
+        self._register_parameter_or_buffer(
+            "cell_type_indices", cell_type_indices, trainable=False
+        )
 
         # Create and register mapping from synapse_id to cell_id
         synapse_to_cell_mapping = np.zeros(self.n_synapse_types, dtype=np.int64)
@@ -126,10 +140,11 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
         # Register feedforward structure (if provided)
         if weights_FF is not None:
-            self.register_buffer("weights_FF", torch.from_numpy(weights_FF).float())
-            self.register_buffer(
-                "cell_type_indices_FF",
-                torch.from_numpy(cell_type_indices_FF),
+            self._register_parameter_or_buffer(
+                "weights_FF", weights_FF, trainable=(self.optimisable == "weights")
+            )
+            self._register_parameter_or_buffer(
+                "cell_type_indices_FF", cell_type_indices_FF, trainable=False
             )
             # Create and register mapping from feedforward synapse_id to cell_id
             synapse_to_cell_mapping_FF = np.zeros(
@@ -170,16 +185,20 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 self.register_buffer(f"{param_name}_FF", param_array)
 
         # ===========================================================
-        # OPTIMIZABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
+        # OPTIMISABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
         # ===========================================================
 
-        # Convert scaling factors to tensors and register as trainable parameters
-        self.scaling_factors = nn.Parameter(
-            torch.tensor(scaling_factors, dtype=torch.float32)
+        # Register scaling factors (trainable if optimising scaling_factors)
+        self._register_parameter_or_buffer(
+            "scaling_factors",
+            scaling_factors,
+            trainable=(self.optimisable == "scaling_factors"),
         )
         if scaling_factors_FF is not None:
-            self.scaling_factors_FF = nn.Parameter(
-                torch.tensor(scaling_factors_FF, dtype=torch.float32)
+            self._register_parameter_or_buffer(
+                "scaling_factors_FF",
+                scaling_factors_FF,
+                trainable=(self.optimisable == "scaling_factors"),
             )
         else:
             self.register_buffer("scaling_factors_FF", None)
@@ -189,6 +208,25 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # ======================================================================
 
         self.surrgrad_scale = surrgrad_scale
+
+    def _register_parameter_or_buffer(
+        self, name: str, value: torch.Tensor | np.ndarray, trainable: bool = False
+    ) -> None:
+        """
+        Register a parameter as either trainable (nn.Parameter) or fixed (buffer).
+
+        Args:
+            name (str): Parameter name.
+            value (torch.Tensor | np.ndarray): Parameter value.
+            trainable (bool): Whether to make this parameter trainable.
+        """
+        if isinstance(value, np.ndarray):
+            value = torch.from_numpy(value).float()
+
+        if trainable:
+            self.register_parameter(name, nn.Parameter(value))
+        else:
+            self.register_buffer(name, value)
 
     def _create_neuron_param_arrays(
         self,
