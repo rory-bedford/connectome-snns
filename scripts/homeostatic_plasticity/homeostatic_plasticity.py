@@ -505,7 +505,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             initial_g_FF=initial_g_FF,
         )
 
-        # Compute losses
+        # Move tensors not needed for loss to CPU immediately
+        chunk_v_cpu = chunk_v.cpu()
+        chunk_g_cpu = chunk_g.cpu()
+        chunk_g_FF_cpu = chunk_g_FF.cpu()
+
+        # Compute losses (keep chunk_s on GPU for gradient computation)
         cv_loss = cv_loss_fn(chunk_s)
         fr_loss = firing_rate_loss_fn(chunk_s)
         total_loss = (
@@ -538,10 +543,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             if is_best:
                 best_loss = total_loss.item()
 
-            # Compute statistics on current chunk spikes
+            # Compute statistics on current chunk spikes (move to CPU for analysis)
             stats = homeostatic_plots.compute_network_statistics(
-                spikes=chunk_s,
-                cell_type_indices=torch.from_numpy(cell_type_indices).to(device),
+                spikes=chunk_s.cpu(),
+                cell_type_indices=torch.from_numpy(cell_type_indices),
                 dt=dt,
             )
 
@@ -572,10 +577,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(
-                spikes=chunk_s.detach(),
-                voltages=chunk_v.detach(),
-                conductances=chunk_g.detach(),
-                conductances_FF=chunk_g_FF.detach(),
+                spikes=chunk_s.detach().cpu(),
+                voltages=chunk_v_cpu,
+                conductances=chunk_g_cpu,
+                conductances_FF=chunk_g_FF_cpu,
                 input_spikes=input_spikes.cpu().numpy(),
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
@@ -602,9 +607,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  Saved plots to {figures_dir}")
 
         # Create inputs to next chunk - detached so gradients don't flow across chunks
-        initial_v = chunk_v[:, -1, :].detach()
-        initial_g = chunk_g[:, -1, :, :, :].detach()
-        initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
+        # Use CPU versions and move back to device for next iteration
+        initial_v = chunk_v_cpu[:, -1, :].to(device)
+        initial_g = chunk_g_cpu[:, -1, :, :, :].to(device)
+        initial_g_FF = chunk_g_FF_cpu[:, -1, :, :, :].to(device)
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up

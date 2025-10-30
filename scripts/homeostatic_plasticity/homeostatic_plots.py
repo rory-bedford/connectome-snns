@@ -117,10 +117,11 @@ def generate_training_plots(
     duration = spikes.shape[1] * dt
 
     # Convert tensors to numpy for plotting
+    # Sum over rise/decay dimension (dim=3) to get total conductance
     spikes_np = spikes.cpu().numpy()
     voltages_np = voltages.cpu().numpy()
-    conductances_np = conductances.cpu().numpy()
-    conductances_FF_np = conductances_FF.cpu().numpy()
+    conductances_np = conductances.sum(dim=3).cpu().numpy()
+    conductances_FF_np = conductances_FF.sum(dim=3).cpu().numpy()
 
     # Network structure plots
     figures["assembly_graph"] = plot_assembly_graph(
