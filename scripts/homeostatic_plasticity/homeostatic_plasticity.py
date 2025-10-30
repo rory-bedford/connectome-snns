@@ -30,17 +30,132 @@ import torch
 import sys
 from pathlib import Path
 from optimisation.loss_functions import CVLoss, FiringRateLoss
+import wandb
+from matplotlib import pyplot as plt
+
 
 # Import local scripts
 sys.path.append(str(Path(__file__).resolve().parent))
+import homeostatic_plots
 
 
-def main(output_dir, params_file):
+def save_checkpoint(
+    output_dir: Path,
+    epoch: int,
+    model: torch.nn.Module,
+    optimiser: torch.optim.Optimizer,
+    initial_v: torch.Tensor,
+    initial_g: torch.Tensor,
+    initial_g_FF: torch.Tensor,
+    cv_loss: float,
+    fr_loss: float,
+    total_loss: float,
+    best_loss: float,
+) -> None:
+    """Save model checkpoint to disk.
+
+    Args:
+        output_dir (Path): Directory where checkpoint will be saved
+        epoch (int): Current epoch number
+        model (torch.nn.Module): Model to checkpoint
+        optimiser (torch.optim.Optimizer): Optimizer state to save
+        initial_v (torch.Tensor): Current membrane potentials
+        initial_g (torch.Tensor): Current recurrent conductances
+        initial_g_FF (torch.Tensor): Current feedforward conductances
+        cv_loss (float): Current CV loss value
+        fr_loss (float): Current firing rate loss value
+        total_loss (float): Current total loss value
+        best_loss (float): Best loss seen so far
+    """
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True)
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimiser_state_dict": optimiser.state_dict(),
+        "initial_v": initial_v.cpu() if initial_v is not None else None,
+        "initial_g": initial_g.cpu() if initial_g is not None else None,
+        "initial_g_FF": initial_g_FF.cpu() if initial_g_FF is not None else None,
+        "cv_loss": cv_loss,
+        "fr_loss": fr_loss,
+        "total_loss": total_loss,
+        "best_loss": best_loss,
+        "rng_state": torch.get_rng_state(),
+        "numpy_rng_state": np.random.get_state(),
+    }
+
+    # Save as latest checkpoint (for resumption)
+    latest_path = checkpoint_dir / "checkpoint_latest.pt"
+    torch.save(checkpoint, latest_path)
+
+    # Save as best if this is the best model
+    is_best = total_loss <= best_loss
+    if is_best:
+        best_path = checkpoint_dir / "checkpoint_best.pt"
+        torch.save(checkpoint, best_path)
+        print(f"  ✓ New best model saved (loss: {total_loss:.6f})")
+
+    return is_best
+
+
+def load_checkpoint(
+    checkpoint_path: Path,
+    model: torch.nn.Module,
+    optimiser: torch.optim.Optimizer,
+    device: str,
+) -> tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Load model checkpoint from disk.
+
+    Args:
+        checkpoint_path (Path): Path to checkpoint file
+        model (torch.nn.Module): Model to load state into
+        optimiser (torch.optim.Optimizer): Optimizer to load state into
+        device (str): Device to load tensors onto
+
+    Returns:
+        tuple: (epoch, initial_v, initial_g, initial_g_FF, best_loss)
+    """
+    print(f"Loading checkpoint from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimiser.load_state_dict(checkpoint["optimiser_state_dict"])
+
+    epoch = checkpoint["epoch"]
+    initial_v = (
+        checkpoint["initial_v"].to(device)
+        if checkpoint["initial_v"] is not None
+        else None
+    )
+    initial_g = (
+        checkpoint["initial_g"].to(device)
+        if checkpoint["initial_g"] is not None
+        else None
+    )
+    initial_g_FF = (
+        checkpoint["initial_g_FF"].to(device)
+        if checkpoint["initial_g_FF"] is not None
+        else None
+    )
+    best_loss = checkpoint.get("best_loss", float("inf"))
+
+    # Restore random states
+    torch.set_rng_state(checkpoint["rng_state"])
+    np.random.set_state(checkpoint["numpy_rng_state"])
+
+    print(f"  ✓ Resumed from epoch {epoch}, best loss: {best_loss:.6f}")
+    return epoch, initial_v, initial_g, initial_g_FF, best_loss
+
+
+def main(output_dir, params_file, resume_from=None, use_wandb=True):
     """Main execution function for Dp network homeostatic training.
 
     Args:
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
+        resume_from (Path, optional): Path to checkpoint to resume from
+        use_wandb (bool): Whether to use Weights & Biases for logging
     """
     # =============================================
     # SETUP: Device selection and parameter loading
@@ -64,11 +179,13 @@ def main(output_dir, params_file):
     seed = params["simulation"].get("seed", None)
     epochs = int(params["simulation"]["epochs"])
     accumulation_interval = int(params["simulation"]["accumulation_interval"])
+    checkpoint_interval = params["simulation"].get("checkpoint_interval", 50)
     n_steps = int(chunk_size / dt)
 
     # Set global random seed for reproducibility (only if specified in config)
     if seed is not None:
         np.random.seed(seed)
+        torch.manual_seed(seed)
         print(f"Using seed: {seed}")
     else:
         print("No seed specified - using random initialization")
@@ -271,10 +388,12 @@ def main(output_dir, params_file):
         cell_params=cell_params,
         synapse_params=synapse_params,
         surrgrad_scale=surrgrad_scale,
+        scaling_factors=None,  # No scaling factors for homeostatic plasticity
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=cell_params_FF,
         synapse_params_FF=synapse_params_FF,
+        scaling_factors_FF=None,  # No scaling factors for feedforward
         optimisable="weights",
     )
 
@@ -295,15 +414,52 @@ def main(output_dir, params_file):
     cv_loss_fn = CVLoss(target_cv=target_cv_tensor, penalty_value=cv_high_loss)
     firing_rate_loss_fn = FiringRateLoss(target_rate=target_rate_tensor, dt=dt)
 
+    # Initial arrays for chunk inputs
     initial_v = None
     initial_g = None
     initial_g_FF = None
 
+    # ========================================
+    # STEP 6: Initialize wandb (if requested)
+    # ========================================
+
+    if use_wandb:
+        # Initialize wandb with config
+        wandb.init(
+            project="connectome-snns-homeostatic",
+            name=output_dir.name,
+            config={
+                **params,  # Log all parameters
+                "output_dir": str(output_dir),
+                "device": device,
+            },
+            dir=str(output_dir),  # Save wandb files to output directory
+        )
+        wandb.watch(model, log="all", log_freq=accumulation_interval)
+
+    # Load checkpoint if resuming
+    start_epoch = 0
+    best_loss = float("inf")
+
+    if resume_from is not None:
+        start_epoch, initial_v, initial_g, initial_g_FF, best_loss = load_checkpoint(
+            checkpoint_path=resume_from,
+            model=model,
+            optimiser=optimiser,
+            device=device,
+        )
+
+    print(f"\nStarting training from epoch {start_epoch}...")
+    print(f"Target firing rate: {target_firing_rate} Hz")
+    print(f"Target CV: {target_cv}")
+    print(f"Checkpoint interval: {checkpoint_interval} epochs")
+    print(f"Accumulation interval: {accumulation_interval} epochs\n")
+
     # =========================
-    # STEP 6: Run Training Loop
+    # STEP 7: Run Training Loop
     # =========================
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         print(f"Starting epoch {epoch + 1}/{epochs}...")
 
         # Generate new feedforward spikes for this epoch
@@ -343,7 +499,116 @@ def main(output_dir, params_file):
             optimiser.step()
             optimiser.zero_grad()
 
+        # Save checkpoint and statistics periodically
+        if (epoch + 1) % checkpoint_interval == 0:
+            is_best = save_checkpoint(
+                output_dir=output_dir,
+                epoch=epoch + 1,
+                model=model,
+                optimiser=optimiser,
+                initial_v=initial_v,
+                initial_g=initial_g,
+                initial_g_FF=initial_g_FF,
+                cv_loss=cv_loss.item(),
+                fr_loss=fr_loss.item(),
+                total_loss=total_loss.item(),
+                best_loss=best_loss,
+            )
+            if is_best:
+                best_loss = total_loss.item()
+
+            # Compute statistics on current chunk spikes
+            stats = homeostatic_plots.compute_network_statistics(
+                spikes=chunk_s,
+                cell_type_indices=torch.from_numpy(cell_type_indices).to(device),
+                dt=dt,
+            )
+
+            # Log to console
+            print(f"Epoch {epoch + 1}/{epochs}:")
+            print(f"  CV Loss: {cv_loss.item():.6f}")
+            print(f"  FR Loss: {fr_loss.item():.6f}")
+            print(f"  Total Loss: {total_loss.item():.6f}")
+            print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
+            print(f"  Mean CV: {stats['mean_cv']:.3f}")
+            print(f"  Active fraction: {stats['fraction_active']:.3f}")
+
+            # Log to wandb
+            if use_wandb:
+                wandb.log(
+                    {
+                        "epoch": epoch + 1,
+                        "loss/cv": cv_loss.item(),
+                        "loss/firing_rate": fr_loss.item(),
+                        "loss/total": total_loss.item(),
+                        **stats,  # All statistics
+                    }
+                )
+
+            # Generate and log plots
+            print("  Generating plots...")
+            figures_dir = output_dir / "figures" / f"epoch_{epoch + 1:04d}"
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            figures = homeostatic_plots.generate_training_plots(
+                spikes=chunk_s,
+                voltages=chunk_v,
+                conductances=chunk_g,
+                conductances_FF=chunk_g_FF,
+                input_spikes=input_spikes.cpu().numpy(),
+                cell_type_indices=cell_type_indices,
+                input_cell_type_indices=input_source_indices,
+                cell_type_names=cell_type_names,
+                input_cell_type_names=input_cell_type_names,
+                weights=weights,
+                feedforward_weights=feedforward_weights,
+                connectivity_graph=connectivity_graph,
+                num_assemblies=num_assemblies,
+                params=params,
+                dt=dt,
+            )
+
+            # Save figures to disk and log to wandb
+            for plot_name, fig in figures.items():
+                fig_path = figures_dir / f"{plot_name}.png"
+                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+                if use_wandb:
+                    wandb.log({f"plots/{plot_name}": wandb.Image(fig)})
+
+                plt.close(fig)
+
+            print(f"  Saved plots to {figures_dir}")
+
         # Create inputs to next chunk - detached so gradients don't flow across chunks
         initial_v = chunk_v[:, -1, :].detach()
         initial_g = chunk_g[:, -1, :].detach()
         initial_g_FF = chunk_g_FF[:, -1, :].detach()
+
+    # =====================================
+    # STEP 8: Save Final Model and Clean Up
+    # =====================================
+
+    print("\nTraining complete!")
+
+    # Save final checkpoint
+    save_checkpoint(
+        output_dir=output_dir,
+        epoch=epochs,
+        model=model,
+        optimiser=optimiser,
+        initial_v=initial_v,
+        initial_g=initial_g,
+        initial_g_FF=initial_g_FF,
+        cv_loss=cv_loss.item(),
+        fr_loss=fr_loss.item(),
+        total_loss=total_loss.item(),
+        best_loss=best_loss,
+    )
+
+    # Finish wandb run
+    if use_wandb:
+        wandb.finish()
+
+    print(f"✓ Final checkpoint saved to {output_dir / 'checkpoints'}")
+    print(f"✓ Best loss achieved: {best_loss:.6f}")

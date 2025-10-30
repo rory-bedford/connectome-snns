@@ -19,6 +19,7 @@ chunk_size = 10000                     # ms - Chunk size for training
 seed = 42                              # Random seed for reproducibility
 epochs = 500                           # Number of epochs to simulate for
 accumulation_interval = 5              # How many epochs to run before updating gradient
+checkpoint_interval = 10               # How many epochs between checkpoint saves
 
 # ===============
 # HYPERPARAMETERS
