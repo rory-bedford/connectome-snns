@@ -505,11 +505,6 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             initial_g_FF=initial_g_FF,
         )
 
-        # Move tensors not needed for loss to CPU immediately
-        chunk_v_cpu = chunk_v.cpu()
-        chunk_g_cpu = chunk_g.cpu()
-        chunk_g_FF_cpu = chunk_g_FF.cpu()
-
         # Compute losses (keep chunk_s on GPU for gradient computation)
         cv_loss = cv_loss_fn(chunk_s)
         fr_loss = firing_rate_loss_fn(chunk_s)
@@ -578,9 +573,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             figures = homeostatic_plots.generate_training_plots(
                 spikes=chunk_s.detach().cpu(),
-                voltages=chunk_v_cpu,
-                conductances=chunk_g_cpu,
-                conductances_FF=chunk_g_FF_cpu,
+                voltages=chunk_v.cpu().numpy(),
+                conductances=chunk_g.cpu().numpy(),
+                conductances_FF=chunk_g_FF.cpu().numpy(),
                 input_spikes=input_spikes.cpu().numpy(),
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
@@ -608,9 +603,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
         # Create inputs to next chunk - detached so gradients don't flow across chunks
         # Use CPU versions and move back to device for next iteration
-        initial_v = chunk_v_cpu[:, -1, :].to(device)
-        initial_g = chunk_g_cpu[:, -1, :, :, :].to(device)
-        initial_g_FF = chunk_g_FF_cpu[:, -1, :, :, :].to(device)
+        initial_v = chunk_v[:, -1, :]
+        initial_g = chunk_g[:, -1, :, :, :]
+        initial_g_FF = chunk_g_FF[:, -1, :, :, :]
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up
