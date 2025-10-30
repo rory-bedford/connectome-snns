@@ -1,6 +1,17 @@
 # Parameters for use with our current-based LIF network simulating zebrafish Dp
 # Adapted from Meissner-Bernard et al. (2025)
 
+# ======================
+# WANDB CONFIGURATION
+# ======================
+
+[wandb]
+enabled = true                         # Whether to use Weights & Biases for logging
+project = "connectome-snns-homeostatic"  # W&B project name
+entity = ""                            # W&B entity (leave empty for default)
+tags = []                              # Tags for the run (optional)
+notes = ""                             # Notes for the run (optional)
+
 # ====================
 # OPTIMISATION TARGETS
 # ====================
@@ -19,6 +30,7 @@ chunk_size = 10000                     # ms - Chunk size for training
 seed = 42                              # Random seed for reproducibility
 epochs = 500                           # Number of epochs to simulate for
 accumulation_interval = 5              # How many epochs to run before updating gradient
+checkpoint_interval = 10               # How often to save checkpoints and log to wandb
 
 # ===============
 # HYPERPARAMETERS

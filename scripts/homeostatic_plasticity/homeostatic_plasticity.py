@@ -179,7 +179,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     seed = params["simulation"].get("seed", None)
     epochs = int(params["simulation"]["epochs"])
     accumulation_interval = int(params["simulation"]["accumulation_interval"])
-    checkpoint_interval = params["simulation"].get("checkpoint_interval", 50)
+    checkpoint_interval = params["simulation"]["checkpoint_interval"]
     n_steps = int(chunk_size / dt)
 
     # Set global random seed for reproducibility (only if specified in config)
@@ -195,6 +195,17 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     cv_high_loss = float(params["hyperparameters"]["cv_high_loss"])
     loss_ratio = float(params["hyperparameters"]["loss_ratio"])
     learning_rate = float(params["hyperparameters"]["learning_rate"])
+
+    # ========== WANDB CONFIGURATION ==========
+    wandb_config = params.get("wandb", {})
+    use_wandb_from_config = wandb_config.get("enabled", True)
+    wandb_project = wandb_config.get("project", "connectome-snns-homeostatic")
+    wandb_entity = wandb_config.get("entity", None)
+    wandb_tags = wandb_config.get("tags", [])
+    wandb_notes = wandb_config.get("notes", "")
+
+    # Override with function parameter if explicitly set
+    use_wandb = use_wandb and use_wandb_from_config
 
     # ========== FEEDFORWARD LAYER TOPOLOGY ==========
     # Feedforward topology
@@ -424,18 +435,28 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     # ========================================
 
     if use_wandb:
-        # Initialize wandb with config
-        wandb.init(
-            project="connectome-snns-homeostatic",
-            name=output_dir.name,
-            config={
+        # Initialize wandb with config from TOML
+        wandb_init_kwargs = {
+            "project": wandb_project,
+            "name": output_dir.name,
+            "config": {
                 **params,  # Log all parameters
                 "output_dir": str(output_dir),
                 "device": device,
             },
-            dir=str(output_dir),  # Save wandb files to output directory
-        )
-        wandb.watch(model, log="all", log_freq=accumulation_interval)
+            "dir": str(output_dir),  # Save wandb files to output directory
+        }
+
+        # Add optional parameters if specified
+        if wandb_entity:
+            wandb_init_kwargs["entity"] = wandb_entity
+        if wandb_tags:
+            wandb_init_kwargs["tags"] = wandb_tags
+        if wandb_notes:
+            wandb_init_kwargs["notes"] = wandb_notes
+
+        wandb.init(**wandb_init_kwargs)
+        wandb.watch(model, log="all", log_freq=checkpoint_interval)
 
     # Load checkpoint if resuming
     start_epoch = 0
