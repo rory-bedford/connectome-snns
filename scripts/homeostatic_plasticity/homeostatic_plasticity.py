@@ -524,7 +524,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         ) / accumulation_interval
 
         # Compute gradients
-        total_loss.backward()
+        with torch.autograd.profiler.profile(use_cuda=True) as prof:
+            total_loss.backward()
+        print(prof.key_averages().table(sort_by="cuda_memory_usage"))
 
         # Detach losses and outputs to avoid memory leaks
         cv_loss = cv_loss.detach().cpu().numpy()
