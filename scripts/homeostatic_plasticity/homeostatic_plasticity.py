@@ -19,6 +19,7 @@ Overview:
 
 import numpy as np
 import toml
+from collections import deque
 from synthetic_connectome import (
     topology_generators,
     weight_assigners,
@@ -243,6 +244,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     chunks_per_loss = int(params["simulation"]["chunks_per_loss"])
     losses_per_update = int(params["simulation"]["losses_per_update"])
     log_interval = int(params["simulation"]["log_interval"])
+    plot_size = int(params["simulation"]["plot_size"])
 
     # Enable mixed precision training (only beneficial on CUDA)
     use_mixed_precision = params["simulation"].get("mixed_precision", True)
@@ -690,14 +692,18 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     # Initialize gradient accumulation
     optimiser.zero_grad()
 
-    # Accumulators for multi-chunk trajectories
-    accumulated_spikes = []
-    accumulated_voltages = []
-    accumulated_currents = []
-    accumulated_currents_FF = []
-    accumulated_conductances = []
-    accumulated_conductances_FF = []
-    accumulated_input_spikes = []
+    # Accumulators for loss computation (GPU tensors with gradients)
+    loss_spikes = []
+
+    # Accumulators for plotting (CPU numpy arrays in deques with maxlen)
+    # These use deques with maxlen=plot_size for efficient memory management
+    plot_spikes = deque(maxlen=plot_size)
+    plot_voltages = deque(maxlen=plot_size)
+    plot_currents = deque(maxlen=plot_size)
+    plot_currents_FF = deque(maxlen=plot_size)
+    plot_conductances = deque(maxlen=plot_size)
+    plot_conductances_FF = deque(maxlen=plot_size)
+    plot_input_spikes = deque(maxlen=plot_size)
 
     # Initialize progress bar for training loop
     pbar = tqdm(
@@ -742,23 +748,30 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         initial_g = chunk_g[:, -1, :, :, :].detach()
         initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
 
-        # Accumulate chunk outputs (keep gradients for spikes, convert others to CPU/numpy)
-        accumulated_spikes.append(chunk_s)
-        accumulated_voltages.append(chunk_v.detach().cpu().numpy())
-        accumulated_currents.append(chunk_I.detach().cpu().numpy())
-        accumulated_currents_FF.append(chunk_I_FF.detach().cpu().numpy())
-        accumulated_conductances.append(chunk_g.detach().cpu().numpy())
-        accumulated_conductances_FF.append(chunk_g_FF.detach().cpu().numpy())
-        accumulated_input_spikes.append(input_spikes.detach().cpu().numpy())
+        # Accumulate spikes for loss computation (keep on GPU with gradients)
+        loss_spikes.append(chunk_s)
+
+        # Accumulate data for plotting (detach and move to CPU as numpy arrays)
+        # These are stored in deques with maxlen, so old data is automatically discarded
+        plot_spikes.append(chunk_s.detach().cpu().numpy())
+        plot_voltages.append(chunk_v.detach().cpu().numpy())
+        plot_currents.append(chunk_I.detach().cpu().numpy())
+        plot_currents_FF.append(chunk_I_FF.detach().cpu().numpy())
+        plot_conductances.append(chunk_g.detach().cpu().numpy())
+        plot_conductances_FF.append(chunk_g_FF.detach().cpu().numpy())
+        plot_input_spikes.append(input_spikes.detach().cpu().numpy())
+
+        # Delete chunk tensors to free GPU memory immediately
+        del chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF
 
         # Check if it's time to compute loss
         if (epoch + 1) % chunks_per_loss == 0:
             # Indicate gradient computation is starting
             pbar.set_description("Training [Computing gradients...]")
 
-            # Concatenate accumulated chunks
+            # Concatenate accumulated chunks for loss computation
             full_spikes = torch.cat(
-                accumulated_spikes, dim=1
+                loss_spikes, dim=1
             )  # (batch, chunks_per_loss * n_steps, n_neurons)
 
             # Compute loss over full trajectory with mixed precision
@@ -783,9 +796,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             fr_loss_np = fr_loss.detach().cpu().item()
             total_loss_np = total_loss.detach().cpu().item()
 
-            # Detach accumulated spikes for visualization (keep them but remove gradients)
-            # This allows us to plot the full trajectory at checkpoints
-            accumulated_spikes = [s.detach() for s in accumulated_spikes]
+            # Delete loss tensors and clear loss_spikes accumulator to free GPU memory
+            del cv_loss, fr_loss, total_loss, full_spikes
+            loss_spikes.clear()
 
             # Update progress bar with loss information
             pbar.set_postfix(
@@ -812,6 +825,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             scaler.update()
             optimiser.zero_grad()
 
+            # Clear CUDA cache after weight update to release orphaned memory
+            if device == "cuda":
+                torch.cuda.empty_cache()
+
             # Brief indication that weights were updated
             pbar.set_description("Training [✓ Weights updated]")
 
@@ -827,15 +844,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print("=" * 60)
 
             # Concatenate all accumulated data for visualization and checkpointing
-            vis_voltages = np.concatenate(accumulated_voltages, axis=1)
-            vis_currents = np.concatenate(accumulated_currents, axis=1)
-            vis_currents_FF = np.concatenate(accumulated_currents_FF, axis=1)
-            vis_conductances = np.concatenate(accumulated_conductances, axis=1)
-            vis_conductances_FF = np.concatenate(accumulated_conductances_FF, axis=1)
-            vis_input_spikes = np.concatenate(accumulated_input_spikes, axis=1)
-
-            # Concatenate spike data (already detached after loss computation)
-            vis_spikes = torch.cat(accumulated_spikes, dim=1).cpu().numpy()
+            vis_spikes = np.concatenate(list(plot_spikes), axis=1)
+            vis_voltages = np.concatenate(list(plot_voltages), axis=1)
+            vis_currents = np.concatenate(list(plot_currents), axis=1)
+            vis_currents_FF = np.concatenate(list(plot_currents_FF), axis=1)
+            vis_conductances = np.concatenate(list(plot_conductances), axis=1)
+            vis_conductances_FF = np.concatenate(list(plot_conductances_FF), axis=1)
+            vis_input_spikes = np.concatenate(list(plot_input_spikes), axis=1)
 
             # Save checkpoint
             is_best = save_checkpoint(
@@ -927,14 +942,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  ✓ Saved plots to {figures_dir}")
             print("=" * 60)
 
-            # Clear all accumulators after checkpointing to free memory
-            accumulated_spikes = []
-            accumulated_voltages = []
-            accumulated_currents = []
-            accumulated_currents_FF = []
-            accumulated_conductances = []
-            accumulated_conductances_FF = []
-            accumulated_input_spikes = []
+            # Force garbage collection and clear CUDA cache to ensure memory is freed
+            import gc
+
+            gc.collect()
+            if device == "cuda":
+                torch.cuda.empty_cache()
 
             # Refresh the progress bar after checkpoint output
             pbar.refresh()
@@ -952,9 +965,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     print("=" * 60)
 
     # Save final checkpoint
+    # Get the last input spikes from the plot queue
     final_input_spikes = (
-        accumulated_input_spikes[-1]
-        if accumulated_input_spikes
+        plot_input_spikes[-1]
+        if len(plot_input_spikes) > 0
         else input_spikes.detach().cpu().numpy()
     )
     save_checkpoint(
