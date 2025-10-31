@@ -524,7 +524,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
         # Detach losses and outputs to avoid memory leaks
         cv_loss = cv_loss.detach().cpu().numpy()
-        cv_loss = cv_loss.detach().cpu().numpy()
+        fr_loss = fr_loss.detach().cpu().numpy()
         total_loss = total_loss.detach().cpu().numpy()
         chunk_s = chunk_s.detach().cpu().numpy()
 
