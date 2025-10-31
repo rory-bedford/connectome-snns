@@ -594,6 +594,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 voltages=chunk_v,
                 conductances=chunk_g,
                 conductances_FF=chunk_g_FF,
+                currents=chunk_I,
+                currents_FF=chunk_I_FF,
                 input_spikes=input_spikes,
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,

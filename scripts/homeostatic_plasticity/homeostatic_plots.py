@@ -10,6 +10,7 @@ from visualization.neuronal_dynamics import (
     plot_mitral_cell_spikes,
     plot_dp_network_spikes,
     plot_synaptic_conductances,
+    plot_synaptic_currents,
 )
 from visualization.firing_statistics import (
     plot_fano_factor_vs_window_size,
@@ -23,51 +24,50 @@ import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for cluster environments
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 
 
 def compute_network_statistics(
-    spikes: torch.Tensor,
-    cell_type_indices: torch.Tensor,
+    spikes: np.ndarray,
+    cell_type_indices: np.ndarray,
     dt: float,
 ) -> dict[str, float]:
     """Compute summary statistics from network activity.
 
     Args:
-        spikes (torch.Tensor): Spike tensor of shape (batch, time, neurons)
-        cell_type_indices (torch.Tensor): Cell type index for each neuron
+        spikes (np.ndarray): Spike tensor of shape (batch, time, neurons)
+        cell_type_indices (np.ndarray): Cell type index for each neuron
         dt (float): Time step in milliseconds
 
     Returns:
         dict: Dictionary containing mean firing rates and CVs
     """
     # Compute firing rates per neuron (Hz)
-    spike_counts = spikes.sum(dim=1).squeeze()  # Sum over time
+    spike_counts = spikes.sum(axis=1).squeeze()  # Sum over time
     duration_s = spikes.shape[1] * dt / 1000.0  # Convert ms to s
     firing_rates = spike_counts / duration_s
 
     # Compute ISIs and CVs per neuron
     cvs = []
     for neuron_idx in range(spikes.shape[2]):
-        spike_times = torch.nonzero(spikes[0, :, neuron_idx]).squeeze()
-        if spike_times.ndim > 0 and len(spike_times) > 1:
-            isis = torch.diff(spike_times.float()) * dt
+        spike_times = np.nonzero(spikes[0, :, neuron_idx])[0]
+        if len(spike_times) > 1:
+            isis = np.diff(spike_times.astype(float)) * dt
             if len(isis) > 0:
-                cv = torch.std(isis) / torch.mean(isis)
-                cvs.append(cv.item())
+                cv = np.std(isis) / np.mean(isis)
+                cvs.append(cv)
 
     # Compute statistics by cell type
     stats = {}
-    for cell_type in torch.unique(cell_type_indices):
+    for cell_type in np.unique(cell_type_indices):
         mask = cell_type_indices == cell_type
-        stats[f"mean_fr_type_{cell_type.item()}"] = firing_rates[mask].mean().item()
-        stats[f"std_fr_type_{cell_type.item()}"] = firing_rates[mask].std().item()
+        stats[f"mean_fr_type_{int(cell_type)}"] = float(firing_rates[mask].mean())
+        stats[f"std_fr_type_{int(cell_type)}"] = float(firing_rates[mask].std())
 
-    stats["mean_firing_rate"] = firing_rates.mean().item()
-    stats["std_firing_rate"] = firing_rates.std().item()
-    stats["mean_cv"] = np.mean(cvs) if cvs else 0.0
-    stats["std_cv"] = np.std(cvs) if cvs else 0.0
-    stats["fraction_active"] = (firing_rates > 0).float().mean().item()
+    stats["mean_firing_rate"] = float(firing_rates.mean())
+    stats["std_firing_rate"] = float(firing_rates.std())
+    stats["mean_cv"] = float(np.mean(cvs)) if cvs else 0.0
+    stats["std_cv"] = float(np.std(cvs)) if cvs else 0.0
+    stats["fraction_active"] = float((firing_rates > 0).mean())
 
     return stats
 
@@ -77,6 +77,8 @@ def generate_training_plots(
     voltages: np.ndarray,
     conductances: np.ndarray,
     conductances_FF: np.ndarray,
+    currents: np.ndarray,
+    currents_FF: np.ndarray,
     input_spikes: np.ndarray,
     cell_type_indices: np.ndarray,
     input_cell_type_indices: np.ndarray,
@@ -98,6 +100,8 @@ def generate_training_plots(
         voltages (np.ndarray): Membrane voltages
         conductances (np.ndarray): Recurrent synaptic conductances
         conductances_FF (np.ndarray): Feedforward synaptic conductances
+        currents (np.ndarray): Recurrent synaptic currents
+        currents_FF (np.ndarray): Feedforward synaptic currents
         input_spikes (np.ndarray): Input spike trains
         cell_type_indices (np.ndarray): Cell type assignments
         input_cell_type_indices (np.ndarray): Input cell type assignments
@@ -215,13 +219,32 @@ def generate_training_plots(
         fraction=1,
     )
 
-    # Synaptic currents (need to compute from conductances)
-    # Split currents into excitatory and inhibitory based on conductances
-    # Note: This assumes conductances shape is (batch, time, neurons, n_synapse_types)
-    # For conductance-based model, we compute I = g * (V - E_syn)
-    # This is an approximation - ideally pass actual currents if available
-    # For now, we'll skip detailed current plots or use a simplified version
-    # TODO: Add synaptic current computation if needed
+    # Synaptic currents
+    # Sum currents over synapse types to get total excitatory and inhibitory
+    # Currents shape is (batch, time, neurons, n_synapse_types)
+    # Sum over the last axis to get total current per neuron
+    total_currents = currents.sum(axis=3)
+    total_currents_FF = currents_FF.sum(axis=3)
+
+    # Split into excitatory (positive) and inhibitory (negative) components
+    I_exc = total_currents.clip(min=0)
+    I_inh = total_currents.clip(max=0)
+
+    # Add feedforward currents
+    I_exc += total_currents_FF.clip(min=0)
+    I_inh += total_currents_FF.clip(max=0)
+
+    figures["synaptic_currents"] = plot_synaptic_currents(
+        I_exc=I_exc,
+        I_inh=I_inh,
+        delta_t=dt,
+        duration=duration,
+        n_neurons_plot=5,
+        fraction=1.0,
+        show_total=True,
+        neuron_types=cell_type_indices,
+        neuron_params=neuron_params,
+    )
 
     # Synaptic conductances
     recurrent_synapse_names = {}
@@ -250,10 +273,7 @@ def generate_training_plots(
         fraction=0.1,
     )
 
-    # Firing statistics (these functions expect torch tensors)
-    spikes_tensor = torch.from_numpy(spikes)
-    cell_type_indices_tensor = torch.from_numpy(cell_type_indices)
-
+    # Firing statistics (these functions expect numpy arrays)
     window_sizes = [
         int(0.01 * 1000 / dt),
         int(0.02 * 1000 / dt),
@@ -264,24 +284,24 @@ def generate_training_plots(
         int(1.0 * 1000 / dt),
     ]
     figures["fano_factor"] = plot_fano_factor_vs_window_size(
-        spike_trains=spikes_tensor,
+        spike_trains=spikes,
         window_sizes=window_sizes,
-        cell_type_indices=cell_type_indices_tensor,
+        cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
     )
 
     figures["cv_histogram"] = plot_cv_histogram(
-        spike_trains=spikes_tensor,
-        cell_type_indices=cell_type_indices_tensor,
+        spike_trains=spikes,
+        cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
         bins=50,
     )
 
     figures["isi_histogram"] = plot_isi_histogram(
-        spike_trains=spikes_tensor,
-        cell_type_indices=cell_type_indices_tensor,
+        spike_trains=spikes,
+        cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
         bins=100,
