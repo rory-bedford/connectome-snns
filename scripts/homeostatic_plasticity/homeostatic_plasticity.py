@@ -533,7 +533,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             with_stack=True,
         ) as prof:
             total_loss.backward()
-            prof.export_chrome_trace("trace.json")
+
+        with open("memory_profile.txt", "w") as f:
+            f.write(
+                prof.key_averages().table(
+                    sort_by="self_cuda_memory_usage", row_limit=10
+                )
+            )
 
         # Detach losses and outputs to avoid memory leaks
         cv_loss = cv_loss.detach().cpu().numpy()
