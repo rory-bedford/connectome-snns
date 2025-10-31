@@ -32,11 +32,51 @@ from pathlib import Path
 from optimisation.loss_functions import CVLoss, FiringRateLoss
 import wandb
 from matplotlib import pyplot as plt
+from torch.utils.checkpoint import checkpoint
 
 
 # Import local scripts
 sys.path.append(str(Path(__file__).resolve().parent))
 import homeostatic_plots
+
+
+def run_chunk_with_checkpoint(
+    model: ConductanceLIFNetwork,
+    n_steps: int,
+    dt: float,
+    input_spikes: torch.Tensor,
+    initial_v: torch.Tensor,
+    initial_g: torch.Tensor,
+    initial_g_FF: torch.Tensor,
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
+    """
+    Run a single chunk through the model with gradient checkpointing.
+
+    This wrapper allows PyTorch to checkpoint the forward pass and recompute
+    it during the backward pass, trading memory for compute.
+
+    Args:
+        model (ConductanceLIFNetwork): The network model
+        n_steps (int): Number of timesteps in this chunk
+        dt (float): Timestep size in milliseconds
+        input_spikes (torch.Tensor): Input spike trains for this chunk
+        initial_v (torch.Tensor): Initial membrane potentials
+        initial_g (torch.Tensor): Initial recurrent conductances
+        initial_g_FF (torch.Tensor): Initial feedforward conductances
+
+    Returns:
+        tuple: (spikes, voltages, currents, currents_FF, conductances, conductances_FF)
+    """
+    return model.forward(
+        n_steps=n_steps,
+        dt=dt,
+        inputs=input_spikes,
+        initial_v=initial_v,
+        initial_g=initial_g,
+        initial_g_FF=initial_g_FF,
+    )
 
 
 def save_checkpoint(
@@ -178,12 +218,23 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
     # ========== SIMULATION CONFIGURATION ==========
     dt = float(params["simulation"]["dt"])
-    chunk_size = float(params["simulation"]["chunk_size"])
+    n_steps = int(params["simulation"]["chunk_size"])
     seed = params["simulation"].get("seed", None)
-    epochs = int(params["simulation"]["epochs"])
-    accumulation_interval = int(params["simulation"]["accumulation_interval"])
-    checkpoint_interval = params["simulation"]["checkpoint_interval"]
-    n_steps = int(chunk_size / dt)
+    num_chunks = int(params["simulation"]["num_chunks"])
+    chunks_per_loss = int(params["simulation"]["chunks_per_loss"])
+    losses_per_update = int(params["simulation"]["losses_per_update"])
+    log_interval = int(params["simulation"]["log_interval"])
+
+    # Calculate derived values
+    chunk_duration = n_steps * dt  # Duration in ms
+    chunks_per_update = chunks_per_loss * losses_per_update
+
+    # Validate configuration
+    if log_interval % chunks_per_loss != 0:
+        raise ValueError(
+            f"log_interval ({log_interval}) must be a multiple of chunks_per_loss ({chunks_per_loss}) "
+            "to ensure loss values are always available when checkpointing."
+        )
 
     # Set global random seed for reproducibility (only if specified in config)
     if seed is not None:
@@ -459,7 +510,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             wandb_init_kwargs["notes"] = wandb_notes
 
         wandb.init(**wandb_init_kwargs)
-        wandb.watch(model, log="all", log_freq=checkpoint_interval)
+        wandb.watch(model, log="all", log_freq=log_interval)
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -473,20 +524,37 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             device=device,
         )
 
-    print(f"\nStarting training from epoch {start_epoch}...")
+    print(f"\nStarting training from chunk {start_epoch}...")
     print(f"Target firing rate: {target_firing_rate} Hz")
     print(f"Target CV: {target_cv}")
-    print(f"Checkpoint interval: {checkpoint_interval} epochs")
-    print(f"Accumulation interval: {accumulation_interval} epochs\n")
+    print(f"Total chunks: {num_chunks}")
+    print(
+        f"Chunks per loss: {chunks_per_loss} chunks ({chunks_per_loss * chunk_duration:.0f} ms)"
+    )
+    print(
+        f"Losses per update: {losses_per_update} losses ({chunks_per_update * chunk_duration:.0f} ms)"
+    )
+    print(f"Log interval: {log_interval} chunks")
+    print("Gradient checkpointing: enabled\n")
 
     # =========================
     # STEP 7: Run Training Loop
     # =========================
 
-    for epoch in range(start_epoch, epochs):
-        print(f"Starting epoch {epoch + 1}/{epochs}...")
+    # Initialize gradient accumulation
+    optimiser.zero_grad()
 
-        # Generate new feedforward spikes for this epoch
+    # Accumulators for multi-chunk trajectories
+    accumulated_spikes = []
+    accumulated_voltages = []
+    accumulated_currents = []
+    accumulated_currents_FF = []
+    accumulated_conductances = []
+    accumulated_conductances_FF = []
+    accumulated_input_spikes = []
+
+    for epoch in range(start_epoch, num_chunks):
+        # Generate new feedforward spikes for this chunk
         input_spikes = spike_generators.generate_poisson_spikes(
             n_steps=n_steps,
             dt=dt,
@@ -498,91 +566,127 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             device=device,
         )
 
-        # Run network simulation for this epoch
-        chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = model.forward(
-            n_steps=n_steps,
-            dt=dt,
-            inputs=input_spikes,
-            initial_v=initial_v,
-            initial_g=initial_g,
-            initial_g_FF=initial_g_FF,
+        # Run network simulation for this chunk (with checkpointing)
+        chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = checkpoint(
+            run_chunk_with_checkpoint,
+            model,
+            n_steps,
+            dt,
+            input_spikes,
+            initial_v,
+            initial_g,
+            initial_g_FF,
+            use_reentrant=False,
         )
 
-        # Detach outputs not needed for loss computation
-        chunk_v = chunk_v.detach().cpu().numpy()
-        chunk_I = chunk_I.detach().cpu().numpy()
-        chunk_I_FF = chunk_I_FF.detach().cpu().numpy()
-        chunk_g = chunk_g.detach().cpu().numpy()
-        chunk_g_FF = chunk_g_FF.detach().cpu().numpy()
-        input_spikes = input_spikes.detach().cpu().numpy()
+        # Carry state forward to next chunk (detach to stop gradient flow)
+        initial_v = chunk_v[:, -1, :].detach()
+        initial_g = chunk_g[:, -1, :, :, :].detach()
+        initial_g_FF = chunk_g_FF[:, -1, :, :, :].detach()
 
-        # Compute losses
-        cv_loss = cv_loss_fn(chunk_s)
-        fr_loss = firing_rate_loss_fn(chunk_s)
-        total_loss = (
-            loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
-        ) / accumulation_interval
+        # Accumulate chunk outputs (keep gradients for spikes, convert others to CPU/numpy)
+        accumulated_spikes.append(chunk_s)
+        accumulated_voltages.append(chunk_v.detach().cpu().numpy())
+        accumulated_currents.append(chunk_I.detach().cpu().numpy())
+        accumulated_currents_FF.append(chunk_I_FF.detach().cpu().numpy())
+        accumulated_conductances.append(chunk_g.detach().cpu().numpy())
+        accumulated_conductances_FF.append(chunk_g_FF.detach().cpu().numpy())
+        accumulated_input_spikes.append(input_spikes.detach().cpu().numpy())
 
-        # Compute gradients
-        from torch.profiler import profile, ProfilerActivity
+        # Check if it's time to compute loss
+        if (epoch + 1) % chunks_per_loss == 0:
+            # Concatenate accumulated chunks
+            full_spikes = torch.cat(
+                accumulated_spikes, dim=1
+            )  # (batch, chunks_per_loss * n_steps, n_neurons)
 
-        with profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            profile_memory=True,
-            record_shapes=True,
-            with_stack=True,
-        ) as prof:
+            # Compute loss over full trajectory
+            cv_loss = cv_loss_fn(full_spikes)
+            fr_loss = firing_rate_loss_fn(full_spikes)
+            total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
+
+            # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
+            total_loss = total_loss / (chunks_per_update // chunks_per_loss)
+
+            # Backward pass (accumulates gradients)
             total_loss.backward()
 
-        with open("memory_profile.txt", "w") as f:
-            f.write(
-                prof.key_averages().table(
-                    sort_by="self_cuda_memory_usage", row_limit=10
-                )
+            # Convert to numpy for logging (detach first)
+            cv_loss_np = cv_loss.detach().cpu().item()
+            fr_loss_np = fr_loss.detach().cpu().item()
+            total_loss_np = total_loss.detach().cpu().item()
+
+            # Clear spike accumulators (they held gradients)
+            accumulated_spikes = []
+
+            print(
+                f"Chunk {epoch + 1}/{num_chunks} | CV: {cv_loss_np:.6f} | FR: {fr_loss_np:.6f} | Total: {total_loss_np:.6f}"
             )
 
-        # Detach losses and outputs to avoid memory leaks
-        cv_loss = cv_loss.detach().cpu().numpy()
-        fr_loss = fr_loss.detach().cpu().numpy()
-        total_loss = total_loss.detach().cpu().numpy()
-        chunk_s = chunk_s.detach().cpu().numpy()
+        # Check if it's time to update weights
+        if (epoch + 1) % chunks_per_update == 0:
+            # Clip gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-        # Perform optimisation step every accumulation_interval epochs
-        if (epoch + 1) % accumulation_interval == 0:
+            # Update weights
             optimiser.step()
             optimiser.zero_grad()
 
+            print(f"  ✓ Weights updated at chunk {epoch + 1}")
+
         # Save checkpoint and statistics periodically
-        if (epoch + 1) % checkpoint_interval == 0:
+        if (epoch + 1) % log_interval == 0:
+            # Concatenate all accumulated data for visualization and checkpointing
+            vis_voltages = np.concatenate(accumulated_voltages, axis=1)
+            vis_currents = np.concatenate(accumulated_currents, axis=1)
+            vis_currents_FF = np.concatenate(accumulated_currents_FF, axis=1)
+            vis_conductances = np.concatenate(accumulated_conductances, axis=1)
+            vis_conductances_FF = np.concatenate(accumulated_conductances_FF, axis=1)
+            vis_input_spikes = np.concatenate(accumulated_input_spikes, axis=1)
+
+            # For spikes: check if we have any, otherwise use last chunk only
+            if accumulated_spikes:
+                vis_spikes = torch.cat(accumulated_spikes, dim=1).detach().cpu().numpy()
+            else:
+                # If we just computed loss and cleared spikes, use last chunk only
+                vis_spikes = chunk_s.detach().cpu().numpy()
+
+            # Save checkpoint
             is_best = save_checkpoint(
                 output_dir=output_dir,
                 epoch=epoch + 1,
                 model=model,
                 optimiser=optimiser,
-                initial_v=initial_v,
-                initial_g=initial_g,
-                initial_g_FF=initial_g_FF,
-                input_spikes=input_spikes,
-                cv_loss=cv_loss,
-                fr_loss=fr_loss,
-                total_loss=total_loss,
+                initial_v=initial_v.cpu().numpy()
+                if torch.is_tensor(initial_v)
+                else initial_v,
+                initial_g=initial_g.cpu().numpy()
+                if torch.is_tensor(initial_g)
+                else initial_g,
+                initial_g_FF=initial_g_FF.cpu().numpy()
+                if torch.is_tensor(initial_g_FF)
+                else initial_g_FF,
+                input_spikes=vis_input_spikes,
+                cv_loss=cv_loss_np,
+                fr_loss=fr_loss_np,
+                total_loss=total_loss_np,
                 best_loss=best_loss,
             )
             if is_best:
-                best_loss = total_loss
+                best_loss = total_loss_np
 
-            # Compute statistics on current chunk spikes (move to CPU for analysis)
+            # Compute statistics on accumulated trajectory
             stats = homeostatic_plots.compute_network_statistics(
-                spikes=chunk_s,
+                spikes=vis_spikes,
                 cell_type_indices=cell_type_indices,
                 dt=dt,
             )
 
             # Log to console
-            print(f"Epoch {epoch + 1}/{epochs}:")
-            print(f"  CV Loss: {cv_loss:.6f}")
-            print(f"  FR Loss: {fr_loss:.6f}")
-            print(f"  Total Loss: {total_loss:.6f}")
+            print(f"\nCheckpoint at chunk {epoch + 1}/{num_chunks}:")
+            print(f"  CV Loss: {cv_loss_np:.6f}")
+            print(f"  FR Loss: {fr_loss_np:.6f}")
+            print(f"  Total Loss: {total_loss_np:.6f}")
             print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
             print(f"  Mean CV: {stats['mean_cv']:.3f}")
             print(f"  Active fraction: {stats['fraction_active']:.3f}")
@@ -591,27 +695,27 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             if use_wandb:
                 wandb.log(
                     {
-                        "epoch": epoch + 1,
-                        "loss/cv": cv_loss,
-                        "loss/firing_rate": fr_loss,
-                        "loss/total": total_loss,
-                        **stats,  # All statistics
+                        "chunk": epoch + 1,
+                        "loss/cv": cv_loss_np,
+                        "loss/firing_rate": fr_loss_np,
+                        "loss/total": total_loss_np,
+                        **stats,
                     }
                 )
 
             # Generate and log plots
             print("  Generating plots...")
-            figures_dir = output_dir / "figures" / f"epoch_{epoch + 1:04d}"
+            figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(
-                spikes=chunk_s,
-                voltages=chunk_v,
-                conductances=chunk_g,
-                conductances_FF=chunk_g_FF,
-                currents=chunk_I,
-                currents_FF=chunk_I_FF,
-                input_spikes=input_spikes,
+                spikes=vis_spikes,
+                voltages=vis_voltages,
+                conductances=vis_conductances,
+                conductances_FF=vis_conductances_FF,
+                currents=vis_currents,
+                currents_FF=vis_currents_FF,
+                input_spikes=vis_input_spikes,
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
                 cell_type_names=cell_type_names,
@@ -634,12 +738,15 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
                 plt.close(fig)
 
-            print(f"  Saved plots to {figures_dir}")
+            print(f"  Saved plots to {figures_dir}\n")
 
-        # Create inputs to next chunk
-        initial_v = chunk_v[:, -1, :]
-        initial_g = chunk_g[:, -1, :, :, :]
-        initial_g_FF = chunk_g_FF[:, -1, :, :, :]
+            # Clear all accumulators after checkpointing to free memory
+            accumulated_voltages = []
+            accumulated_currents = []
+            accumulated_currents_FF = []
+            accumulated_conductances = []
+            accumulated_conductances_FF = []
+            accumulated_input_spikes = []
 
     # =====================================
     # STEP 8: Save Final Model and Clean Up
@@ -648,18 +755,25 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     print("\nTraining complete!")
 
     # Save final checkpoint
+    final_input_spikes = (
+        accumulated_input_spikes[-1]
+        if accumulated_input_spikes
+        else input_spikes.detach().cpu().numpy()
+    )
     save_checkpoint(
         output_dir=output_dir,
-        epoch=epochs,
+        epoch=num_chunks,
         model=model,
         optimiser=optimiser,
-        initial_v=initial_v,
-        initial_g=initial_g,
-        initial_g_FF=initial_g_FF,
-        input_spikes=input_spikes,
-        cv_loss=cv_loss,
-        fr_loss=fr_loss,
-        total_loss=total_loss,
+        initial_v=initial_v.cpu().numpy() if torch.is_tensor(initial_v) else initial_v,
+        initial_g=initial_g.cpu().numpy() if torch.is_tensor(initial_g) else initial_g,
+        initial_g_FF=initial_g_FF.cpu().numpy()
+        if torch.is_tensor(initial_g_FF)
+        else initial_g_FF,
+        input_spikes=final_input_spikes,
+        cv_loss=cv_loss_np,
+        fr_loss=fr_loss_np,
+        total_loss=total_loss_np,
         best_loss=best_loss,
     )
 
