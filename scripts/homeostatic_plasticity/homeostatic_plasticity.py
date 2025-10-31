@@ -892,18 +892,6 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  Mean CV: {stats['mean_cv']:.3f}")
             print(f"  Active fraction: {stats['fraction_active']:.3f}")
 
-            # Log to wandb
-            if use_wandb:
-                wandb.log(
-                    {
-                        "chunk": epoch + 1,
-                        "loss/cv": cv_loss_np,
-                        "loss/firing_rate": fr_loss_np,
-                        "loss/total": total_loss_np,
-                        **stats,
-                    }
-                )
-
             # Generate and log plots
             print("  Generating plots...")
             figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
@@ -929,15 +917,34 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 dt=dt,
             )
 
-            # Save figures to disk and log to wandb
+            # Save figures to disk
             for plot_name, fig in figures.items():
                 fig_path = figures_dir / f"{plot_name}.png"
                 fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-
-                if use_wandb:
-                    wandb.log({f"plots/{plot_name}": wandb.Image(fig)})
-
                 plt.close(fig)
+
+            # Log to wandb (combine all metrics and plots in a single call)
+            if use_wandb:
+                # Create wandb Images for all plots
+                wandb_plots = {
+                    f"plots/{plot_name}": wandb.Image(
+                        str(figures_dir / f"{plot_name}.png")
+                    )
+                    for plot_name in figures.keys()
+                }
+
+                # Log everything together at the same step
+                wandb.log(
+                    {
+                        "chunk": epoch + 1,
+                        "loss/cv": cv_loss_np,
+                        "loss/firing_rate": fr_loss_np,
+                        "loss/total": total_loss_np,
+                        **stats,
+                        **wandb_plots,
+                    },
+                    step=epoch + 1,
+                )
 
             print(f"  ✓ Saved plots to {figures_dir}")
             print("=" * 60)
