@@ -22,6 +22,7 @@ import numpy as np
 def compute_network_statistics(
     spikes: np.ndarray,
     cell_type_indices: np.ndarray,
+    cell_type_names: list[str],
     dt: float,
 ) -> dict[str, float]:
     """Compute summary statistics from network activity.
@@ -29,10 +30,11 @@ def compute_network_statistics(
     Args:
         spikes (np.ndarray): Spike tensor of shape (batch, time, neurons)
         cell_type_indices (np.ndarray): Cell type index for each neuron
+        cell_type_names (list[str]): Names of cell types
         dt (float): Time step in milliseconds
 
     Returns:
-        dict: Dictionary containing mean firing rates and CVs
+        dict: Dictionary containing mean firing rates and CVs by cell type
     """
     # Compute firing rates per neuron (Hz)
     spike_counts = spikes.sum(axis=1).squeeze()  # Sum over time
@@ -40,27 +42,38 @@ def compute_network_statistics(
     firing_rates = spike_counts / duration_s
 
     # Compute ISIs and CVs per neuron
-    cvs = []
+    cvs = np.full(spikes.shape[2], np.nan)  # Initialize with NaN for silent neurons
     for neuron_idx in range(spikes.shape[2]):
         spike_times = np.nonzero(spikes[0, :, neuron_idx])[0]
         if len(spike_times) > 1:
             isis = np.diff(spike_times.astype(float)) * dt
             if len(isis) > 0:
-                cv = np.std(isis) / np.mean(isis)
-                cvs.append(cv)
+                cvs[neuron_idx] = np.std(isis) / np.mean(isis)
 
-    # Compute statistics by cell type
+    # Compute statistics by cell type (use actual cell type names)
     stats = {}
     for cell_type in np.unique(cell_type_indices):
         mask = cell_type_indices == cell_type
-        stats[f"mean_fr_type_{int(cell_type)}"] = float(firing_rates[mask].mean())
-        stats[f"std_fr_type_{int(cell_type)}"] = float(firing_rates[mask].std())
+        cell_type_name = cell_type_names[int(cell_type)]
 
-    stats["mean_firing_rate"] = float(firing_rates.mean())
-    stats["std_firing_rate"] = float(firing_rates.std())
-    stats["mean_cv"] = float(np.mean(cvs)) if cvs else 0.0
-    stats["std_cv"] = float(np.std(cvs)) if cvs else 0.0
-    stats["fraction_active"] = float((firing_rates > 0).mean())
+        # Firing rate statistics
+        stats[f"firing_rate/{cell_type_name}/mean"] = float(firing_rates[mask].mean())
+        stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
+
+        # CV statistics (only for neurons with valid CVs)
+        cell_cvs = cvs[mask]
+        valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
+        stats[f"cv/{cell_type_name}/mean"] = (
+            float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+        )
+        stats[f"cv/{cell_type_name}/std"] = (
+            float(np.std(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+        )
+
+        # Fraction active
+        stats[f"fraction_active/{cell_type_name}"] = float(
+            (firing_rates[mask] > 0).mean()
+        )
 
     return stats
 
@@ -89,13 +102,13 @@ def generate_training_plots(
     Args:
         output_dir (Path): Directory where plots will be saved
         epoch (int): Current epoch number
-        spikes (np.ndarray): Network spike trains
-        voltages (np.ndarray): Membrane voltages
-        conductances (np.ndarray): Recurrent synaptic conductances
-        conductances_FF (np.ndarray): Feedforward synaptic conductances
-        currents (np.ndarray): Recurrent synaptic currents
-        currents_FF (np.ndarray): Feedforward synaptic currents
-        input_spikes (np.ndarray): Input spike trains
+        spikes (np.ndarray): Network spike trains (batch, time, neurons)
+        voltages (np.ndarray): Membrane voltages (batch, time, neurons)
+        conductances (np.ndarray): Recurrent synaptic conductances (batch, time, neurons, synapses, rise/decay)
+        conductances_FF (np.ndarray): Feedforward synaptic conductances (batch, time, neurons, synapses, rise/decay)
+        currents (np.ndarray): Recurrent synaptic currents (batch, time, neurons, synapses)
+        currents_FF (np.ndarray): Feedforward synaptic currents (batch, time, neurons, synapses)
+        input_spikes (np.ndarray): Input spike trains (batch, time, neurons)
         cell_type_indices (np.ndarray): Cell type assignments
         input_cell_type_indices (np.ndarray): Input cell type assignments
         cell_type_names (list[str]): Names of cell types
@@ -111,7 +124,11 @@ def generate_training_plots(
         dict: Dictionary of figure objects keyed by plot name
     """
     figures = {}
-    duration = spikes.shape[1] * dt
+
+    # Compute duration from actual data shape
+    # All arrays should have the same time dimension (axis=1)
+    n_timesteps = spikes.shape[1]
+    duration = n_timesteps * dt  # Duration in milliseconds
 
     # Sum over rise/decay dimension (axis=3) to get total conductance
     conductances = conductances.sum(axis=3)

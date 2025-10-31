@@ -881,6 +881,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             stats = homeostatic_plots.compute_network_statistics(
                 spikes=vis_spikes,
                 cell_type_indices=cell_type_indices,
+                cell_type_names=cell_type_names,
                 dt=dt,
             )
 
@@ -888,9 +889,14 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  CV Loss: {cv_loss_np:.6f}")
             print(f"  FR Loss: {fr_loss_np:.6f}")
             print(f"  Total Loss: {total_loss_np:.6f}")
-            print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
-            print(f"  Mean CV: {stats['mean_cv']:.3f}")
-            print(f"  Active fraction: {stats['fraction_active']:.3f}")
+            # Print statistics by cell type
+            for cell_type_name in cell_type_names:
+                mean_fr = stats[f"firing_rate/{cell_type_name}/mean"]
+                mean_cv = stats[f"cv/{cell_type_name}/mean"]
+                frac_active = stats[f"fraction_active/{cell_type_name}"]
+                print(
+                    f"  {cell_type_name}: FR={mean_fr:.3f} Hz, CV={mean_cv:.3f}, active={frac_active:.3f}"
+                )
 
             # Generate and log plots
             print("  Generating plots...")
@@ -936,7 +942,6 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 # Log everything together at the same step
                 wandb.log(
                     {
-                        "chunk": epoch + 1,
                         "loss/cv": cv_loss_np,
                         "loss/firing_rate": fr_loss_np,
                         "loss/total": total_loss_np,
