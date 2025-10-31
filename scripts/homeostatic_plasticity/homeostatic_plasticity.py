@@ -524,11 +524,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         ) / accumulation_interval
 
         # Compute gradients
-        with torch.autograd.profiler.profile(
-            # ---- enable Kineto (required for chrome trace) ----
-            use_kineto=True,
-            record_shapes=True,
+        from torch.profiler import profile, ProfilerActivity
+
+        with profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             profile_memory=True,
+            record_shapes=True,
             with_stack=True,
         ) as prof:
             total_loss.backward()
