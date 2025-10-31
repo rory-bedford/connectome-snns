@@ -63,6 +63,7 @@ def save_checkpoint(
         initial_v (np.ndarray): Current membrane potentials
         initial_g (np.ndarray): Current recurrent conductances
         initial_g_FF (np.ndarray): Current feedforward conductances
+        input_spikes (np.ndarray): Input spike trains
         cv_loss (float): Current CV loss value
         fr_loss (float): Current firing rate loss value
         total_loss (float): Current total loss value
@@ -546,6 +547,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
+                input_spikes=input_spikes,
                 cv_loss=cv_loss,
                 fr_loss=fr_loss,
                 total_loss=total_loss,
