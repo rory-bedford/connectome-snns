@@ -527,10 +527,6 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         with torch.autograd.profiler.profile(
             # ---- enable Kineto (required for chrome trace) ----
             use_kineto=True,
-            activities=[
-                torch.autograd.profiler.ProfilerActivity.CPU,
-                torch.autograd.profiler.ProfilerActivity.CUDA,
-            ],
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
