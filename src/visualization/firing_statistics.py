@@ -85,53 +85,71 @@ def plot_fano_factor_vs_window_size(
         mean_fano_factors = np.array(mean_fano_factors)
         std_fano_factors = np.array(std_fano_factors)
 
-        # Plot mean line with colored dashed line
-        ax.plot(
-            window_sizes_s,
-            mean_fano_factors,
-            linestyle="--",
-            linewidth=2,
-            color=colors_map[cell_type_idx],
-            alpha=0.8,
-            zorder=2,
-        )
+        # Check if we have any valid data to plot
+        has_valid_data = np.any(~np.isnan(mean_fano_factors))
 
-        # Plot points and error bars in black
-        ax.errorbar(
-            window_sizes_s,
-            mean_fano_factors,
-            yerr=std_fano_factors,
-            fmt="o",
-            capsize=5,
-            markersize=8,
-            color="black",
-            ecolor="black",
-            capthick=1.5,
-            elinewidth=1.5,
-            alpha=0.6,
-            zorder=3,
-        )
+        if has_valid_data:
+            # Plot mean line with colored dashed line
+            ax.plot(
+                window_sizes_s,
+                mean_fano_factors,
+                linestyle="--",
+                linewidth=2,
+                color=colors_map[cell_type_idx],
+                alpha=0.8,
+                zorder=2,
+            )
 
-        # Fill between mean +/- std with transparent color
-        ax.fill_between(
-            window_sizes_s,
-            mean_fano_factors - std_fano_factors,
-            mean_fano_factors + std_fano_factors,
-            color=colors_map[cell_type_idx],
-            alpha=0.2,
-            zorder=1,
-        )
+            # Plot points and error bars in black
+            ax.errorbar(
+                window_sizes_s,
+                mean_fano_factors,
+                yerr=std_fano_factors,
+                fmt="o",
+                capsize=5,
+                markersize=8,
+                color="black",
+                ecolor="black",
+                capthick=1.5,
+                elinewidth=1.5,
+                alpha=0.6,
+                zorder=3,
+            )
 
-        ax.set_xlabel("Window Size (s)", fontsize=12)
-        ax.set_ylabel("Mean Fano Factor", fontsize=12)
-        ax.set_title(f"{cell_type_names[cell_type_idx]}", fontsize=14)
-        # Only set log scale if we have positive window sizes
-        if len(window_sizes_s) > 0 and np.all(np.array(window_sizes_s) > 0):
-            ax.set_xscale("log")
-        ax.axhline(
-            1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.7, zorder=1
-        )
-        ax.grid(True, alpha=0.3, which="both")
+            # Fill between mean +/- std with transparent color
+            ax.fill_between(
+                window_sizes_s,
+                mean_fano_factors - std_fano_factors,
+                mean_fano_factors + std_fano_factors,
+                color=colors_map[cell_type_idx],
+                alpha=0.2,
+                zorder=1,
+            )
+
+            ax.set_xlabel("Window Size (s)", fontsize=12)
+            ax.set_ylabel("Mean Fano Factor", fontsize=12)
+            ax.set_title(f"{cell_type_names[cell_type_idx]}", fontsize=14)
+            # Only set log scale if we have positive window sizes
+            if len(window_sizes_s) > 0 and np.all(np.array(window_sizes_s) > 0):
+                ax.set_xscale("log")
+            ax.axhline(
+                1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.7, zorder=1
+            )
+            ax.grid(True, alpha=0.3, which="both")
+        else:
+            # No valid data - display message
+            ax.text(
+                0.5,
+                0.5,
+                "No spikes detected",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=12,
+            )
+            ax.set_xlabel("Window Size (s)", fontsize=12)
+            ax.set_ylabel("Mean Fano Factor", fontsize=12)
+            ax.set_title(f"{cell_type_names[cell_type_idx]}", fontsize=14)
 
     fig.suptitle("Fano Factor vs Window Size", fontsize=16, y=1.02)
     plt.tight_layout()
