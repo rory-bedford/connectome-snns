@@ -27,8 +27,7 @@ from synthetic_connectome import (
 )
 from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
-from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+from torch.amp import autocast, GradScaler
 import sys
 import signal
 from pathlib import Path
@@ -588,7 +587,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     # Initialize GradScaler for mixed precision training
-    scaler = GradScaler(enabled=use_mixed_precision and device == "cuda")
+    scaler = GradScaler("cuda", enabled=use_mixed_precision and device == "cuda")
 
     # Initialize target tensors for loss functions
     target_cv_tensor = torch.ones(num_neurons, device=device) * target_cv
