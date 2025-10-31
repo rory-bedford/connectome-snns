@@ -27,6 +27,7 @@ class CurrentLIFNetwork_IO(nn.Module):
         cell_type_indices_FF: IntArray | None = None,
         physiology_params_FF: dict[str, dict[str, float]] | None = None,
         scaling_factors_FF: FloatArray | None = None,
+        use_tqdm: bool = True,
     ):
         """
         Initialize the LIF network with explicit parameters.
@@ -43,8 +44,12 @@ class CurrentLIFNetwork_IO(nn.Module):
             cell_type_indices_FF (IntArray | None): Array of feedforward cell type indices.
             physiology_params_FF (dict[str, dict[str, float]] | None): Nested dict for feedforward input cell types.
             scaling_factors_FF (FloatArray | None): Matrix of shape (n_cell_types_FF, n_cell_types) for feedforward scaling.
+            use_tqdm (bool): Whether to display tqdm progress bar during forward pass. Default is True.
         """
         super(CurrentLIFNetwork_IO, self).__init__()
+
+        # Store tqdm preference
+        self.use_tqdm = use_tqdm
 
         # =================================
         # PARAMETER VALIDATION & ASSERTIONS

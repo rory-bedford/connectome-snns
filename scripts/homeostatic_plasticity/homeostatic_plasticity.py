@@ -29,6 +29,7 @@ from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
 import sys
 from pathlib import Path
+from tqdm import tqdm
 from optimisation.loss_functions import CVLoss, FiringRateLoss
 import wandb
 from matplotlib import pyplot as plt
@@ -38,6 +39,7 @@ from visualization.connectivity import (
     plot_weighted_connectivity,
     plot_input_count_histogram,
     plot_feedforward_connectivity,
+    plot_synaptic_input_histogram,
 )
 
 
@@ -466,6 +468,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         synapse_params_FF=synapse_params_FF,
         scaling_factors_FF=None,  # No scaling factors for feedforward
         optimisable="weights",
+        use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
     # Move model to device for GPU acceleration
@@ -533,6 +536,33 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         initial_dir / "input_count_histogram.png", dpi=300, bbox_inches="tight"
     )
     plt.close(fig_input_hist)
+
+    # Plot synaptic input histogram (conductance-weighted)
+    # Prepare g_bar dictionaries
+    recurrent_g_bar_by_type = {}
+    for cell_type in cell_type_names:
+        g_bar_values = params["recurrent"]["synapses"][cell_type]["g_bar"]
+        recurrent_g_bar_by_type[cell_type] = sum(g_bar_values)
+
+    feedforward_g_bar_by_type = {}
+    for cell_type in input_cell_type_names:
+        g_bar_values = params["feedforward"]["synapses"][cell_type]["g_bar"]
+        feedforward_g_bar_by_type[cell_type] = sum(g_bar_values)
+
+    fig_synaptic_input = plot_synaptic_input_histogram(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_source_indices,
+        cell_type_names=cell_type_names,
+        input_cell_type_names=input_cell_type_names,
+        recurrent_g_bar_by_type=recurrent_g_bar_by_type,
+        feedforward_g_bar_by_type=feedforward_g_bar_by_type,
+    )
+    fig_synaptic_input.savefig(
+        initial_dir / "synaptic_input_histogram.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig_synaptic_input)
 
     print(f"✓ Initial structure plots saved to {initial_dir}\n")
 
@@ -624,7 +654,16 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     accumulated_conductances_FF = []
     accumulated_input_spikes = []
 
-    for epoch in range(start_epoch, num_chunks):
+    # Create progress bar for training loop
+    pbar = tqdm(
+        range(start_epoch, num_chunks),
+        desc="Training",
+        unit="chunk",
+        initial=start_epoch,
+        total=num_chunks,
+    )
+
+    for epoch in pbar:
         # Generate new feedforward spikes for this chunk
         input_spikes = spike_generators.generate_poisson_spikes(
             n_steps=n_steps,
@@ -691,8 +730,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             # This allows us to plot the full trajectory at checkpoints
             accumulated_spikes = [s.detach() for s in accumulated_spikes]
 
-            print(
-                f"Chunk {epoch + 1}/{num_chunks} | CV: {cv_loss_np:.6f} | FR: {fr_loss_np:.6f} | Total: {total_loss_np:.6f}"
+            # Update progress bar with loss information
+            pbar.set_postfix(
+                {
+                    "CV": f"{cv_loss_np:.4f}",
+                    "FR": f"{fr_loss_np:.4f}",
+                    "Total": f"{total_loss_np:.4f}",
+                }
             )
 
         # Check if it's time to update weights
@@ -704,10 +748,16 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             optimiser.step()
             optimiser.zero_grad()
 
-            print(f"  ✓ Weights updated at chunk {epoch + 1}")
+            # Update progress bar description to indicate weight update
+            pbar.set_description("Training [Updated weights]")
 
         # Save checkpoint and statistics periodically
         if (epoch + 1) % log_interval == 0:
+            # Temporarily disable progress bar for cleaner checkpoint output
+            pbar.write(f"\n{'=' * 60}")
+            pbar.write(f"Checkpoint at chunk {epoch + 1}/{num_chunks}")
+            pbar.write("=" * 60)
+
             # Concatenate all accumulated data for visualization and checkpointing
             vis_voltages = np.concatenate(accumulated_voltages, axis=1)
             vis_currents = np.concatenate(accumulated_currents, axis=1)
@@ -750,14 +800,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 dt=dt,
             )
 
-            # Log to console
-            print(f"\nCheckpoint at chunk {epoch + 1}/{num_chunks}:")
-            print(f"  CV Loss: {cv_loss_np:.6f}")
-            print(f"  FR Loss: {fr_loss_np:.6f}")
-            print(f"  Total Loss: {total_loss_np:.6f}")
-            print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
-            print(f"  Mean CV: {stats['mean_cv']:.3f}")
-            print(f"  Active fraction: {stats['fraction_active']:.3f}")
+            # Log to console using pbar.write for clean output
+            pbar.write(f"  CV Loss: {cv_loss_np:.6f}")
+            pbar.write(f"  FR Loss: {fr_loss_np:.6f}")
+            pbar.write(f"  Total Loss: {total_loss_np:.6f}")
+            pbar.write(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
+            pbar.write(f"  Mean CV: {stats['mean_cv']:.3f}")
+            pbar.write(f"  Active fraction: {stats['fraction_active']:.3f}")
 
             # Log to wandb
             if use_wandb:
@@ -772,7 +821,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 )
 
             # Generate and log plots
-            print("  Generating plots...")
+            pbar.write("  Generating plots...")
             figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -806,7 +855,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
                 plt.close(fig)
 
-            print(f"  Saved plots to {figures_dir}\n")
+            pbar.write(f"  ✓ Saved plots to {figures_dir}")
+            pbar.write("=" * 60 + "\n")
 
             # Clear all accumulators after checkpointing to free memory
             accumulated_spikes = []
@@ -817,11 +867,19 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             accumulated_conductances_FF = []
             accumulated_input_spikes = []
 
+            # Reset description after checkpoint
+            pbar.set_description("Training")
+
+    # Close progress bar
+    pbar.close()
+
     # =====================================
     # STEP 8: Save Final Model and Clean Up
     # =====================================
 
-    print("\nTraining complete!")
+    print("\n" + "=" * 60)
+    print("Training complete!")
+    print("=" * 60)
 
     # Save final checkpoint
     final_input_spikes = (

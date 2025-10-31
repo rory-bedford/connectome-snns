@@ -168,7 +168,11 @@ class CurrentLIFNetwork(CurrentLIFNetwork_IO):
         beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
 
         # Run simulation
-        for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
+        iterator = range(n_steps)
+        if self.use_tqdm:
+            iterator = tqdm(iterator, desc="Simulating network", unit="step")
+
+        for t in iterator:
             # Compute total current at each neuron
             I_total = I.sum(dim=-1)  # Shape (batch_size, n_neurons)
             if inputs is not None:

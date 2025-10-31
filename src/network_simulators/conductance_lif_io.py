@@ -30,6 +30,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         synapse_params_FF: list[dict] | None = None,
         scaling_factors_FF: FloatArray | None = None,
         optimisable: OptimisableParams = None,
+        use_tqdm: bool = True,
     ):
         """
         Initialize the conductance-based LIF network with explicit parameters.
@@ -67,11 +68,15 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 - "weights": Optimise connection weights (weights and weights_FF)
                 - "scaling_factors": Optimise scaling factors (scaling_factors and scaling_factors_FF)
                 - None: Don't optimise anything (all parameters are fixed) [default]
+            use_tqdm (bool): Whether to display tqdm progress bar during forward pass. Default is True.
         """
         super(ConductanceLIFNetwork_IO, self).__init__()
 
         # Store optimisation mode
         self.optimisable = optimisable
+
+        # Store tqdm preference
+        self.use_tqdm = use_tqdm
 
         # =================================
         # PARAMETER VALIDATION & ASSERTIONS

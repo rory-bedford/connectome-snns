@@ -1,6 +1,3 @@
-from visualization.connectivity import (
-    plot_synaptic_input_histogram,
-)
 from visualization.neuronal_dynamics import (
     plot_membrane_voltages,
     plot_mitral_cell_spikes,
@@ -121,30 +118,8 @@ def generate_training_plots(
     conductances_FF = conductances_FF.sum(axis=3)
 
     # Note: Static network structure plots (assembly_graph, weighted_connectivity,
-    # input_count_histogram, feedforward_connectivity) are generated once at initialization
-    # and not included in checkpoint plots to avoid redundancy
-
-    # Prepare g_bar dictionaries
-    recurrent_g_bar_by_type = {}
-    for cell_type in cell_type_names:
-        g_bar_values = params["recurrent"]["synapses"][cell_type]["g_bar"]
-        recurrent_g_bar_by_type[cell_type] = sum(g_bar_values)
-
-    feedforward_g_bar_by_type = {}
-    for cell_type in input_cell_type_names:
-        g_bar_values = params["feedforward"]["synapses"][cell_type]["g_bar"]
-        feedforward_g_bar_by_type[cell_type] = sum(g_bar_values)
-
-    figures["synaptic_input_histogram"] = plot_synaptic_input_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_cell_type_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
-        recurrent_g_bar_by_type=recurrent_g_bar_by_type,
-        feedforward_g_bar_by_type=feedforward_g_bar_by_type,
-    )
+    # input_count_histogram, feedforward_connectivity, synaptic_input_histogram) are
+    # generated once at initialization and not included in checkpoint plots to avoid redundancy
 
     # Input analysis
     figures["mitral_cell_spikes"] = plot_mitral_cell_spikes(

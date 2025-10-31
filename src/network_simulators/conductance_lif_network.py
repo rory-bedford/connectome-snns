@@ -172,7 +172,11 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Run simulation
         # ==============
 
-        for t in tqdm(range(n_steps), desc="Simulating network", unit="step"):
+        iterator = range(n_steps)
+        if self.use_tqdm:
+            iterator = tqdm(iterator, desc="Simulating network", unit="step")
+
+        for t in iterator:
             # === Simulation Variables ===
             # s:                           (batch_size, n_neurons)                        -- spikes at current time step
             # I:                           (batch_size, n_neurons, n_synapse_types)       -- input current at current time step
