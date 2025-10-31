@@ -537,6 +537,6 @@ def plot_firing_rate_distribution(
 
     axes[0].set_ylabel("Number of Neurons")
     fig.suptitle("Firing Rate Distribution (log scale)", fontsize=14, y=1.02)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
 
     return fig
