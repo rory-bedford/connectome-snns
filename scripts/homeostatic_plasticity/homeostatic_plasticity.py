@@ -33,6 +33,12 @@ from optimisation.loss_functions import CVLoss, FiringRateLoss
 import wandb
 from matplotlib import pyplot as plt
 from torch.utils.checkpoint import checkpoint
+from visualization.connectivity import (
+    plot_assembly_graph,
+    plot_weighted_connectivity,
+    plot_input_count_histogram,
+    plot_feedforward_connectivity,
+)
 
 
 # Import local scripts
@@ -483,7 +489,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     print("  Generating initial structure plots...")
 
     # Plot assembly graph
-    fig_assembly = homeostatic_plots.plot_assembly_graph(
+    fig_assembly = plot_assembly_graph(
         connectivity_graph=connectivity_graph,
         cell_type_indices=cell_type_indices,
         num_assemblies=num_assemblies,
@@ -494,7 +500,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     plt.close(fig_assembly)
 
     # Plot feedforward connectivity
-    fig_ff_conn = homeostatic_plots.plot_feedforward_connectivity(
+    fig_ff_conn = plot_feedforward_connectivity(
         feedforward_weights=feedforward_weights,
         input_cell_type_indices=input_source_indices,
     )
@@ -504,7 +510,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     plt.close(fig_ff_conn)
 
     # Plot weighted connectivity
-    fig_weighted = homeostatic_plots.plot_weighted_connectivity(
+    fig_weighted = plot_weighted_connectivity(
         weights=weights,
         cell_type_indices=cell_type_indices,
         num_assemblies=num_assemblies,
@@ -515,7 +521,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     plt.close(fig_weighted)
 
     # Plot input count histogram
-    fig_input_hist = homeostatic_plots.plot_input_count_histogram(
+    fig_input_hist = plot_input_count_histogram(
         weights=weights,
         feedforward_weights=feedforward_weights,
         cell_type_indices=cell_type_indices,
