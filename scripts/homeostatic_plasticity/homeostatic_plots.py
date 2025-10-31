@@ -1,9 +1,5 @@
 from visualization.connectivity import (
-    plot_assembly_graph,
-    plot_weighted_connectivity,
-    plot_input_count_histogram,
     plot_synaptic_input_histogram,
-    plot_feedforward_connectivity,
 )
 from visualization.neuronal_dynamics import (
     plot_membrane_voltages,
@@ -124,27 +120,9 @@ def generate_training_plots(
     conductances = conductances.sum(axis=3)
     conductances_FF = conductances_FF.sum(axis=3)
 
-    # Network structure plots
-    figures["assembly_graph"] = plot_assembly_graph(
-        connectivity_graph=connectivity_graph,
-        cell_type_indices=cell_type_indices,
-        num_assemblies=num_assemblies,
-    )
-
-    figures["weighted_connectivity"] = plot_weighted_connectivity(
-        weights=weights,
-        cell_type_indices=cell_type_indices,
-        num_assemblies=num_assemblies,
-    )
-
-    figures["input_count_histogram"] = plot_input_count_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_cell_type_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
-    )
+    # Note: Static network structure plots (assembly_graph, weighted_connectivity,
+    # input_count_histogram, feedforward_connectivity) are generated once at initialization
+    # and not included in checkpoint plots to avoid redundancy
 
     # Prepare g_bar dictionaries
     recurrent_g_bar_by_type = {}
@@ -173,11 +151,6 @@ def generate_training_plots(
         input_spikes=input_spikes,
         dt=dt,
         duration=duration,
-    )
-
-    figures["feedforward_connectivity"] = plot_feedforward_connectivity(
-        feedforward_weights=feedforward_weights,
-        input_cell_type_indices=input_cell_type_indices,
     )
 
     # Output analysis
@@ -270,7 +243,7 @@ def generate_training_plots(
         dt=dt,
         duration=duration,
         neuron_id=0,
-        fraction=0.1,
+        fraction=1.0,
     )
 
     # Firing statistics (these functions expect numpy arrays)

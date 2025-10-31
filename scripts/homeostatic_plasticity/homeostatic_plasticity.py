@@ -465,6 +465,71 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     # Move model to device for GPU acceleration
     model.to(device)
 
+    # ========================================================
+    # STEP 4.5: Save Initial Network Structure and Weights
+    # ========================================================
+
+    print("\nSaving initial network structure and weights...")
+    initial_dir = output_dir / "initial"
+    initial_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save initial weights to disk
+    np.save(initial_dir / "recurrent_weights.npy", weights)
+    np.save(initial_dir / "feedforward_weights.npy", feedforward_weights)
+    np.save(initial_dir / "connectivity_graph.npy", connectivity_graph)
+    print(f"✓ Initial weights saved to {initial_dir}")
+
+    # Generate and save initial structure plots
+    print("  Generating initial structure plots...")
+
+    # Plot assembly graph
+    fig_assembly = homeostatic_plots.plot_assembly_graph(
+        connectivity_graph=connectivity_graph,
+        cell_type_indices=cell_type_indices,
+        num_assemblies=num_assemblies,
+    )
+    fig_assembly.savefig(
+        initial_dir / "assembly_graph.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig_assembly)
+
+    # Plot feedforward connectivity
+    fig_ff_conn = homeostatic_plots.plot_feedforward_connectivity(
+        feedforward_weights=feedforward_weights,
+        input_cell_type_indices=input_source_indices,
+    )
+    fig_ff_conn.savefig(
+        initial_dir / "feedforward_connectivity.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig_ff_conn)
+
+    # Plot weighted connectivity
+    fig_weighted = homeostatic_plots.plot_weighted_connectivity(
+        weights=weights,
+        cell_type_indices=cell_type_indices,
+        num_assemblies=num_assemblies,
+    )
+    fig_weighted.savefig(
+        initial_dir / "weighted_connectivity.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig_weighted)
+
+    # Plot input count histogram
+    fig_input_hist = homeostatic_plots.plot_input_count_histogram(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_source_indices,
+        cell_type_names=cell_type_names,
+        input_cell_type_names=input_cell_type_names,
+    )
+    fig_input_hist.savefig(
+        initial_dir / "input_count_histogram.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig_input_hist)
+
+    print(f"✓ Initial structure plots saved to {initial_dir}\n")
+
     # =======================
     # STEP 5: Setup Optimiser
     # =======================
@@ -616,8 +681,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             fr_loss_np = fr_loss.detach().cpu().item()
             total_loss_np = total_loss.detach().cpu().item()
 
-            # Clear spike accumulators (they held gradients)
-            accumulated_spikes = []
+            # Detach accumulated spikes for visualization (keep them but remove gradients)
+            # This allows us to plot the full trajectory at checkpoints
+            accumulated_spikes = [s.detach() for s in accumulated_spikes]
 
             print(
                 f"Chunk {epoch + 1}/{num_chunks} | CV: {cv_loss_np:.6f} | FR: {fr_loss_np:.6f} | Total: {total_loss_np:.6f}"
@@ -644,12 +710,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             vis_conductances_FF = np.concatenate(accumulated_conductances_FF, axis=1)
             vis_input_spikes = np.concatenate(accumulated_input_spikes, axis=1)
 
-            # For spikes: check if we have any, otherwise use last chunk only
-            if accumulated_spikes:
-                vis_spikes = torch.cat(accumulated_spikes, dim=1).detach().cpu().numpy()
-            else:
-                # If we just computed loss and cleared spikes, use last chunk only
-                vis_spikes = chunk_s.detach().cpu().numpy()
+            # Concatenate spike data (already detached after loss computation)
+            vis_spikes = torch.cat(accumulated_spikes, dim=1).cpu().numpy()
 
             # Save checkpoint
             is_best = save_checkpoint(
@@ -741,6 +803,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             print(f"  Saved plots to {figures_dir}\n")
 
             # Clear all accumulators after checkpointing to free memory
+            accumulated_spikes = []
             accumulated_voltages = []
             accumulated_currents = []
             accumulated_currents_FF = []
