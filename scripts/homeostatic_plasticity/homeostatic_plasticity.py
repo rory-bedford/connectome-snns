@@ -496,7 +496,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         )
 
         # Run network simulation for this epoch
-        chunk_s, chunk_v, _, _, chunk_g, chunk_g_FF = model.forward(
+        chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = model.forward(
             n_steps=n_steps,
             dt=dt,
             inputs=input_spikes,
@@ -504,6 +504,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             initial_g=initial_g,
             initial_g_FF=initial_g_FF,
         )
+
+        # Detach outputs not needed for loss computation
+        chunk_s = chunk_s.detach().cpu().numpy()
+        chunk_I = chunk_I.detach().cpu().numpy()
+        chunk_I_FF = chunk_I_FF.detach().cpu().numpy()
+        chunk_g = chunk_g.detach().cpu().numpy()
+        chunk_g_FF = chunk_g_FF.detach().cpu().numpy()
 
         # Compute losses
         cv_loss = cv_loss_fn(chunk_s)
@@ -515,11 +522,11 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         # Compute gradients
         total_loss.backward()
 
-        # Detach losses to avoid memory leaks
-        chunk_g = chunk_g.detach()
-        chunk_g_FF = chunk_g_FF.detach()
-        chunk_v = chunk_v.detach()
-        chunk_s = chunk_s.detach()
+        # Detach losses and outputs to avoid memory leaks
+        cv_loss = cv_loss.detach().cpu().numpy()
+        cv_loss = cv_loss.detach().cpu().numpy()
+        total_loss = total_loss.detach().cpu().numpy()
+        chunk_s = chunk_s.detach().cpu().numpy()
 
         # Perform optimisation step every accumulation_interval epochs
         if (epoch + 1) % accumulation_interval == 0:
@@ -536,13 +543,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
-                cv_loss=cv_loss.item(),
-                fr_loss=fr_loss.item(),
-                total_loss=total_loss.item(),
+                cv_loss=cv_loss,
+                fr_loss=fr_loss,
+                total_loss=total_loss,
                 best_loss=best_loss,
             )
             if is_best:
-                best_loss = total_loss.item()
+                best_loss = total_loss
 
             # Compute statistics on current chunk spikes (move to CPU for analysis)
             stats = homeostatic_plots.compute_network_statistics(
@@ -553,9 +560,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             # Log to console
             print(f"Epoch {epoch + 1}/{epochs}:")
-            print(f"  CV Loss: {cv_loss.item():.6f}")
-            print(f"  FR Loss: {fr_loss.item():.6f}")
-            print(f"  Total Loss: {total_loss.item():.6f}")
+            print(f"  CV Loss: {cv_loss:.6f}")
+            print(f"  FR Loss: {fr_loss:.6f}")
+            print(f"  Total Loss: {total_loss:.6f}")
             print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
             print(f"  Mean CV: {stats['mean_cv']:.3f}")
             print(f"  Active fraction: {stats['fraction_active']:.3f}")
@@ -565,9 +572,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 wandb.log(
                     {
                         "epoch": epoch + 1,
-                        "loss/cv": cv_loss.item(),
-                        "loss/firing_rate": fr_loss.item(),
-                        "loss/total": total_loss.item(),
+                        "loss/cv": cv_loss,
+                        "loss/firing_rate": fr_loss,
+                        "loss/total": total_loss,
                         **stats,  # All statistics
                     }
                 )
@@ -578,11 +585,11 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(
-                spikes=chunk_s.cpu().numpy(),
-                voltages=chunk_v.cpu().numpy(),
-                conductances=chunk_g.cpu().numpy(),
-                conductances_FF=chunk_g_FF.cpu().numpy(),
-                input_spikes=input_spikes.cpu().numpy(),
+                spikes=chunk_s,
+                voltages=chunk_v,
+                conductances=chunk_g,
+                conductances_FF=chunk_g_FF,
+                input_spikes=input_spikes,
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
                 cell_type_names=cell_type_names,
@@ -607,7 +614,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             print(f"  Saved plots to {figures_dir}")
 
-        # Create inputs to next chunk - detached so gradients don't flow across chunks
+        # Create inputs to next chunk
         initial_v = chunk_v[:, -1, :]
         initial_g = chunk_g[:, -1, :, :, :]
         initial_g_FF = chunk_g_FF[:, -1, :, :, :]

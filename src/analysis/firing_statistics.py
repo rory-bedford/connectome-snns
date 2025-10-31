@@ -1,9 +1,12 @@
 """Analysis functions for spike train statistics and firing rates."""
 
-import torch
+import numpy as np
+from numpy.typing import NDArray
 
 
-def compute_spike_train_cv(spike_trains: torch.Tensor, dt: float = 1.0) -> torch.Tensor:
+def compute_spike_train_cv(
+    spike_trains: NDArray[np.int32], dt: float = 1.0
+) -> NDArray[np.float32]:
     """
     Compute coefficient of variation (CV) for spike trains for each neuron.
 
@@ -11,28 +14,27 @@ def compute_spike_train_cv(spike_trains: torch.Tensor, dt: float = 1.0) -> torch
     divided by the mean ISI. CV is computed separately for each neuron in each batch.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         dt (float): Time step duration in the desired time units (e.g., seconds or milliseconds).
             Since CV is dimensionless, the units cancel out, but consistent units should be used.
             Defaults to 1.0.
 
     Returns:
-        torch.Tensor: CV values of shape (batch_size, n_neurons).
+        NDArray[np.float32]: CV values of shape (batch_size, n_neurons).
             Returns NaN for neurons with fewer than 3 spikes.
     """
     batch_size, n_steps, n_neurons = spike_trains.shape
-    device = spike_trains.device
 
     # Initialize CV values with NaN
-    cv_values = torch.full((batch_size, n_neurons), float("nan"), device=device)
+    cv_values = np.full((batch_size, n_neurons), np.nan, dtype=np.float32)
 
     # Create time indices
-    time_indices = torch.arange(n_steps, device=device, dtype=torch.float32) * dt
+    time_indices = np.arange(n_steps, dtype=np.float32) * dt
 
     for batch_idx in range(batch_size):
         for neuron_idx in range(n_neurons):
             # Find time indices where spikes occur for this neuron
-            spike_indices = torch.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
+            spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
 
             # Need at least 3 spikes to compute CV with unbiased std (at least 2 ISIs)
             if len(spike_indices) < 3:
@@ -47,15 +49,15 @@ def compute_spike_train_cv(spike_trains: torch.Tensor, dt: float = 1.0) -> torch
             # Compute CV = std(ISI) / mean(ISI)
             mean_isi = isis.mean()
             if mean_isi > 0:
-                std_isi = isis.std(unbiased=True)
+                std_isi = isis.std(ddof=1)  # unbiased std
                 cv_values[batch_idx, neuron_idx] = std_isi / mean_isi
 
     return cv_values
 
 
 def compute_spike_train_fano_factor(
-    spike_trains: torch.Tensor, window_size: int
-) -> torch.Tensor:
+    spike_trains: NDArray[np.int32], window_size: int
+) -> NDArray[np.float32]:
     """
     Compute Fano factor for spike trains for each neuron.
 
@@ -64,18 +66,17 @@ def compute_spike_train_fano_factor(
     for each neuron in each batch.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         window_size (int): Size of the time window (in steps) for counting spikes.
 
     Returns:
-        torch.Tensor: Fano factor values of shape (batch_size, n_neurons).
+        NDArray[np.float32]: Fano factor values of shape (batch_size, n_neurons).
             Returns NaN for neurons with zero mean spike count.
     """
     batch_size, n_steps, n_neurons = spike_trains.shape
-    device = spike_trains.device
 
     # Initialize Fano factor values with NaN
-    fano_values = torch.full((batch_size, n_neurons), float("nan"), device=device)
+    fano_values = np.full((batch_size, n_neurons), np.nan, dtype=np.float32)
 
     # Calculate number of complete windows
     n_windows = n_steps // window_size
@@ -93,29 +94,31 @@ def compute_spike_train_fano_factor(
             # Reshape into windows and count spikes per window
             # Shape: (n_windows, window_size) -> (n_windows,)
             spike_counts = (
-                neuron_spikes.reshape(n_windows, window_size).sum(dim=1).float()
+                neuron_spikes.reshape(n_windows, window_size)
+                .sum(axis=1)
+                .astype(np.float32)
             )
 
             # Compute Fano factor = var(spike_counts) / mean(spike_counts)
             mean_count = spike_counts.mean()
             if mean_count > 0 and n_windows > 1:
-                var_count = spike_counts.var(unbiased=True)
+                var_count = spike_counts.var(ddof=1)  # unbiased variance
                 fano_values[batch_idx, neuron_idx] = var_count / mean_count
 
     return fano_values
 
 
 def compute_firing_rate_by_cell_type(
-    spike_trains: torch.Tensor,
-    cell_type_indices: torch.Tensor,
+    spike_trains: NDArray[np.int32],
+    cell_type_indices: NDArray[np.int32],
     duration: float,
 ) -> dict[int, dict[str, float]]:
     """
     Compute mean and standard deviation of firing rates by cell type.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
-        cell_type_indices (torch.Tensor): Cell type indices of shape (n_neurons,).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
+        cell_type_indices (NDArray[np.int32]): Cell type indices of shape (n_neurons,).
             Each value indicates the cell type index for that neuron.
         duration (float): Duration of the spike train in milliseconds.
 
@@ -129,7 +132,7 @@ def compute_firing_rate_by_cell_type(
 
     # Compute total spike count per neuron across all timesteps and batches
     # Sum over time and batch dimensions
-    total_spikes = spike_trains.sum(dim=(0, 1))  # Shape: (n_neurons,)
+    total_spikes = spike_trains.sum(axis=(0, 1))  # Shape: (n_neurons,)
 
     # Convert duration from ms to seconds for Hz calculation
     duration_sec = duration / 1000.0
@@ -138,7 +141,7 @@ def compute_firing_rate_by_cell_type(
     firing_rates_hz = total_spikes / (duration_sec * batch_size)  # Shape: (n_neurons,)
 
     # Get unique cell types
-    unique_cell_types = torch.unique(cell_type_indices)
+    unique_cell_types = np.unique(cell_type_indices)
 
     # Compute statistics by cell type
     stats_by_type = {}
@@ -148,15 +151,13 @@ def compute_firing_rate_by_cell_type(
         cell_type_rates = firing_rates_hz[mask]
 
         # Compute mean and std
-        mean_rate = cell_type_rates.mean().item()
+        mean_rate = float(cell_type_rates.mean())
         std_rate = (
-            cell_type_rates.std(unbiased=True).item()
-            if len(cell_type_rates) > 1
-            else 0.0
+            float(cell_type_rates.std(ddof=1)) if len(cell_type_rates) > 1 else 0.0
         )
 
         # Count cells that don't fire at all (firing rate = 0)
-        n_silent = (cell_type_rates == 0).sum().item()
+        n_silent = int((cell_type_rates == 0).sum())
 
         stats_by_type[cell_type] = {
             "mean_firing_rate_hz": mean_rate,
@@ -168,16 +169,16 @@ def compute_firing_rate_by_cell_type(
 
 
 def compute_cv_by_cell_type(
-    spike_trains: torch.Tensor,
-    cell_type_indices: torch.Tensor,
+    spike_trains: NDArray[np.int32],
+    cell_type_indices: NDArray[np.int32],
     dt: float = 1.0,
 ) -> dict[int, dict[str, float]]:
     """
     Compute mean and standard deviation of coefficient of variation (CV) by cell type.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
-        cell_type_indices (torch.Tensor): Cell type indices of shape (n_neurons,).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
+        cell_type_indices (NDArray[np.int32]): Cell type indices of shape (n_neurons,).
             Each value indicates the cell type index for that neuron.
         dt (float): Time step duration in the desired time units (e.g., seconds or milliseconds).
             Defaults to 1.0.
@@ -193,10 +194,10 @@ def compute_cv_by_cell_type(
     )  # Shape: (batch_size, n_neurons)
 
     # Average CV across batches for each neuron
-    cv_per_neuron = cv_values.nanmean(dim=0)  # Shape: (n_neurons,)
+    cv_per_neuron = np.nanmean(cv_values, axis=0)  # Shape: (n_neurons,)
 
     # Get unique cell types
-    unique_cell_types = torch.unique(cell_type_indices)
+    unique_cell_types = np.unique(cell_type_indices)
 
     # Compute statistics by cell type
     stats_by_type = {}
@@ -206,11 +207,11 @@ def compute_cv_by_cell_type(
         cell_type_cvs = cv_per_neuron[mask]
 
         # Filter out NaN values
-        valid_cvs = cell_type_cvs[~torch.isnan(cell_type_cvs)]
+        valid_cvs = cell_type_cvs[~np.isnan(cell_type_cvs)]
 
         if len(valid_cvs) > 0:
-            mean_cv = valid_cvs.mean().item()
-            std_cv = valid_cvs.std(unbiased=True).item() if len(valid_cvs) > 1 else 0.0
+            mean_cv = float(valid_cvs.mean())
+            std_cv = float(valid_cvs.std(ddof=1)) if len(valid_cvs) > 1 else 0.0
         else:
             mean_cv = float("nan")
             std_cv = float("nan")

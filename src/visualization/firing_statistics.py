@@ -2,7 +2,6 @@
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from matplotlib.figure import Figure
 from numpy.typing import NDArray
 
@@ -13,7 +12,7 @@ from analysis.firing_statistics import (
 
 
 def plot_fano_factor_vs_window_size(
-    spike_trains: torch.Tensor,
+    spike_trains: NDArray[np.int32],
     window_sizes: list[int] | np.ndarray,
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
@@ -24,7 +23,7 @@ def plot_fano_factor_vs_window_size(
     Plot mean Fano factor across neurons as a function of window size, split by cell type.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         window_sizes (list[int] | np.ndarray): List of window sizes (in steps) to evaluate.
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
@@ -74,11 +73,11 @@ def plot_fano_factor_vs_window_size(
             fano_factors = compute_spike_train_fano_factor(spike_trains, window_size)
             # Extract fano factors for this cell type across all batches
             fano_cell_type = fano_factors[:, cell_type_mask].flatten()
-            fano_valid = fano_cell_type[~torch.isnan(fano_cell_type)]
+            fano_valid = fano_cell_type[~np.isnan(fano_cell_type)]
 
             if len(fano_valid) > 0:
-                mean_fano_factors.append(fano_valid.mean().item())
-                std_fano_factors.append(fano_valid.std().item())
+                mean_fano_factors.append(float(fano_valid.mean()))
+                std_fano_factors.append(float(fano_valid.std()))
             else:
                 mean_fano_factors.append(np.nan)
                 std_fano_factors.append(np.nan)
@@ -141,7 +140,7 @@ def plot_fano_factor_vs_window_size(
 
 
 def plot_cv_histogram(
-    spike_trains: torch.Tensor,
+    spike_trains: NDArray[np.int32],
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     dt: float = 1.0,
@@ -152,7 +151,7 @@ def plot_cv_histogram(
     Plot histogram of CV values across all neurons, split by cell type.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
         dt (float): Time step duration in milliseconds for computing ISIs in seconds.
@@ -177,9 +176,6 @@ def plot_cv_histogram(
     # Compute CV for all neurons (convert dt from ms to s)
     cv_values = compute_spike_train_cv(spike_trains, dt=dt * 1e-3)
 
-    # Convert to numpy for easier indexing
-    cv_np = cv_values.cpu().numpy()
-
     # Create subplots
     if ax is None:
         fig, axes = plt.subplots(
@@ -197,7 +193,7 @@ def plot_cv_histogram(
 
         # Get CV values for this cell type across all batches
         cell_type_mask = cell_type_indices == i
-        cv_cell_type = cv_np[:, cell_type_mask].flatten()
+        cv_cell_type = cv_values[:, cell_type_mask].flatten()
         cv_valid = cv_cell_type[~np.isnan(cv_cell_type)]
 
         if len(cv_valid) > 0:
@@ -240,7 +236,7 @@ def plot_cv_histogram(
 
 
 def plot_isi_histogram(
-    spike_trains: torch.Tensor,
+    spike_trains: NDArray[np.int32],
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     dt: float = 1.0,
@@ -251,7 +247,7 @@ def plot_isi_histogram(
     Plot histogram of inter-spike intervals (ISIs) split by cell type.
 
     Args:
-        spike_trains (torch.Tensor): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
         dt (float): Time step duration in milliseconds for converting time steps to seconds.
@@ -274,10 +270,9 @@ def plot_isi_histogram(
         colors_map = base_colors + additional_colors
 
     batch_size, n_steps, n_neurons = spike_trains.shape
-    device = spike_trains.device
 
     # Create time indices in seconds (dt is in milliseconds)
-    time_indices = torch.arange(n_steps, device=device, dtype=torch.float32) * dt * 1e-3
+    time_indices = np.arange(n_steps, dtype=np.float32) * dt * 1e-3
 
     # Collect ISIs for each cell type
     isis_by_type = [[] for _ in range(n_cell_types)]
@@ -285,7 +280,7 @@ def plot_isi_histogram(
     for batch_idx in range(batch_size):
         for neuron_idx in range(n_neurons):
             # Find time indices where spikes occur for this neuron
-            spike_indices = torch.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
+            spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
 
             # Need at least 2 spikes to compute ISIs
             if len(spike_indices) < 2:
@@ -305,8 +300,8 @@ def plot_isi_histogram(
     all_isis_combined = []
     for i in range(n_cell_types):
         if len(isis_by_type[i]) > 0:
-            all_isis_tensor = torch.cat(isis_by_type[i])
-            all_isis_combined.append(all_isis_tensor.cpu().numpy())
+            all_isis_array = np.concatenate(isis_by_type[i])
+            all_isis_combined.append(all_isis_array)
 
     # Compute 99.5th percentile for x-axis limit
     if len(all_isis_combined) > 0:
@@ -332,8 +327,7 @@ def plot_isi_histogram(
 
         if len(isis_by_type[i]) > 0:
             # Concatenate all ISIs for this cell type
-            all_isis_tensor = torch.cat(isis_by_type[i])
-            isis_np = all_isis_tensor.cpu().numpy()
+            isis_np = np.concatenate(isis_by_type[i])
 
             # Plot histogram with x-limit based on 99.5th percentile
             ax.hist(
