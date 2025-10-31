@@ -506,7 +506,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         )
 
         # Detach outputs not needed for loss computation
-        chunk_s = chunk_s.detach().cpu().numpy()
+        chunk_v = chunk_v.detach().cpu().numpy()
         chunk_I = chunk_I.detach().cpu().numpy()
         chunk_I_FF = chunk_I_FF.detach().cpu().numpy()
         chunk_g = chunk_g.detach().cpu().numpy()
