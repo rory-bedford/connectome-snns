@@ -528,7 +528,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             record_shapes=True, with_stack=True
         ) as prof:
             total_loss.backward()
-            prof.export_stacks("snn_profile_stacks.txt", "cuda_memory_usage")
+            prof.export_chrome_trace("trace.json")
 
         # Detach losses and outputs to avoid memory leaks
         cv_loss = cv_loss.detach().cpu().numpy()
