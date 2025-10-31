@@ -111,8 +111,8 @@ class CVLoss(nn.Module):
             for n in range(n_neurons):
                 spike_times = torch.where(output_spikes[b, :, n] > 0)[0].float()
 
-                if len(spike_times) < 2:
-                    # Not enough spikes to compute CV, use high penalty value
+                if len(spike_times) < 3:
+                    # Need at least 3 spikes (2 ISIs) to compute meaningful CV, use high penalty value
                     cvs_tensor[b, n] = self.penalty_value
                 else:
                     # Compute inter-spike intervals

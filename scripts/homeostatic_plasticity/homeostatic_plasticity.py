@@ -28,6 +28,7 @@ from synthetic_connectome import (
 from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
 import sys
+import signal
 from pathlib import Path
 from tqdm import tqdm
 from optimisation.loss_functions import CVLoss, FiringRateLoss
@@ -628,19 +629,46 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     print(f"\nStarting training from chunk {start_epoch}...")
     print(f"Target firing rate: {target_firing_rate} Hz")
     print(f"Target CV: {target_cv}")
-    print(f"Total chunks: {num_chunks}")
+    print(f"Total chunks: {num_chunks} ({num_chunks * chunk_duration / 1000:.2f} s)")
     print(
-        f"Chunks per loss: {chunks_per_loss} chunks ({chunks_per_loss * chunk_duration:.0f} ms)"
+        f"Chunks per loss: {chunks_per_loss} chunks ({chunks_per_loss * chunk_duration / 1000:.2f} s)"
     )
     print(
-        f"Losses per update: {losses_per_update} losses ({chunks_per_update * chunk_duration:.0f} ms)"
+        f"Losses per update: {losses_per_update} losses ({chunks_per_update * chunk_duration / 1000:.2f} s)"
     )
-    print(f"Log interval: {log_interval} chunks")
-    print("Gradient checkpointing: enabled\n")
+    print(
+        f"Log interval: {log_interval} chunks ({log_interval * chunk_duration / 1000:.2f} s)"
+    )
 
     # =========================
     # STEP 7: Run Training Loop
     # =========================
+
+    # Setup signal handler for graceful interruption (Ctrl+C)
+    pbar = None  # Will be initialized below
+
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully."""
+        print("\n\n" + "=" * 60)
+        print("⚠️  INTERRUPT RECEIVED - Cleaning up...")
+        print("=" * 60)
+
+        # Close progress bar if it exists
+        if pbar is not None:
+            pbar.close()
+
+        # Finish wandb run if active
+        if use_wandb:
+            print("  Finalizing Weights & Biases...")
+            wandb.finish()
+
+        print("  ✓ Cleanup complete")
+        print("=" * 60)
+        print("Exiting...\n")
+        sys.exit(0)
+
+    # Register the signal handler
+    signal.signal(signal.SIGINT, signal_handler)
 
     # Initialize gradient accumulation
     optimiser.zero_grad()
@@ -654,7 +682,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     accumulated_conductances_FF = []
     accumulated_input_spikes = []
 
-    # Create progress bar for training loop
+    # Initialize progress bar for training loop
     pbar = tqdm(
         range(start_epoch, num_chunks),
         desc="Training",
@@ -705,6 +733,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
         # Check if it's time to compute loss
         if (epoch + 1) % chunks_per_loss == 0:
+            # Indicate gradient computation is starting
+            pbar.set_description("Training [Computing gradients...]")
+
             # Concatenate accumulated chunks
             full_spikes = torch.cat(
                 accumulated_spikes, dim=1
@@ -720,6 +751,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             # Backward pass (accumulates gradients)
             total_loss.backward()
+
+            # Reset description after gradient computation
+            pbar.set_description("Training")
 
             # Convert to numpy for logging (detach first)
             cv_loss_np = cv_loss.detach().cpu().item()
@@ -741,6 +775,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
         # Check if it's time to update weights
         if (epoch + 1) % chunks_per_update == 0:
+            # Indicate weight update is starting
+            pbar.set_description("Training [Updating weights...]")
+
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
@@ -748,15 +785,19 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             optimiser.step()
             optimiser.zero_grad()
 
-            # Update progress bar description to indicate weight update
-            pbar.set_description("Training [Updated weights]")
+            # Brief indication that weights were updated
+            pbar.set_description("Training [✓ Weights updated]")
+
+            # Reset back to normal after a moment
+            pbar.set_description("Training")
 
         # Save checkpoint and statistics periodically
         if (epoch + 1) % log_interval == 0:
-            # Temporarily disable progress bar for cleaner checkpoint output
-            pbar.write(f"\n{'=' * 60}")
-            pbar.write(f"Checkpoint at chunk {epoch + 1}/{num_chunks}")
-            pbar.write("=" * 60)
+            # Clear progress bar and print checkpoint header
+            pbar.clear()
+            print(f"\n{'=' * 60}")
+            print(f"Checkpoint at chunk {epoch + 1}/{num_chunks}")
+            print("=" * 60)
 
             # Concatenate all accumulated data for visualization and checkpointing
             vis_voltages = np.concatenate(accumulated_voltages, axis=1)
@@ -800,13 +841,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 dt=dt,
             )
 
-            # Log to console using pbar.write for clean output
-            pbar.write(f"  CV Loss: {cv_loss_np:.6f}")
-            pbar.write(f"  FR Loss: {fr_loss_np:.6f}")
-            pbar.write(f"  Total Loss: {total_loss_np:.6f}")
-            pbar.write(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
-            pbar.write(f"  Mean CV: {stats['mean_cv']:.3f}")
-            pbar.write(f"  Active fraction: {stats['fraction_active']:.3f}")
+            # Log to console
+            print(f"  CV Loss: {cv_loss_np:.6f}")
+            print(f"  FR Loss: {fr_loss_np:.6f}")
+            print(f"  Total Loss: {total_loss_np:.6f}")
+            print(f"  Mean FR: {stats['mean_firing_rate']:.3f} Hz")
+            print(f"  Mean CV: {stats['mean_cv']:.3f}")
+            print(f"  Active fraction: {stats['fraction_active']:.3f}")
 
             # Log to wandb
             if use_wandb:
@@ -821,7 +862,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 )
 
             # Generate and log plots
-            pbar.write("  Generating plots...")
+            print("  Generating plots...")
             figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
@@ -855,8 +896,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
                 plt.close(fig)
 
-            pbar.write(f"  ✓ Saved plots to {figures_dir}")
-            pbar.write("=" * 60 + "\n")
+            print(f"  ✓ Saved plots to {figures_dir}")
+            print("=" * 60)
 
             # Clear all accumulators after checkpointing to free memory
             accumulated_spikes = []
@@ -867,7 +908,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             accumulated_conductances_FF = []
             accumulated_input_spikes = []
 
-            # Reset description after checkpoint
+            # Refresh the progress bar after checkpoint output
+            pbar.refresh()
             pbar.set_description("Training")
 
     # Close progress bar
