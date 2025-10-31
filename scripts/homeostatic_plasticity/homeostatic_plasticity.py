@@ -27,6 +27,7 @@ from synthetic_connectome import (
 )
 from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
+from torch.cuda.amp import autocast, GradScaler
 import sys
 import signal
 from pathlib import Path
@@ -93,6 +94,7 @@ def save_checkpoint(
     epoch: int,
     model: torch.nn.Module,
     optimiser: torch.optim.Optimizer,
+    scaler: GradScaler,
     initial_v: np.ndarray,
     initial_g: np.ndarray,
     initial_g_FF: np.ndarray,
@@ -109,6 +111,7 @@ def save_checkpoint(
         epoch (int): Current epoch number
         model (torch.nn.Module): Model to checkpoint
         optimiser (torch.optim.Optimizer): Optimizer state to save
+        scaler (GradScaler): Mixed precision scaler state to save
         initial_v (np.ndarray): Current membrane potentials
         initial_g (np.ndarray): Current recurrent conductances
         initial_g_FF (np.ndarray): Current feedforward conductances
@@ -125,6 +128,7 @@ def save_checkpoint(
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimiser_state_dict": optimiser.state_dict(),
+        "scaler_state_dict": scaler.state_dict(),
         "initial_v": initial_v,
         "initial_g": initial_g,
         "initial_g_FF": initial_g_FF,
@@ -155,6 +159,7 @@ def load_checkpoint(
     checkpoint_path: Path,
     model: torch.nn.Module,
     optimiser: torch.optim.Optimizer,
+    scaler: GradScaler,
     device: str,
 ) -> tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, float]:
     """Load model checkpoint from disk.
@@ -163,6 +168,7 @@ def load_checkpoint(
         checkpoint_path (Path): Path to checkpoint file
         model (torch.nn.Module): Model to load state into
         optimiser (torch.optim.Optimizer): Optimizer to load state into
+        scaler (GradScaler): Mixed precision scaler to load state into
         device (str): Device to load tensors onto
 
     Returns:
@@ -173,6 +179,10 @@ def load_checkpoint(
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimiser.load_state_dict(checkpoint["optimiser_state_dict"])
+
+    # Load scaler state if available (for backward compatibility)
+    if "scaler_state_dict" in checkpoint:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
     epoch = checkpoint["epoch"]
     initial_v = (
@@ -233,6 +243,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     chunks_per_loss = int(params["simulation"]["chunks_per_loss"])
     losses_per_update = int(params["simulation"]["losses_per_update"])
     log_interval = int(params["simulation"]["log_interval"])
+
+    # Enable mixed precision training (only beneficial on CUDA)
+    use_mixed_precision = params["simulation"].get("mixed_precision", True)
 
     # Calculate derived values
     chunk_duration = n_steps * dt  # Duration in ms
@@ -573,6 +586,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    # Initialize GradScaler for mixed precision training
+    scaler = GradScaler(enabled=use_mixed_precision and device == "cuda")
+
     # Initialize target tensors for loss functions
     target_cv_tensor = torch.ones(num_neurons, device=device) * target_cv
     target_rate_tensor = torch.ones(num_neurons, device=device) * target_firing_rate
@@ -623,6 +639,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             checkpoint_path=resume_from,
             model=model,
             optimiser=optimiser,
+            scaler=scaler,
             device=device,
         )
 
@@ -704,18 +721,19 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             device=device,
         )
 
-        # Run network simulation for this chunk (with checkpointing)
-        chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = checkpoint(
-            run_chunk_with_checkpoint,
-            model,
-            n_steps,
-            dt,
-            input_spikes,
-            initial_v,
-            initial_g,
-            initial_g_FF,
-            use_reentrant=False,
-        )
+        # Run network simulation for this chunk (with checkpointing and mixed precision)
+        with autocast(enabled=use_mixed_precision and device == "cuda"):
+            chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = checkpoint(
+                run_chunk_with_checkpoint,
+                model,
+                n_steps,
+                dt,
+                input_spikes,
+                initial_v,
+                initial_g,
+                initial_g_FF,
+                use_reentrant=False,
+            )
 
         # Carry state forward to next chunk (detach to stop gradient flow)
         initial_v = chunk_v[:, -1, :].detach()
@@ -741,16 +759,17 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 accumulated_spikes, dim=1
             )  # (batch, chunks_per_loss * n_steps, n_neurons)
 
-            # Compute loss over full trajectory
-            cv_loss = cv_loss_fn(full_spikes)
-            fr_loss = firing_rate_loss_fn(full_spikes)
-            total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
+            # Compute loss over full trajectory with mixed precision
+            with autocast(enabled=use_mixed_precision and device == "cuda"):
+                cv_loss = cv_loss_fn(full_spikes)
+                fr_loss = firing_rate_loss_fn(full_spikes)
+                total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
 
-            # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
-            total_loss = total_loss / (chunks_per_update // chunks_per_loss)
+                # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
+                total_loss = total_loss / (chunks_per_update // chunks_per_loss)
 
-            # Backward pass (accumulates gradients)
-            total_loss.backward()
+            # Backward pass with gradient scaling (accumulates gradients)
+            scaler.scale(total_loss).backward()
 
             # Reset description after gradient computation
             pbar.set_description("Training")
@@ -778,11 +797,15 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             # Indicate weight update is starting
             pbar.set_description("Training [Updating weights...]")
 
+            # Unscale gradients before clipping
+            scaler.unscale_(optimiser)
+
             # Clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            # Update weights
-            optimiser.step()
+            # Update weights with scaled gradients
+            scaler.step(optimiser)
+            scaler.update()
             optimiser.zero_grad()
 
             # Brief indication that weights were updated
@@ -816,6 +839,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 epoch=epoch + 1,
                 model=model,
                 optimiser=optimiser,
+                scaler=scaler,
                 initial_v=initial_v.cpu().numpy()
                 if torch.is_tensor(initial_v)
                 else initial_v,
@@ -934,6 +958,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         epoch=num_chunks,
         model=model,
         optimiser=optimiser,
+        scaler=scaler,
         initial_v=initial_v.cpu().numpy() if torch.is_tensor(initial_v) else initial_v,
         initial_g=initial_g.cpu().numpy() if torch.is_tensor(initial_g) else initial_g,
         initial_g_FF=initial_g_FF.cpu().numpy()
