@@ -8,9 +8,7 @@
 [wandb]
 enabled = true                         # Whether to use Weights & Biases for logging
 project = "homeostatic-plasticity"     # W&B project name
-entity = ""                            # W&B entity (leave empty for default)
-tags = []                              # Tags for the run (optional)
-notes = ""                             # Notes for the run (optional)
+notes = "First brief trial run"
 
 # ====================
 # OPTIMISATION TARGETS
@@ -25,13 +23,14 @@ cvs = 1.0                              # Target correlation coefficient for all 
 # ========================
 
 [simulation]
-dt = 0.5                               # ms - Time resolution of the simulation
-chunk_size = 10000                     # ms - Chunk size for training
 seed = 42                              # Random seed for reproducibility
-epochs = 500                           # Number of epochs to simulate for
-accumulation_interval = 5              # How many epochs to run before updating gradient
-checkpoint_interval = 10               # How often to save checkpoints and log to wandb
-mixed_precision = true                 # Enable mixed precision training (FP16) for memory and speed optimization
+dt = 1.0                               # ms - Time resolution of the simulation
+chunk_size = 50                        # Number of timesteps per chunk
+num_chunks = 20000                     # Total number of chunks to simulate
+chunks_per_loss = 400                  # Number of chunks per loss calculation
+losses_per_update = 2                  # Number of loss calculations per gradient step
+log_interval = 2000                    # Save checkpoints and log to wandb every N chunks
+mixed_precision = true                 # Whether to train with mixed precision
 
 # ===============
 # HYPERPARAMETERS
