@@ -923,20 +923,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                 dt=dt,
             )
 
-            # Save figures to disk
-            for plot_name, fig in figures.items():
-                fig_path = figures_dir / f"{plot_name}.png"
-                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-                plt.close(fig)
-
             # Log to wandb (combine all metrics and plots in a single call)
             if use_wandb:
-                # Create wandb Images for all plots
+                # Create wandb Images directly from matplotlib figures
                 wandb_plots = {
-                    f"plots/{plot_name}": wandb.Image(
-                        str(figures_dir / f"{plot_name}.png")
-                    )
-                    for plot_name in figures.keys()
+                    f"plots/{plot_name}": wandb.Image(fig)
+                    for plot_name, fig in figures.items()
                 }
 
                 # Log everything together at the same step
@@ -950,6 +942,12 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
                     },
                     step=epoch + 1,
                 )
+
+            # Save figures to disk after wandb has processed them
+            for plot_name, fig in figures.items():
+                fig_path = figures_dir / f"{plot_name}.png"
+                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+                plt.close(fig)
 
             print(f"  ✓ Saved plots to {figures_dir}")
             print("=" * 60)
