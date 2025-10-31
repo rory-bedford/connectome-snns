@@ -27,7 +27,8 @@ from synthetic_connectome import (
 )
 from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 import sys
 import signal
 from pathlib import Path
@@ -722,7 +723,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         )
 
         # Run network simulation for this chunk (with checkpointing and mixed precision)
-        with autocast(enabled=use_mixed_precision and device == "cuda"):
+        with autocast(
+            device_type="cuda", enabled=use_mixed_precision and device == "cuda"
+        ):
             chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = checkpoint(
                 run_chunk_with_checkpoint,
                 model,
@@ -760,7 +763,9 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
             )  # (batch, chunks_per_loss * n_steps, n_neurons)
 
             # Compute loss over full trajectory with mixed precision
-            with autocast(enabled=use_mixed_precision and device == "cuda"):
+            with autocast(
+                device_type="cuda", enabled=use_mixed_precision and device == "cuda"
+            ):
                 cv_loss = cv_loss_fn(full_spikes)
                 fr_loss = firing_rate_loss_fn(full_spikes)
                 total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
