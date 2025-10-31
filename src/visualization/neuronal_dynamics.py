@@ -343,11 +343,13 @@ def plot_spike_trains(
         # Shuffle neuron indices
         rng = np.random.RandomState(random_seed)
         total_neurons = spikes.shape[2]
+        # Ensure we don't try to plot more neurons than exist
+        n_neurons_plot = min(n_neurons_plot, total_neurons)
         shuffled_indices = rng.permutation(total_neurons)[:n_neurons_plot]
 
         # Extract subset of spikes for selected neurons (respecting fraction)
-        # Shape: (n_steps_plot, n_neurons_plot)
-        spikes_subset = spikes[0, :n_steps_plot, shuffled_indices]
+        # Use explicit indexing with np.take to ensure correct shape
+        spikes_subset = np.take(spikes[0, :n_steps_plot, :], shuffled_indices, axis=1)
         cell_types_subset = cell_type_indices[shuffled_indices]
 
         # np.where returns (time_indices, neuron_indices) for shape (time, neurons)
