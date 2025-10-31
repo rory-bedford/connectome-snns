@@ -129,7 +129,7 @@ def plot_membrane_voltages(
         # Create ylabel with cell type info
         ylabel = f"Neuron {neuron_id} ({cell_name})\nVoltage (mV)"
         axes[neuron_id].set_ylabel(ylabel, fontsize=9)
-        axes[neuron_id].set_xlim(0, duration * 1e-3 * fraction)
+        axes[neuron_id].set_xlim(0, time_axis[-1])  # Use actual data range
         axes[neuron_id].set_ylim(y_min, y_max)
         axes[neuron_id].set_yticks(y_ticks)
         axes[neuron_id].grid(True, alpha=0.3)
@@ -268,7 +268,7 @@ def plot_synaptic_currents(
             ylabel = f"Neuron {neuron_id}\nCurrent (pA)"
 
         axes[neuron_id].set_ylabel(ylabel, fontsize=9)
-        axes[neuron_id].set_xlim(0, duration * 1e-3 * fraction)
+        axes[neuron_id].set_xlim(0, time_axis[-1])  # Use actual data range
         axes[neuron_id].set_ylim(-y_lim, y_lim)
         axes[neuron_id].grid(True, alpha=0.3)
 
@@ -389,7 +389,12 @@ def plot_spike_trains(
     ax.set_ylabel(ylabel)
     ax.set_title(title if title is not None else default_title)
     ax.set_ylim(-0.5, n_neurons_plot - 0.5)
-    ax.set_xlim(0, duration * 1e-3 * fraction)
+
+    # Calculate actual duration from data shape
+    n_steps = spikes.shape[1]
+    n_steps_plot = int(n_steps * fraction)
+    actual_duration_s = n_steps_plot * dt * 1e-3
+    ax.set_xlim(0, actual_duration_s)
     plt.tight_layout()
 
     return fig
@@ -602,7 +607,7 @@ def plot_synaptic_conductances(
         )
 
     axes[-1].set_xlabel("Time (s)")
-    axes[-1].set_xlim(0, duration * 1e-3 * fraction)
+    axes[-1].set_xlim(0, time_axis[-1])  # Use actual data range
     fig.suptitle(
         f"Synaptic Conductances - Neuron {neuron_id} ({cell_name})", fontsize=14
     )
