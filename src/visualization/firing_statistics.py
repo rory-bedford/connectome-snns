@@ -394,7 +394,7 @@ def plot_firing_rate_distribution(
     output_spikes: NDArray[np.int32],
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
-    duration: float,
+    dt: float,
 ) -> plt.Figure:
     """Plot distribution of firing rates in the Dp network by cell type.
 
@@ -402,7 +402,7 @@ def plot_firing_rate_distribution(
         output_spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
-        duration (float): Total duration in milliseconds.
+        dt (float): Time step in milliseconds.
 
     Returns:
         plt.Figure: Matplotlib figure object containing the firing rate distribution.
@@ -418,9 +418,13 @@ def plot_firing_rate_distribution(
         additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
         colors_map = base_colors + additional_colors
 
+    # Calculate duration from data shape
+    n_timesteps = output_spikes.shape[1]
+    duration_s = n_timesteps * dt * 1e-3  # Duration in seconds
+
     # Calculate firing rates (spikes per second)
     spike_counts = output_spikes[0].sum(axis=0)  # Total spikes per neuron
-    firing_rates = spike_counts / (duration * 1e-3)  # Convert duration from ms to s
+    firing_rates = spike_counts / duration_s
 
     # Filter out zero firing rates for log scale
     firing_rates_nonzero = firing_rates[firing_rates > 0]

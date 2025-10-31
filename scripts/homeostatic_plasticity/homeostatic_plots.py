@@ -125,11 +125,6 @@ def generate_training_plots(
     """
     figures = {}
 
-    # Compute duration from actual data shape
-    # All arrays should have the same time dimension (axis=1)
-    n_timesteps = spikes.shape[1]
-    duration = n_timesteps * dt  # Duration in milliseconds
-
     # Sum over rise/decay dimension (axis=3) to get total conductance
     conductances = conductances.sum(axis=3)
     conductances_FF = conductances_FF.sum(axis=3)
@@ -142,7 +137,6 @@ def generate_training_plots(
     figures["mitral_cell_spikes"] = plot_mitral_cell_spikes(
         input_spikes=input_spikes,
         dt=dt,
-        duration=duration,
     )
 
     # Output analysis
@@ -151,14 +145,13 @@ def generate_training_plots(
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
-        duration=duration,
     )
 
     figures["firing_rate_distribution"] = plot_firing_rate_distribution(
         output_spikes=spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
-        duration=duration,
+        dt=dt,
     )
 
     # Prepare neuron_params for detailed plots
@@ -178,7 +171,6 @@ def generate_training_plots(
         spikes=spikes,
         neuron_types=cell_type_indices,
         delta_t=dt,
-        duration=duration,
         neuron_params=neuron_params,
         n_neurons_plot=5,
         fraction=1,
@@ -203,7 +195,6 @@ def generate_training_plots(
         I_exc=I_exc,
         I_inh=I_inh,
         delta_t=dt,
-        duration=duration,
         n_neurons_plot=5,
         fraction=1.0,
         show_total=True,
@@ -233,7 +224,6 @@ def generate_training_plots(
         recurrent_synapse_names=recurrent_synapse_names,
         feedforward_synapse_names=feedforward_synapse_names,
         dt=dt,
-        duration=duration,
         neuron_id=0,
         fraction=1.0,
     )

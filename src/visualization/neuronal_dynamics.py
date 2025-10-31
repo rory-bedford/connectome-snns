@@ -42,7 +42,6 @@ def plot_membrane_voltages(
     spikes: NDArray[np.int32],
     neuron_types: NDArray[np.int32],
     delta_t: float,
-    duration: float,
     neuron_params: dict,
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
@@ -59,7 +58,6 @@ def plot_membrane_voltages(
         spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
         neuron_types (NDArray[np.int32]): Array indicating neuron type indices (0, 1, 2, ...).
         delta_t (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         neuron_params (dict): Dictionary mapping cell type indices to parameters
             {'threshold': float, 'rest': float, 'name': str, 'sign': int}.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
@@ -151,7 +149,6 @@ def plot_synaptic_currents(
     I_exc: NDArray[np.float32],
     I_inh: NDArray[np.float32],
     delta_t: float,
-    duration: float,
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
     show_total: bool = False,
@@ -166,7 +163,6 @@ def plot_synaptic_currents(
         I_exc (NDArray[np.float32]): Excitatory current array with shape (batch, time, neurons).
         I_inh (NDArray[np.float32]): Inhibitory current array with shape (batch, time, neurons).
         delta_t (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         show_total (bool): Whether to show total current trace in grey. Defaults to False.
@@ -288,7 +284,6 @@ def plot_synaptic_currents(
 def plot_spike_trains(
     spikes: NDArray[np.int32],
     dt: float,
-    duration: float,
     cell_type_indices: NDArray[np.int32] | None = None,
     cell_type_names: list[str] | None = None,
     cell_type: str | None = None,
@@ -308,7 +303,6 @@ def plot_spike_trains(
     Args:
         spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
         dt (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         cell_type_indices (NDArray[np.int32] | None): Array of cell type indices for each neuron.
             If None, all neurons are treated as the same type. Defaults to None.
         cell_type_names (list[str] | None): Names of cell types. Required if cell_type_indices
@@ -329,6 +323,10 @@ def plot_spike_trains(
     """
     fig, ax = plt.subplots(figsize=figsize)
 
+    # Calculate number of timesteps to plot (common to both branches)
+    n_steps = spikes.shape[1]
+    n_steps_plot = int(n_steps * fraction)
+
     # Handle multiple cell types case
     if cell_type_indices is not None and cell_type_names is not None:
         n_cell_types = len(cell_type_names)
@@ -347,8 +345,8 @@ def plot_spike_trains(
         total_neurons = spikes.shape[2]
         shuffled_indices = rng.permutation(total_neurons)[:n_neurons_plot]
 
-        # Extract subset of spikes for selected neurons
-        spikes_subset = spikes[0][:, shuffled_indices]
+        # Extract subset of spikes for selected neurons (respecting fraction)
+        spikes_subset = spikes[0, :n_steps_plot, shuffled_indices]
         cell_types_subset = cell_type_indices[shuffled_indices]
 
         spike_times, neuron_ids = np.where(spikes_subset)
@@ -370,7 +368,7 @@ def plot_spike_trains(
         ylabel = "Neuron (shuffled)"
     else:
         # Single cell type case
-        spike_times, neuron_ids = np.where(spikes[0, :, :n_neurons_plot])
+        spike_times, neuron_ids = np.where(spikes[0, :n_steps_plot, :n_neurons_plot])
 
         # Determine color based on cell_type
         if cell_type is not None and cell_type.lower() == "mitral":
@@ -390,9 +388,8 @@ def plot_spike_trains(
     ax.set_title(title if title is not None else default_title)
     ax.set_ylim(-0.5, n_neurons_plot - 0.5)
 
-    # Calculate actual duration from data shape
-    n_steps = spikes.shape[1]
-    n_steps_plot = int(n_steps * fraction)
+    # Set x-axis limit based on actual plotted duration
+    # n_steps_plot is already calculated in both branches above
     actual_duration_s = n_steps_plot * dt * 1e-3
     ax.set_xlim(0, actual_duration_s)
     plt.tight_layout()
@@ -403,7 +400,6 @@ def plot_spike_trains(
 def plot_mitral_cell_spikes(
     input_spikes: NDArray[np.int32],
     dt: float,
-    duration: float,
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
 ) -> plt.Figure:
@@ -414,7 +410,6 @@ def plot_mitral_cell_spikes(
     Args:
         input_spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
         dt (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
 
@@ -424,7 +419,6 @@ def plot_mitral_cell_spikes(
     return plot_spike_trains(
         spikes=input_spikes,
         dt=dt,
-        duration=duration,
         cell_type="mitral",
         n_neurons_plot=n_neurons_plot,
         fraction=fraction,
@@ -436,7 +430,6 @@ def plot_dp_network_spikes(
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     dt: float,
-    duration: float,
     n_neurons_plot: int = 20,
     fraction: float = 1.0,
     random_seed: int = 42,
@@ -450,7 +443,6 @@ def plot_dp_network_spikes(
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
         dt (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 20.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         random_seed (int): Random seed for shuffling neurons. Defaults to 42.
@@ -461,7 +453,6 @@ def plot_dp_network_spikes(
     return plot_spike_trains(
         spikes=output_spikes,
         dt=dt,
-        duration=duration,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         n_neurons_plot=n_neurons_plot,
@@ -480,7 +471,6 @@ def plot_synaptic_conductances(
     recurrent_synapse_names: dict[str, list[str]],
     feedforward_synapse_names: dict[str, list[str]],
     dt: float,
-    duration: float,
     neuron_id: int = 0,
     fraction: float = 1.0,
 ) -> plt.Figure:
@@ -497,7 +487,6 @@ def plot_synaptic_conductances(
         recurrent_synapse_names (dict[str, list[str]]): Synapse names for each recurrent cell type.
         feedforward_synapse_names (dict[str, list[str]]): Synapse names for each feedforward cell type.
         dt (float): Time step in milliseconds.
-        duration (float): Total duration in milliseconds.
         neuron_id (int): Index of neuron to plot. Defaults to 0.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
 
