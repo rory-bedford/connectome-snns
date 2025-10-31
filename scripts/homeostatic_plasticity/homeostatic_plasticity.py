@@ -44,9 +44,10 @@ def save_checkpoint(
     epoch: int,
     model: torch.nn.Module,
     optimiser: torch.optim.Optimizer,
-    initial_v: torch.Tensor,
-    initial_g: torch.Tensor,
-    initial_g_FF: torch.Tensor,
+    initial_v: np.ndarray,
+    initial_g: np.ndarray,
+    initial_g_FF: np.ndarray,
+    input_spikes: np.ndarray,
     cv_loss: float,
     fr_loss: float,
     total_loss: float,
@@ -59,9 +60,9 @@ def save_checkpoint(
         epoch (int): Current epoch number
         model (torch.nn.Module): Model to checkpoint
         optimiser (torch.optim.Optimizer): Optimizer state to save
-        initial_v (torch.Tensor): Current membrane potentials
-        initial_g (torch.Tensor): Current recurrent conductances
-        initial_g_FF (torch.Tensor): Current feedforward conductances
+        initial_v (np.ndarray): Current membrane potentials
+        initial_g (np.ndarray): Current recurrent conductances
+        initial_g_FF (np.ndarray): Current feedforward conductances
         cv_loss (float): Current CV loss value
         fr_loss (float): Current firing rate loss value
         total_loss (float): Current total loss value
@@ -74,9 +75,10 @@ def save_checkpoint(
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimiser_state_dict": optimiser.state_dict(),
-        "initial_v": initial_v.cpu() if initial_v is not None else None,
-        "initial_g": initial_g.cpu() if initial_g is not None else None,
-        "initial_g_FF": initial_g_FF.cpu() if initial_g_FF is not None else None,
+        "initial_v": initial_v,
+        "initial_g": initial_g,
+        "initial_g_FF": initial_g_FF,
+        "input_spikes": input_spikes,
         "cv_loss": cv_loss,
         "fr_loss": fr_loss,
         "total_loss": total_loss,
@@ -511,6 +513,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         chunk_I_FF = chunk_I_FF.detach().cpu().numpy()
         chunk_g = chunk_g.detach().cpu().numpy()
         chunk_g_FF = chunk_g_FF.detach().cpu().numpy()
+        input_spikes = input_spikes.detach().cpu().numpy()
 
         # Compute losses
         cv_loss = cv_loss_fn(chunk_s)
@@ -634,9 +637,10 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         initial_v=initial_v,
         initial_g=initial_g,
         initial_g_FF=initial_g_FF,
-        cv_loss=cv_loss.item(),
-        fr_loss=fr_loss.item(),
-        total_loss=total_loss.item(),
+        input_spikes=input_spikes,
+        cv_loss=cv_loss,
+        fr_loss=fr_loss,
+        total_loss=total_loss,
         best_loss=best_loss,
     )
 
