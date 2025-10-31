@@ -558,8 +558,8 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             # Compute statistics on current chunk spikes (move to CPU for analysis)
             stats = homeostatic_plots.compute_network_statistics(
-                spikes=chunk_s.cpu(),
-                cell_type_indices=torch.from_numpy(cell_type_indices),
+                spikes=chunk_s,
+                cell_type_indices=cell_type_indices,
                 dt=dt,
             )
 
