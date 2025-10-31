@@ -346,12 +346,12 @@ def plot_spike_trains(
         shuffled_indices = rng.permutation(total_neurons)[:n_neurons_plot]
 
         # Extract subset of spikes for selected neurons (respecting fraction)
-        # Transpose to (n_neurons_plot, n_steps_plot) so np.where gives (neuron_ids, spike_times)
-        spikes_subset = spikes[0, :n_steps_plot, shuffled_indices].T
+        # Shape: (n_steps_plot, n_neurons_plot)
+        spikes_subset = spikes[0, :n_steps_plot, shuffled_indices]
         cell_types_subset = cell_type_indices[shuffled_indices]
 
-        # np.where returns (neuron_indices, time_indices) after transpose
-        neuron_ids, spike_times = np.where(spikes_subset)
+        # np.where returns (time_indices, neuron_indices) for shape (time, neurons)
+        spike_times, neuron_ids = np.where(spikes_subset)
 
         # Color spikes by cell type - neuron_ids are indices into the subset [0, n_neurons_plot)
         spike_colors = [colors_map[cell_types_subset[nid]] for nid in neuron_ids]
