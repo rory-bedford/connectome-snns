@@ -251,10 +251,10 @@ def main(output_dir_path):
             cell_type
         ]["names"]
 
-    # Sum over rise/decay dimension (axis=4) to get total conductance per synapse type
-    # Shape: (batch, time, neurons, synapses, 2) -> (batch, time, neurons, synapses)
-    output_conductances_summed = output_conductances.sum(axis=4)
-    input_conductances_summed = input_conductances.sum(axis=4)
+    # Sum over rise/decay dimension (axis=3) to get total conductance per synapse type
+    # Shape: (batch, time, neurons, 2, synapses) -> (batch, time, neurons, synapses)
+    output_conductances_summed = output_conductances.sum(axis=3)
+    input_conductances_summed = input_conductances.sum(axis=3)
 
     fig = plot_synaptic_conductances(
         output_conductances=output_conductances_summed,
