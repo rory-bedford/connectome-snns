@@ -62,7 +62,7 @@ w_mu = [                               # Mean for input synapse strengths
     [0.4, 0.4],
 ]
 w_sigma = [                            # Std dev for input synapse strengths
-    [0.2, 0.0],
+    [0.2, 0.2],
 ]
 
 # =======================================
