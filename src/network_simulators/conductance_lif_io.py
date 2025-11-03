@@ -247,9 +247,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
             if value.dtype.is_floating_point:
                 value = value.float()
             else:
-                # Convert integer types to short (int16) for memory efficiency
-                # This is sufficient for cell type indices (max 32,767 types)
-                value = value.short()
+                # Convert integer types to int (int32) for indexing operations
+                value = value.int()
 
         if trainable:
             self.register_parameter(name, nn.Parameter(value))
