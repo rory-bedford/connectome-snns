@@ -1,11 +1,12 @@
 """Analysis functions for membrane voltage statistics."""
 
-import torch
+import numpy as np
+from numpy.typing import NDArray
 
 
 def compute_membrane_potential_by_cell_type(
-    voltages: torch.Tensor,
-    cell_type_indices: torch.Tensor,
+    voltages: NDArray[np.float32],
+    cell_type_indices: NDArray[np.int32],
 ) -> dict[int, dict[str, float]]:
     """
     Compute mean and standard deviation of membrane potential statistics by cell type.
@@ -15,8 +16,8 @@ def compute_membrane_potential_by_cell_type(
     of these per-neuron statistics.
 
     Args:
-        voltages (torch.Tensor): Membrane voltages of shape (batch_size, n_steps, n_neurons).
-        cell_type_indices (torch.Tensor): Cell type indices of shape (n_neurons,).
+        voltages (NDArray[np.float32]): Membrane voltages of shape (batch_size, n_steps, n_neurons).
+        cell_type_indices (NDArray[np.int32]): Cell type indices of shape (n_neurons,).
             Each value indicates the cell type index for that neuron.
 
     Returns:
@@ -30,18 +31,18 @@ def compute_membrane_potential_by_cell_type(
 
     # Compute mean voltage per neuron across time and batches
     # Shape: (n_neurons,)
-    mean_voltage_per_neuron = voltages.mean(dim=(0, 1))
+    mean_voltage_per_neuron = voltages.mean(axis=(0, 1))
 
     # Compute std voltage per neuron across time and batches
     # Shape: (n_neurons,)
-    std_voltage_per_neuron = voltages.std(dim=(0, 1), unbiased=True)
+    std_voltage_per_neuron = voltages.std(axis=(0, 1), ddof=1)
 
     # Get unique cell types
-    unique_cell_types = torch.unique(cell_type_indices)
+    unique_cell_types = np.unique(cell_type_indices)
 
     # Compute statistics by cell type
     stats_by_type = {}
-    for cell_type in unique_cell_types.tolist():
+    for cell_type in unique_cell_types:
         # Get indices of neurons belonging to this cell type
         mask = cell_type_indices == cell_type
 
@@ -50,20 +51,18 @@ def compute_membrane_potential_by_cell_type(
         cell_type_stds = std_voltage_per_neuron[mask]
 
         # Compute mean and std of means
-        mean_of_means = cell_type_means.mean().item()
+        mean_of_means = float(cell_type_means.mean())
         std_of_means = (
-            cell_type_means.std(unbiased=True).item()
-            if len(cell_type_means) > 1
-            else 0.0
+            float(cell_type_means.std(ddof=1)) if len(cell_type_means) > 1 else 0.0
         )
 
         # Compute mean and std of stds
-        mean_of_stds = cell_type_stds.mean().item()
+        mean_of_stds = float(cell_type_stds.mean())
         std_of_stds = (
-            cell_type_stds.std(unbiased=True).item() if len(cell_type_stds) > 1 else 0.0
+            float(cell_type_stds.std(ddof=1)) if len(cell_type_stds) > 1 else 0.0
         )
 
-        stats_by_type[cell_type] = {
+        stats_by_type[int(cell_type)] = {
             "mean_of_means": mean_of_means,
             "std_of_means": std_of_means,
             "mean_of_stds": mean_of_stds,
