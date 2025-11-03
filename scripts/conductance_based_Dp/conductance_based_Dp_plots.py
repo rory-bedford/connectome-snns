@@ -274,11 +274,6 @@ def main(output_dir_path):
     plt.close(fig)
 
     # Firing statistics plots
-    import torch
-
-    output_spikes_tensor = torch.from_numpy(output_spikes).float()
-
-    # Fano factor vs window size
     # Window sizes: 0.01s, 0.02s, 0.05s, 0.1s, 0.2s, 0.5s, 1.0s (converted to steps)
     window_sizes = [
         int(0.01 * 1000 / dt),  # 0.01s
@@ -290,7 +285,7 @@ def main(output_dir_path):
         int(1.0 * 1000 / dt),  # 1.0s
     ]
     fig = plot_fano_factor_vs_window_size(
-        spike_trains=output_spikes_tensor,
+        spike_trains=output_spikes,
         window_sizes=window_sizes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
@@ -303,7 +298,7 @@ def main(output_dir_path):
 
     # CV histogram
     fig = plot_cv_histogram(
-        spike_trains=output_spikes_tensor,
+        spike_trains=output_spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
@@ -314,7 +309,7 @@ def main(output_dir_path):
 
     # ISI histogram
     fig = plot_isi_histogram(
-        spike_trains=output_spikes_tensor,
+        spike_trains=output_spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
@@ -334,16 +329,10 @@ def main(output_dir_path):
 
     print(f"Computing statistics and saving to {analysis_dir}...")
 
-    # Convert cell_type_indices to torch tensor
-    cell_type_indices_tensor = torch.from_numpy(cell_type_indices).long()
-
-    # Convert output_voltages to torch tensor
-    output_voltages_tensor = torch.from_numpy(output_voltages).float()
-
     # Compute firing rate statistics
     firing_rate_stats = compute_firing_rate_by_cell_type(
-        spike_trains=output_spikes_tensor,
-        cell_type_indices=cell_type_indices_tensor,
+        spike_trains=output_spikes,
+        cell_type_indices=cell_type_indices,
         duration=duration,
     )
 
@@ -373,8 +362,8 @@ def main(output_dir_path):
 
     # Compute CV statistics
     cv_stats = compute_cv_by_cell_type(
-        spike_trains=output_spikes_tensor,
-        cell_type_indices=cell_type_indices_tensor,
+        spike_trains=output_spikes,
+        cell_type_indices=cell_type_indices,
         dt=dt,
     )
 
@@ -397,8 +386,8 @@ def main(output_dir_path):
 
     # Compute membrane potential statistics
     voltage_stats = compute_membrane_potential_by_cell_type(
-        voltages=output_voltages_tensor,
-        cell_type_indices=cell_type_indices_tensor,
+        voltages=output_voltages,
+        cell_type_indices=cell_type_indices,
     )
 
     # Save membrane potential statistics to CSV
