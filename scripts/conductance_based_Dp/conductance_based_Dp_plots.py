@@ -157,7 +157,8 @@ def main(output_dir_path):
     fig = plot_mitral_cell_spikes(
         input_spikes=input_spikes,
         dt=dt,
-        duration=duration,
+        n_neurons_plot=10,
+        fraction=1.0,
     )
     fig.savefig(figures_dir / "05_mitral_cell_spikes.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -177,7 +178,8 @@ def main(output_dir_path):
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
         dt=dt,
-        duration=duration,
+        n_neurons_plot=20,
+        fraction=1.0,
     )
     fig.savefig(figures_dir / "07_dp_network_spikes.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -186,7 +188,7 @@ def main(output_dir_path):
         output_spikes=output_spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
-        duration=duration,
+        dt=dt,
     )
     fig.savefig(
         figures_dir / "08_firing_rate_distribution.png", dpi=300, bbox_inches="tight"
@@ -211,10 +213,9 @@ def main(output_dir_path):
         spikes=output_spikes,
         neuron_types=cell_type_indices,
         delta_t=dt,
-        duration=duration,
         neuron_params=neuron_params,
         n_neurons_plot=5,
-        fraction=1,
+        fraction=1.0,
     )
     fig.savefig(figures_dir / "09_membrane_voltages.png", dpi=600, bbox_inches="tight")
     plt.close(fig)
@@ -228,9 +229,9 @@ def main(output_dir_path):
         I_exc=I_exc,
         I_inh=I_inh,
         delta_t=dt,
-        duration=duration,
         n_neurons_plot=5,
         fraction=1.0,
+        show_total=True,
         neuron_types=cell_type_indices,
         neuron_params=neuron_params,
     )
@@ -259,9 +260,8 @@ def main(output_dir_path):
         recurrent_synapse_names=recurrent_synapse_names,
         feedforward_synapse_names=feedforward_synapse_names,
         dt=dt,
-        duration=duration,
         neuron_id=0,
-        fraction=0.1,
+        fraction=1.0,
     )
     fig.savefig(
         figures_dir / "11_synaptic_conductances.png", dpi=600, bbox_inches="tight"
