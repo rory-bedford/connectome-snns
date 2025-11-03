@@ -176,7 +176,7 @@ def load_checkpoint(
         tuple: (epoch, initial_v, initial_g, initial_g_FF, best_loss)
     """
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimiser.load_state_dict(checkpoint["optimiser_state_dict"])
@@ -186,32 +186,62 @@ def load_checkpoint(
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
     epoch = checkpoint["epoch"]
-    initial_v = (
-        checkpoint["initial_v"].to(device)
-        if checkpoint["initial_v"] is not None
-        else None
-    )
-    initial_g = (
-        checkpoint["initial_g"].to(device)
-        if checkpoint["initial_g"] is not None
-        else None
-    )
-    initial_g_FF = (
-        checkpoint["initial_g_FF"].to(device)
-        if checkpoint["initial_g_FF"] is not None
-        else None
-    )
+
+    # Convert numpy arrays to tensors if needed, then move to device
+    if checkpoint["initial_v"] is not None:
+        initial_v = checkpoint["initial_v"]
+        if isinstance(initial_v, np.ndarray):
+            initial_v = torch.from_numpy(initial_v).to(device)
+        else:
+            initial_v = initial_v.to(device)
+    else:
+        initial_v = None
+
+    if checkpoint["initial_g"] is not None:
+        initial_g = checkpoint["initial_g"]
+        if isinstance(initial_g, np.ndarray):
+            initial_g = torch.from_numpy(initial_g).to(device)
+        else:
+            initial_g = initial_g.to(device)
+    else:
+        initial_g = None
+
+    if checkpoint["initial_g_FF"] is not None:
+        initial_g_FF = checkpoint["initial_g_FF"]
+        if isinstance(initial_g_FF, np.ndarray):
+            initial_g_FF = torch.from_numpy(initial_g_FF).to(device)
+        else:
+            initial_g_FF = initial_g_FF.to(device)
+    else:
+        initial_g_FF = None
+
     best_loss = checkpoint.get("best_loss", float("inf"))
 
-    # Restore random states
-    torch.set_rng_state(checkpoint["rng_state"])
+    # Restore random states (convert from numpy if needed)
+    rng_state = checkpoint["rng_state"]
+    if isinstance(rng_state, np.ndarray):
+        # Convert numpy array to ByteTensor
+        rng_state = torch.ByteTensor(rng_state.tobytes())
+    elif not isinstance(rng_state, torch.Tensor):
+        # If it's some other type, try to convert
+        rng_state = torch.ByteTensor(rng_state)
+
+    # Ensure it's a ByteTensor (uint8) on CPU
+    if rng_state.dtype != torch.uint8:
+        rng_state = rng_state.to(torch.uint8)
+    if rng_state.device.type != "cpu":
+        rng_state = rng_state.cpu()
+
+    torch.set_rng_state(rng_state)
     np.random.set_state(checkpoint["numpy_rng_state"])
 
     print(f"  ✓ Resumed from epoch {epoch}, best loss: {best_loss:.6f}")
     return epoch, initial_v, initial_g, initial_g_FF, best_loss
 
 
-def main(output_dir, params_file, resume_from=None, use_wandb=True):
+def main(
+    output_dir, params_file, resume_from=None, use_wandb=True, resumed_output_dir=None
+):
     """Main execution function for Dp network homeostatic training.
 
     Args:
@@ -219,6 +249,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
         params_file (Path): Path to the file containing network parameters
         resume_from (Path, optional): Path to checkpoint to resume from
         use_wandb (bool): Whether to use Weights & Biases for logging
+        resumed_output_dir (Path, optional): Separate directory for plots when resuming training
     """
     # =============================================
     # SETUP: Device selection and parameter loading
@@ -494,8 +525,13 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
     # STEP 4.5: Save Initial Network Structure and Weights
     # ========================================================
 
+    # Use resumed_output_dir for plots if provided (when resuming training)
+    plots_output_dir = (
+        resumed_output_dir if resumed_output_dir is not None else output_dir
+    )
+
     print("\nSaving initial network structure and weights...")
-    initial_dir = output_dir / "initial"
+    initial_dir = plots_output_dir / "initial"
     initial_dir.mkdir(parents=True, exist_ok=True)
 
     # Save initial weights to disk
@@ -900,7 +936,7 @@ def main(output_dir, params_file, resume_from=None, use_wandb=True):
 
             # Generate and log plots
             print("  Generating plots...")
-            figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
+            figures_dir = plots_output_dir / "figures" / f"chunk_{epoch + 1:06d}"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
             figures = homeostatic_plots.generate_training_plots(

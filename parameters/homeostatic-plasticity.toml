@@ -54,12 +54,12 @@ proportion = [1]                       # Relative proportions of each cell type
 [feedforward.topology]
 num_neurons = 1500                     # Total number of input neurons
 conn_inputs = [                        # Connection probabilities to connectome layers
-    [0.02, 0.0],
+    [0.02, 0.02],
 ]
 
 [feedforward.weights]
 w_mu = [                               # Mean for input synapse strengths
-    [0.4, 0.0],
+    [0.4, 0.4],
 ]
 w_sigma = [                            # Std dev for input synapse strengths
     [0.2, 0.0],
@@ -103,12 +103,12 @@ conn_between = [                       # Connection probabilities between assemb
 
 [recurrent.weights]
 w_mu = [                               # Mean synapse strengths
-    [0.3, 0.3],
-    [0.5, 0.3],
+    [0.4, 0.4],
+    [0.6, 0.3],
 ]
 w_sigma = [                            # Standard-deviation synapse strengths
     [0.2, 0.2],
-    [0.1, 0.1],
+    [0.3, 0.1],
 ]
 
 # =======================================

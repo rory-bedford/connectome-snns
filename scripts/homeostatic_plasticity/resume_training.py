@@ -13,6 +13,7 @@ Example:
 import sys
 from pathlib import Path
 import argparse
+from datetime import datetime
 
 # Add src and scripts to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -46,18 +47,25 @@ def resume_training(output_dir, use_wandb=True):
         print(f"ERROR: No parameters file found at {params_file}")
         sys.exit(1)
 
+    # Create a timestamped subdirectory for resumed training plots
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    resumed_output_dir = output_dir / f"resumed_{timestamp}"
+    resumed_output_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"Resuming training from: {output_dir}")
     print(f"Using checkpoint: {checkpoint_path}")
     print(f"Using parameters: {params_file}")
     print(f"Wandb enabled: {use_wandb}")
+    print(f"Plots will be saved to: {resumed_output_dir}")
     print()
 
-    # Resume training
+    # Resume training with new output directory for plots
     main(
         output_dir=output_dir,
         params_file=params_file,
         resume_from=checkpoint_path,
         use_wandb=use_wandb,
+        resumed_output_dir=resumed_output_dir,
     )
 
 
