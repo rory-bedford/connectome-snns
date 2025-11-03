@@ -231,21 +231,16 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self.surrgrad_scale = surrgrad_scale
 
     def _register_parameter_or_buffer(
-        self,
-        name: str,
-        value: np.ndarray | torch.Tensor | None,
-        requires_grad: bool = False,
+        self, name: str, value: torch.Tensor | np.ndarray, trainable: bool = False
     ) -> None:
-        """Register a parameter or buffer, converting from numpy if needed.
+        """
+        Register a parameter as either trainable (nn.Parameter) or fixed (buffer).
 
         Args:
-            name (str): Name of the parameter/buffer
-            value (np.ndarray | torch.Tensor | None): Value to register
-            requires_grad (bool): Whether to register as parameter (True) or buffer (False)
+            name (str): Parameter name.
+            value (torch.Tensor | np.ndarray): Parameter value.
+            trainable (bool): Whether to make this parameter trainable.
         """
-        if value is None:
-            return
-
         if isinstance(value, np.ndarray):
             value = torch.from_numpy(value)
             # Only convert to float if not already an integer type
@@ -253,11 +248,11 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 value = value.float()
             else:
                 # Convert integer types to short (int16) for memory efficiency
-                # This is sufficient for cell type indices (max ~255 types)
+                # This is sufficient for cell type indices (max 32,767 types)
                 value = value.short()
 
-        if requires_grad:
-            self.register_parameter(name, torch.nn.Parameter(value))
+        if trainable:
+            self.register_parameter(name, nn.Parameter(value))
         else:
             self.register_buffer(name, value)
 
