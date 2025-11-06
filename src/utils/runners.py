@@ -43,8 +43,15 @@ def run_experiment(config_path=None):
         # Execute the script's main() function
         spec.loader.exec_module(module)
         if hasattr(module, "main"):
-            # Pass output_dir and params_file directly to the script
-            module.main(output_dir=tracker.output_dir, params_file=tracker.params_file)
+            # Pass output_dir and params_file, and wandb_config only if enabled
+            kwargs = {
+                "output_dir": tracker.output_dir,
+                "params_file": tracker.params_file,
+            }
+            if tracker.wandb_config and tracker.wandb_config.get("enabled", False):
+                kwargs["wandb_config"] = tracker.wandb_config
+
+            module.main(**kwargs)
         else:
             print(f"ERROR: Script {script_path} has no main() function")
             sys.exit(1)

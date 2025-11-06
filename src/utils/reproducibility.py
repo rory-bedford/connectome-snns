@@ -50,6 +50,7 @@ class ExperimentTracker:
         self.completed_successfully = False
         self.initial_metadata = None
         self.params_file = None
+        self.wandb_config = None
 
     def __enter__(self):
         """Context manager entry - start tracking."""
@@ -143,6 +144,12 @@ class ExperimentTracker:
         params_path = Path(self.config["parameters_file"])
         if not params_path.exists():
             raise FileNotFoundError(f"Parameters file not found: {params_path}")
+
+    def _extract_wandb_config(self):
+        """Extract wandb configuration from config if present."""
+        if "wandb" in self.config:
+            return self.config["wandb"]
+        return None
 
     def _create_initial_metadata(self):
         """Create initial metadata at experiment start."""
@@ -324,6 +331,9 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         # Validate configuration
         self._validate_config()
 
+        # Extract wandb config
+        self.wandb_config = self._extract_wandb_config()
+
         title = "Starting Experiment Tracking"
         print(f"\n{'=' * len(title)}")
         print(title)
@@ -332,6 +342,8 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         print(f"Parameters: {self.config['parameters_file']}")
         print(f"Output: {self.config['output_dir']}")
         print(f"Description: {self.config.get('description', 'N/A')}")
+        if self.wandb_config and self.wandb_config.get("enabled", False):
+            print(f"W&B Project: {self.wandb_config.get('project', 'N/A')}")
 
         # Check git status
         print("\nChecking git status...")

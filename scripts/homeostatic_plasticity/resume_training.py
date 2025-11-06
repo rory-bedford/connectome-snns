@@ -2,6 +2,9 @@
 """
 Resume training from a checkpoint.
 
+NOTE: Since experiment tracking has already been initialized, this script should be called directly, outside of
+the usual experiment runner.
+
 Usage:
     python resume_training.py <output_dir> [--no-wandb]
 
@@ -14,6 +17,7 @@ import sys
 from pathlib import Path
 import argparse
 from datetime import datetime
+import toml
 
 # Add src and scripts to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
@@ -22,12 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from homeostatic_plasticity import main
 
 
-def resume_training(output_dir, use_wandb=True):
+def resume_training(output_dir, disable_wandb=False):
     """Resume training from checkpoint in output directory.
 
     Args:
         output_dir (Path): Directory containing checkpoints and parameters
-        use_wandb (bool): Whether to use wandb logging
+        disable_wandb (bool): Override to disable wandb even if enabled in config
     """
     output_dir = Path(output_dir)
 
@@ -47,6 +51,18 @@ def resume_training(output_dir, use_wandb=True):
         print(f"ERROR: No parameters file found at {params_file}")
         sys.exit(1)
 
+    # Load experiment config from the CHECKPOINT DIRECTORY (not workspace)
+    experiment_config_file = output_dir / "experiment.toml"
+    wandb_config = None
+    if experiment_config_file.exists():
+        experiment_config = toml.load(experiment_config_file)
+        wandb_config = experiment_config.get("wandb", {})
+
+        # Apply override to disable if requested
+        if disable_wandb and wandb_config:
+            wandb_config = wandb_config.copy()
+            wandb_config["enabled"] = False
+
     # Create a timestamped subdirectory for resumed training plots
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     resumed_output_dir = output_dir / f"resumed_{timestamp}"
@@ -55,7 +71,11 @@ def resume_training(output_dir, use_wandb=True):
     print(f"Resuming training from: {output_dir}")
     print(f"Using checkpoint: {checkpoint_path}")
     print(f"Using parameters: {params_file}")
-    print(f"Wandb enabled: {use_wandb}")
+    print(f"Using experiment config: {experiment_config_file}")
+    if wandb_config:
+        print(f"Wandb enabled: {wandb_config.get('enabled', False)}")
+        if wandb_config.get("enabled", False):
+            print(f"Wandb project: {wandb_config.get('project', 'N/A')}")
     print(f"Plots will be saved to: {resumed_output_dir}")
     print()
 
@@ -63,8 +83,8 @@ def resume_training(output_dir, use_wandb=True):
     main(
         output_dir=output_dir,
         params_file=params_file,
+        wandb_config=wandb_config,
         resume_from=checkpoint_path,
-        use_wandb=use_wandb,
         resumed_output_dir=resumed_output_dir,
     )
 
@@ -81,12 +101,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-wandb",
         action="store_true",
-        help="Disable wandb logging",
+        help="Disable wandb logging (overrides experiment.toml setting)",
     )
 
     args = parser.parse_args()
 
     resume_training(
         output_dir=args.output_dir,
-        use_wandb=not args.no_wandb,
+        disable_wandb=args.no_wandb,
     )

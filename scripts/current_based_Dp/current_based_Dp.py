@@ -24,7 +24,7 @@ from pathlib import Path
 
 # Import local scripts
 sys.path.append(str(Path(__file__).resolve().parent))
-import simulate_Dp_plots
+import current_based_Dp_plots
 
 
 def main(output_dir, params_file):
@@ -240,4 +240,4 @@ def main(output_dir, params_file):
     # =============================================
 
     # Call the plotting script to generate all visualizations
-    simulate_Dp_plots.main(output_dir)
+    current_based_Dp_plots.main(output_dir)

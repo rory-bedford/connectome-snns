@@ -51,15 +51,19 @@ import homeostatic_plots
 
 
 def main(
-    output_dir, params_file, resume_from=None, use_wandb=True, resumed_output_dir=None
+    output_dir,
+    params_file,
+    wandb_config=None,
+    resume_from=None,
+    resumed_output_dir=None,
 ):
     """Main execution function for Dp network homeostatic training.
 
     Args:
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
+        wandb_config (dict, optional): W&B configuration from experiment.toml
         resume_from (Path, optional): Path to checkpoint to resume from
-        use_wandb (bool): Whether to use Weights & Biases for logging
         resumed_output_dir (Path, optional): Separate directory for plots when resuming training
     """
     # =============================================
@@ -117,15 +121,19 @@ def main(
     learning_rate = float(params["hyperparameters"]["learning_rate"])
 
     # ========== WANDB CONFIGURATION ==========
-    wandb_config = params.get("wandb", {})
-    use_wandb_from_config = wandb_config.get("enabled", True)
-    wandb_project = wandb_config.get("project", "connectome-snns-homeostatic")
-    wandb_entity = wandb_config.get("entity", None)
-    wandb_tags = wandb_config.get("tags", [])
-    wandb_notes = wandb_config.get("notes", "")
+    # Use wandb_config from experiment.toml if provided, otherwise check params
+    if wandb_config is None:
+        wandb_config = params.get("wandb", {})
 
-    # Override with function parameter if explicitly set
-    use_wandb = use_wandb and use_wandb_from_config
+    use_wandb = wandb_config.get("enabled", False) if wandb_config else False
+    wandb_project = (
+        wandb_config.get("project", "connectome-snns")
+        if wandb_config
+        else "connectome-snns"
+    )
+    wandb_entity = wandb_config.get("entity", None) if wandb_config else None
+    wandb_tags = wandb_config.get("tags", []) if wandb_config else []
+    wandb_notes = wandb_config.get("notes", "") if wandb_config else ""
 
     # ========== FEEDFORWARD LAYER TOPOLOGY ==========
     # Feedforward topology
