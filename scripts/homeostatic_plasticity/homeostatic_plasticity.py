@@ -120,21 +120,6 @@ def main(
     loss_ratio = float(params["hyperparameters"]["loss_ratio"])
     learning_rate = float(params["hyperparameters"]["learning_rate"])
 
-    # ========== WANDB CONFIGURATION ==========
-    # Use wandb_config from experiment.toml if provided, otherwise check params
-    if wandb_config is None:
-        wandb_config = params.get("wandb", {})
-
-    use_wandb = wandb_config.get("enabled", False) if wandb_config else False
-    wandb_project = (
-        wandb_config.get("project", "connectome-snns")
-        if wandb_config
-        else "connectome-snns"
-    )
-    wandb_entity = wandb_config.get("entity", None) if wandb_config else None
-    wandb_tags = wandb_config.get("tags", []) if wandb_config else []
-    wandb_notes = wandb_config.get("notes", "") if wandb_config else ""
-
     # ========== FEEDFORWARD LAYER TOPOLOGY ==========
     # Feedforward topology
     input_num_neurons = int(params["feedforward"]["topology"]["num_neurons"])
@@ -463,10 +448,10 @@ def main(
     # STEP 6: Initialize wandb (if requested)
     # ========================================
 
-    if use_wandb:
-        # Initialize wandb with config from TOML
+    if wandb_config and wandb_config.get("enabled", False):
+        # Initialize wandb with config from experiment.toml
         wandb_init_kwargs = {
-            "project": wandb_project,
+            "project": wandb_config["project"],
             "name": output_dir.name,
             "config": {
                 **params,  # Log all parameters
@@ -477,12 +462,12 @@ def main(
         }
 
         # Add optional parameters if specified
-        if wandb_entity:
-            wandb_init_kwargs["entity"] = wandb_entity
-        if wandb_tags:
-            wandb_init_kwargs["tags"] = wandb_tags
-        if wandb_notes:
-            wandb_init_kwargs["notes"] = wandb_notes
+        if wandb_config.get("entity"):
+            wandb_init_kwargs["entity"] = wandb_config["entity"]
+        if wandb_config.get("tags"):
+            wandb_init_kwargs["tags"] = wandb_config["tags"]
+        if wandb_config.get("notes"):
+            wandb_init_kwargs["notes"] = wandb_config["notes"]
 
         wandb.init(**wandb_init_kwargs)
         wandb.watch(model, log="all", log_freq=log_interval)
@@ -750,7 +735,7 @@ def main(
             )
 
             # Log to wandb (combine all metrics and plots in a single call)
-            if use_wandb:
+            if wandb_config and wandb_config.get("enabled", False):
                 # Create wandb Images directly from matplotlib figures
                 wandb_plots = {
                     f"plots/{plot_name}": wandb.Image(fig)
@@ -826,7 +811,7 @@ def main(
     )
 
     # Finish wandb run
-    if use_wandb:
+    if wandb_config and wandb_config.get("enabled", False):
         wandb.finish()
 
     print(f"✓ Final checkpoint saved to {output_dir / 'checkpoints'}")
