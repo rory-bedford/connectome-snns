@@ -23,25 +23,49 @@ from pathlib import Path
 from datetime import datetime
 
 
+def get_repo_root():
+    """Get the repository root directory."""
+    # Navigate up from this file (src/utils/reproducibility.py) to repo root
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def resolve_relative_to_repo(path_str):
+    """
+    Resolve a path relative to the repository root if it's not absolute.
+    
+    Args:
+        path_str: String path that may be relative or absolute
+        
+    Returns:
+        Path object resolved to absolute path
+    """
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    else:
+        return (get_repo_root() / path).resolve()
+
+
 class ExperimentTracker:
     """
     Tracks experiment reproducibility by checking git status, logging metadata,
     and managing output directories.
     """
 
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, skip_git_check=False):
         """
         Initialize the experiment tracker.
 
         Args:
             config_path: Path to the TOML configuration file.
                         Defaults to workspace/experiment.toml in the repository root.
+            skip_git_check: If True, skip git status validation (useful for development).
         """
         if config_path is None:
             # Default to workspace/experiment.toml in repository root
-            repo_root = Path(__file__).resolve().parent.parent.parent
-            config_path = repo_root / "workspace" / "experiment.toml"
+            config_path = get_repo_root() / "workspace" / "experiment.toml"
         self.config_path = Path(config_path)
+        self.skip_git_check = skip_git_check
         self.config = self._load_config()
         self.start_time = None
         self.git_info = None
@@ -77,19 +101,24 @@ class ExperimentTracker:
     def _check_git_status(self):
         """Check if there are uncommitted changes and get current commit hash."""
         try:
-            # Check for uncommitted changes
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            # If skipping git checks, still get commit info but don't validate cleanliness
+            if self.skip_git_check:
+                print("⚠️  Skipping git status validation (--no-commit flag used)")
+            else:
+                # Check for uncommitted changes
+                result = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
 
-            if result.stdout.strip():
-                print("ERROR: You have uncommitted changes:")
-                print(result.stdout)
-                print("\nPlease commit all changes before running experiments.")
-                sys.exit(1)
+                if result.stdout.strip():
+                    print("ERROR: You have uncommitted changes:")
+                    print(result.stdout)
+                    print("\nPlease commit all changes before running experiments.")
+                    print("Or use --no-commit flag to skip this check.")
+                    sys.exit(1)
 
             # Get current commit hash
             result = subprocess.run(
@@ -135,13 +164,13 @@ class ExperimentTracker:
             if field not in self.config:
                 raise ValueError(f"Missing required field '{field}' in config")
 
-        # Validate that script exists
-        script_path = Path(self.config["script"])
+        # Validate that script exists (resolve relative paths to repo root)
+        script_path = resolve_relative_to_repo(self.config["script"])
         if not script_path.exists():
             raise FileNotFoundError(f"Script not found: {script_path}")
 
-        # Validate that parameters file exists
-        params_path = Path(self.config["parameters_file"])
+        # Validate that parameters file exists (resolve relative paths to repo root)
+        params_path = resolve_relative_to_repo(self.config["parameters_file"])
         if not params_path.exists():
             raise FileNotFoundError(f"Parameters file not found: {params_path}")
 
@@ -212,7 +241,7 @@ class ExperimentTracker:
             f.write(readme_content)
 
         # Log failed experiment to central log
-        log_file = Path(self.config["log_file"])
+        log_file = resolve_relative_to_repo(self.config["log_file"])
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, "a") as f:
             f.write(json.dumps(metadata) + "\n")
@@ -346,12 +375,17 @@ You will most likeley be prompted to enter a new output directory to avoid overw
             print(f"W&B Project: {self.wandb_config.get('project', 'N/A')}")
 
         # Check git status
-        print("\nChecking git status...")
-        self.git_info = self._check_git_status()
-        print(f"✓ Git status clean (commit: {self.git_info['commit_hash'][:8]})")
+        if self.skip_git_check:
+            print("\nChecking git status (--no-commit mode)...")
+            self.git_info = self._check_git_status()
+            print(f"⚠️  Git check skipped (commit: {self.git_info['commit_hash'][:8]})")
+        else:
+            print("\nChecking git status...")
+            self.git_info = self._check_git_status()
+            print(f"✓ Git status clean (commit: {self.git_info['commit_hash'][:8]})")
 
-        # Check if output directory exists
-        output_dir = Path(self.config["output_dir"])
+        # Check if output directory exists (resolve relative paths to repo root)
+        output_dir = resolve_relative_to_repo(self.config["output_dir"])
         while output_dir.exists():
             print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
             print("\nChoose an option:")
@@ -385,7 +419,7 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         print(f"✓ Created output directory: {output_dir}")
 
         # Copy parameters file to output folder
-        params_path = Path(self.config["parameters_file"])
+        params_path = resolve_relative_to_repo(self.config["parameters_file"])
         params_filename = f"parameters{params_path.suffix}"
         dest_params = output_dir / params_filename
         shutil.copy2(params_path, dest_params)
@@ -399,8 +433,8 @@ You will most likeley be prompted to enter a new output directory to avoid overw
             (output_dir / params_filename).resolve()
         )
         modified_config["output_dir"] = str(output_dir.resolve())
-        # Keep log_file absolute as-is
-        modified_config["log_file"] = str(Path(self.config["log_file"]).resolve())
+        # Keep log_file absolute as-is (resolve relative paths to repo root)
+        modified_config["log_file"] = str(resolve_relative_to_repo(self.config["log_file"]))
         # Keep script relative to repo root
         with open(dest_toml, "w") as f:
             toml.dump(modified_config, f)
@@ -451,7 +485,7 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         print(f"✓ Generated README: {readme_file}")
 
         # Log to central log file
-        log_file = Path(self.config["log_file"])
+        log_file = resolve_relative_to_repo(self.config["log_file"])
         self._log_metadata(metadata, log_file)
 
         title = f"Experiment complete! Results saved to: {self.output_dir}"

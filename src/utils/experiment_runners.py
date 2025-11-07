@@ -11,22 +11,42 @@ from utils.reproducibility import ExperimentTracker
 from tqdm import tqdm  # Add tqdm for progress bar
 
 
-def run_experiment(config_path=None):
+def get_repo_root():
+    """Get the repository root directory."""
+    # Navigate up from this file (src/utils/experiment_runners.py) to repo root
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def resolve_relative_to_repo(path_str):
+    """
+    Resolve a path relative to the repository root if it's not absolute.
+    
+    Args:
+        path_str: String path that may be relative or absolute
+        
+    Returns:
+        Path object resolved to absolute path
+    """
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+    else:
+        return (get_repo_root() / path).resolve()
+
+
+def run_experiment(config_path=None, skip_git_check=False):
     """
     Load and run an experiment from a TOML config file.
 
     Args:
         config_path: Path to experiment.toml file. Defaults to workspace/experiment.toml.
+        skip_git_check: If True, skip git status validation (useful for development).
     """
     # Initialize tracker (validates config)
-    tracker = ExperimentTracker(config_path=config_path)
+    tracker = ExperimentTracker(config_path=config_path, skip_git_check=skip_git_check)
 
     # Get the script to run from config
-    script_path = Path(tracker.config["script"])
-    if not script_path.is_absolute():
-        # Make relative to repo root
-        repo_root = Path(__file__).resolve().parent
-        script_path = (repo_root / script_path).resolve()
+    script_path = resolve_relative_to_repo(tracker.config["script"])
 
     if not script_path.exists():
         print(f"ERROR: Script not found: {script_path}")
@@ -96,7 +116,7 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     grid_parent.mkdir(parents=True, exist_ok=True)
 
     # Copy the run_grid_search.py script to the target directory
-    repo_root = Path(__file__).resolve().parent.parent.parent
+    repo_root = get_repo_root()
     grid_search_script = repo_root / "run_grid_search.py"
     if grid_search_script.exists():
         shutil.copy2(grid_search_script, grid_parent / "run_grid_search.py")
