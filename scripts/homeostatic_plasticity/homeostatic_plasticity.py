@@ -236,7 +236,7 @@ def main(
     # =============
 
     # Initialize async logger for non-blocking metric logging
-    metrics_logger = AsyncLogger(log_dir=output_dir / "metrics", flush_interval=120.0)
+    metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
 
     # Setup wandb if enabled
     wandb_run = None

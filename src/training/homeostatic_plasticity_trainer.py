@@ -11,9 +11,10 @@ from torch.amp import autocast
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable
+from collections import deque
 from matplotlib import pyplot as plt
 
-from optimisation.utils import save_checkpoint
+from optimisation.utils import save_checkpoint, AsyncPlotter
 
 
 class HomeostaticPlasticityTrainer:
@@ -75,10 +76,20 @@ class HomeostaticPlasticityTrainer:
         self.training = params.training
         self.hyperparameters = params.hyperparameters
 
+        # Initialize async plotter if plot generator is provided
+        self.async_plotter = None
+        if self.plot_generator:
+            # Will be initialized in train() method with output_dir
+            pass
+
         # Training state
         self.initial_states = {"v": None, "g": None, "g_FF": None}
         self.loss_accumulators = []
         self.plot_accumulators = self._init_plot_accumulators()
+
+        # Loss history for running averages (detached from computation graph)
+        # maxlen automatically handles rolling window
+        self.loss_history = deque(maxlen=self.training.log_interval)
 
         # Track training state
         self.current_epoch = 0
@@ -117,6 +128,19 @@ class HomeostaticPlasticityTrainer:
         # Initialize gradient accumulation
         self.optimizer.zero_grad(set_to_none=True)
 
+        # Initialize async plotter if plot generator is provided and we have output_dir
+        if self.plot_generator and output_dir and self.async_plotter is None:
+            self.async_plotter = AsyncPlotter(
+                plot_generator=self.plot_generator,
+                output_dir=output_dir,
+                wandb_logger=self.wandb_logger,
+                max_queue_size=3,
+            )
+
+        # Save initial checkpoint at epoch 0 if starting from beginning
+        if self.current_epoch == 0 and output_dir:
+            self._save_initial_checkpoint(output_dir)
+
         # Main training loop
         for epoch in range(self.current_epoch, self.simulation.num_chunks):
             self.current_epoch = epoch
@@ -137,13 +161,18 @@ class HomeostaticPlasticityTrainer:
             # Compute losses and backward pass
             losses = self._compute_losses()
 
+            # Add detached losses to history for running averages
+            detached_losses = {name: value for name, value in losses.items()}
+            self.loss_history.append(detached_losses)
+
             # Update weights if needed
             if self._should_update_weights(epoch):
                 self._update_weights()
 
-            # Log metrics
+            # Log metrics (using running average of losses)
             if self._should_log(epoch):
-                self._log_metrics(losses, chunk_outputs["spikes"], epoch)
+                avg_losses = self._compute_average_losses()
+                self._log_metrics(avg_losses, chunk_outputs["spikes"], epoch)
 
             # Checkpoint and plot
             if self._should_checkpoint(epoch) and output_dir:
@@ -164,6 +193,11 @@ class HomeostaticPlasticityTrainer:
         # Flush async logger to ensure all data is written
         if hasattr(self.metrics_logger, 'close'):
             self.metrics_logger.close()
+
+        # Close async plotter to ensure all plots are completed
+        if self.async_plotter:
+            print("Shutting down async plotter...")
+            self.async_plotter.close()
 
         return self.best_loss
 
@@ -287,22 +321,86 @@ class HomeostaticPlasticityTrainer:
         if self.stats_computer:
             stats = self.stats_computer(spikes.detach().cpu().numpy())
 
-        # Log to CSV
-        self.metrics_logger.log(epoch=epoch + 1, **losses, **stats)
+        # Prepare CSV data with _loss suffix for loss names
+        csv_data = {}
+        for loss_name, loss_value in losses.items():
+            csv_data[f"{loss_name}_loss"] = loss_value
+        
+        # Add stats without modification
+        csv_data.update(stats)
+
+        # Log to CSV with modified loss names
+        self.metrics_logger.log(epoch=epoch + 1, **csv_data)
+
+        # Save weights to disk asynchronously (copy tensors to numpy first)
+        def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:
+            if self.device == "cuda":
+                return tensor.detach().cpu().pin_memory().numpy()
+            else:
+                return tensor.detach().cpu().numpy()
+        
+        recurrent_weights_np = copy_tensor_optimized(self.model.weights)
+        feedforward_weights_np = copy_tensor_optimized(self.model.weights_FF)
+        
+        self.metrics_logger.save_weights(
+            epoch=epoch + 1,
+            recurrent_weights=recurrent_weights_np,
+            feedforward_weights=feedforward_weights_np,
+        )
 
         # Log to wandb
         if self.wandb_logger:
             import wandb
 
+            # Create loss dict with generic naming
+            wandb_losses = {}
+            for loss_name, loss_value in losses.items():
+                wandb_losses[f"loss/{loss_name}"] = loss_value
+
             wandb.log(
                 {
-                    "loss/cv": losses["cv"],
-                    "loss/firing_rate": losses["fr"],
-                    "loss/total": losses["total"],
+                    **wandb_losses,
                     **stats,
                 },
                 step=epoch + 1,
             )
+
+    def _save_initial_checkpoint(self, output_dir: Path) -> None:
+        """Save initial checkpoint before training begins."""
+        # Create initial losses with infinity values for all configured loss functions
+        initial_losses = {
+            name: float('inf') for name in self.loss_functions.keys()
+        }
+        initial_losses['total'] = float('inf')
+
+        # Ensure we have at least the total loss if no loss functions are configured
+        if not initial_losses or len(initial_losses) == 1:
+            initial_losses = {'total': float('inf')}
+
+        # Save checkpoint with initial state
+        # Use empty arrays for initial states since network hasn't run yet
+        save_checkpoint(
+            output_dir=output_dir,
+            epoch=0,
+            model=self.model,
+            optimiser=self.optimizer,
+            scaler=self.scaler,
+            initial_v=np.array([]),  # Empty array for initial checkpoint
+            initial_g=np.array([]),  # Empty array for initial checkpoint
+            initial_g_FF=np.array([]),  # Empty array for initial checkpoint
+            input_spikes=np.array([]),  # Empty array for initial checkpoint
+            best_loss=float('inf'),
+            **initial_losses,
+        )
+
+        # Log initial state to wandb if available
+        if self.wandb_logger:
+            import wandb
+
+            wandb_losses = {f"loss/{name}": value for name, value in initial_losses.items()}
+            wandb.log(wandb_losses, step=0)
+
+        print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
 
     def _checkpoint_and_plot(
         self,
@@ -340,8 +438,32 @@ class HomeostaticPlasticityTrainer:
         if is_best:
             best_loss = losses["total"]
 
-        # Generate plots if function provided
-        if self.plot_generator:
+        # Generate plots asynchronously if async plotter is available
+        if self.async_plotter and plot_data:
+            # Convert tensors to numpy with pinned memory optimization for GPU
+            def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:
+                if self.device == "cuda":
+                    return tensor.detach().cpu().pin_memory().numpy()
+                else:
+                    return tensor.detach().cpu().numpy()
+
+            # Convert plot_data (which is already numpy from _concatenate_plot_data)
+            # and weights from GPU tensors to numpy arrays
+            numpy_weights = copy_tensor_optimized(self.model.weights)
+            numpy_weights_ff = copy_tensor_optimized(self.model.weights_FF)
+
+            success = self.async_plotter.submit_plot(
+                plot_data=plot_data,
+                epoch=epoch,
+                weights=numpy_weights,
+                weights_ff=numpy_weights_ff,
+            )
+            if success:
+                print("  ✓ Plot job submitted for async processing")
+            else:
+                print("  ⚠ Plot queue full, skipping plots for this checkpoint")
+        elif self.plot_generator:
+            # Fallback to synchronous plotting if no async plotter
             self._generate_and_save_plots(plot_data, epoch, output_dir)
 
         # Print checkpoint info
@@ -437,12 +559,12 @@ class HomeostaticPlasticityTrainer:
             # Add individual losses (excluding 'total')
             for loss_name, loss_value in losses.items():
                 if loss_name != "total":
-                    # Capitalize and abbreviate common loss names
-                    display_name = {
-                        "cv": "CV",
-                        "firing_rate": "FR",
-                        "fr": "FR",
-                    }.get(loss_name, loss_name.upper()[:3])
+                    # Split on underscore and take first letter of each word
+                    words = loss_name.split("_")
+                    if len(words) > 1:
+                        display_name = "".join(word[0].upper() for word in words)
+                    else:
+                        display_name = loss_name.upper()[:3]
 
                     postfix[display_name] = f"{loss_value:.4f}"
 
@@ -476,11 +598,34 @@ class HomeostaticPlasticityTrainer:
             epochs_until_checkpoint = 0
         return epochs_until_checkpoint < self.training.plot_size
 
+    def _compute_average_losses(self) -> Dict[str, float]:
+        """Compute running average of losses over the last log_interval epochs."""
+        if not self.loss_history:
+            return {}
+        
+        # Get all loss names from the history
+        all_loss_names = set()
+        for loss_dict in self.loss_history:
+            all_loss_names.update(loss_dict.keys())
+        
+        # Compute average for each loss
+        avg_losses = {}
+        for loss_name in all_loss_names:
+            values = [loss_dict.get(loss_name, 0.0) for loss_dict in self.loss_history]
+            avg_losses[loss_name] = sum(values) / len(values)
+        
+        return avg_losses
+
     def _print_checkpoint_info(self, losses: Dict[str, float]) -> None:
         """Print checkpoint information."""
-        print(f"  CV Loss: {losses['cv']:.6f}")
-        print(f"  FR Loss: {losses['fr']:.6f}")
-        print(f"  Total Loss: {losses['total']:.6f}")
+        # Print all losses dynamically
+        for loss_name, loss_value in losses.items():
+            if loss_name == "total":
+                print(f"  Total Loss: {loss_value:.6f}")
+            else:
+                # Format loss name for display
+                display_name = loss_name.replace("_", " ").title()
+                print(f"  {display_name} Loss: {loss_value:.6f}")
         print("=" * 60)
 
     def set_checkpoint_state(

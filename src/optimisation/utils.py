@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 from queue import Queue
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Dict, Callable
 
 import numpy as np
 import torch
@@ -242,6 +242,8 @@ class AsyncLogger:
 
             if metric_type == "csv_row":
                 self._log_csv_row(data)
+            elif metric_type == "weights":
+                self._save_weights(data)
             elif metric_type == "flush":
                 self._flush()
 
@@ -255,23 +257,70 @@ class AsyncLogger:
         """
         self.csv_buffer.append(data)
 
+    def _save_weights(self, data: dict[str, Any]):
+        """Save weights to disk as compressed numpy arrays.
+
+        Args:
+            data (dict): Dictionary containing epoch and weight arrays
+        """
+        epoch = data["epoch"]
+        weights_dir = self.log_dir / "weights"
+        weights_dir.mkdir(exist_ok=True)
+
+        # Save recurrent weights
+        recurrent_path = weights_dir / f"recurrent_weights_epoch_{epoch:06d}.npz"
+        np.savez_compressed(recurrent_path, weights=data["recurrent_weights"])
+
+        # Save feedforward weights if present
+        if "feedforward_weights" in data:
+            ff_path = weights_dir / f"feedforward_weights_epoch_{epoch:06d}.npz"
+            np.savez_compressed(ff_path, weights=data["feedforward_weights"])
+
     def _flush(self):
         """Write buffered metrics to disk."""
         # Flush CSV rows
         if self.csv_buffer:
-            # Determine fieldnames from first row if not set
-            if self.csv_fieldnames is None:
-                self.csv_fieldnames = list(self.csv_buffer[0].keys())
-
-            # Check if file exists to determine if we need to write header
+            # Update fieldnames to include all fields from all rows
+            all_fieldnames = set()
+            for row in self.csv_buffer:
+                all_fieldnames.update(row.keys())
+            
+            # Sort fieldnames for consistent ordering (epoch first if present)
+            sorted_fieldnames = sorted(all_fieldnames)
+            if 'epoch' in sorted_fieldnames:
+                sorted_fieldnames.remove('epoch')
+                sorted_fieldnames = ['epoch'] + sorted_fieldnames
+            
+            # Check if file exists and if fieldnames have changed
             file_exists = self.csv_path.exists()
+            fieldnames_changed = self.csv_fieldnames != sorted_fieldnames
+            
+            self.csv_fieldnames = sorted_fieldnames
 
             with open(self.csv_path, "a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
 
-                # Write header if this is a new file
-                if not file_exists:
-                    writer.writeheader()
+                # Write header if this is a new file or if fieldnames changed
+                if not file_exists or (file_exists and fieldnames_changed):
+                    # If file exists and fieldnames changed, we need to rewrite the whole file
+                    if file_exists and fieldnames_changed:
+                        # Read existing data
+                        existing_data = []
+                        if self.csv_path.exists():
+                            with open(self.csv_path, "r") as read_f:
+                                reader = csv.DictReader(read_f)
+                                existing_data = list(reader)
+                        
+                        # Rewrite file with new fieldnames
+                        with open(self.csv_path, "w", newline="") as write_f:
+                            new_writer = csv.DictWriter(write_f, fieldnames=self.csv_fieldnames)
+                            new_writer.writeheader()
+                            # Write existing data (missing fields will be empty)
+                            for row in existing_data:
+                                new_writer.writerow(row)
+                    else:
+                        # New file, just write header
+                        writer.writeheader()
 
                 # Write all buffered rows
                 writer.writerows(self.csv_buffer)
@@ -295,6 +344,25 @@ class AsyncLogger:
         data = {"epoch": epoch, **metrics}
         self.queue.put(("csv_row", data))
 
+    def save_weights(self, epoch: int, recurrent_weights: np.ndarray, feedforward_weights: Optional[np.ndarray] = None):
+        """Save network weights to disk asynchronously.
+
+        Args:
+            epoch (int): Epoch/step number
+            recurrent_weights (np.ndarray): Recurrent weights as numpy array
+            feedforward_weights (Optional[np.ndarray]): Feedforward weights as numpy array
+        """
+        # Create weights data with already-copied numpy arrays
+        weights_data = {
+            "epoch": epoch,
+            "recurrent_weights": recurrent_weights.copy(),  # Copy numpy array
+        }
+        
+        if feedforward_weights is not None:
+            weights_data["feedforward_weights"] = feedforward_weights.copy()
+
+        self.queue.put(("weights", weights_data))
+
     def flush(self):
         """Force an immediate flush of all buffered data."""
         self.queue.put(("flush", None))
@@ -307,3 +375,172 @@ class AsyncLogger:
         self.worker.join(timeout=10)
         if self.flusher.is_alive():
             self.flusher.join(timeout=1)
+
+
+class AsyncPlotter:
+    """Asynchronous plotter for training visualizations.
+
+    This plotter uses background threads to handle CPU-intensive plotting operations
+    without blocking the training loop. Plot jobs are queued and processed asynchronously,
+    with automatic cleanup and graceful shutdown.
+
+    Args:
+        plot_generator (Callable): Function that generates matplotlib figures
+        output_dir (str | Path): Base directory where plots will be saved
+        wandb_logger (Optional[Any]): Wandb logger for uploading plots (optional)
+        max_queue_size (int): Maximum number of pending plot jobs
+
+    Example:
+        >>> plotter = AsyncPlotter(my_plot_function, output_dir='./plots')
+        >>> for epoch in range(1000):
+        ...     activity_data = copy_from_gpu(train_step())  # Copy to numpy first
+        ...     plotter.submit_plot(activity_data, epoch, weights.cpu().numpy())
+        >>> plotter.close()
+    """
+
+    def __init__(
+        self,
+        plot_generator: Callable,
+        output_dir: str | Path,
+        wandb_logger: Optional[Any] = None,
+        max_queue_size: int = 3,
+    ):
+        """Initialize the async plotter.
+
+        Args:
+            plot_generator (Callable): Function that generates matplotlib figures
+            output_dir (str | Path): Base directory where plots will be saved
+            wandb_logger (Optional[Any]): Wandb logger for uploading plots
+            max_queue_size (int): Maximum number of pending plot jobs
+        """
+        self.plot_generator = plot_generator
+        self.output_dir = Path(output_dir)
+        self.wandb_logger = wandb_logger
+
+        # Thread-safe queue for plot jobs
+        self.plot_queue: Queue = Queue(maxsize=max_queue_size)
+        self.shutdown_event = threading.Event()
+        self._running = True
+
+        # Start background plotting thread
+        self.plot_thread = threading.Thread(target=self._plot_worker, daemon=True)
+        self.plot_thread.start()
+
+    def submit_plot(
+        self,
+        plot_data: Dict[str, np.ndarray],
+        epoch: int,
+        weights: np.ndarray,
+        weights_ff: Optional[np.ndarray] = None,
+    ) -> bool:
+        """Submit a plotting job to the background thread.
+
+        Args:
+            plot_data (Dict[str, np.ndarray]): Dictionary containing activity data as numpy arrays
+            epoch (int): Current epoch number
+            weights (np.ndarray): Current network weights as numpy array
+            weights_ff (Optional[np.ndarray]): Current feedforward weights as numpy array
+
+        Returns:
+            bool: True if job was queued, False if queue is full
+        """
+        try:
+            # Create plot job with already-copied numpy data
+            plot_job = {
+                "plot_data": plot_data.copy(),  # Shallow copy of dict
+                "epoch": epoch,
+                "weights": weights.copy(),  # Copy numpy array
+                "weights_ff": weights_ff.copy() if weights_ff is not None else None,
+                "timestamp": time.time(),
+            }
+
+            # Submit to queue (non-blocking)
+            self.plot_queue.put_nowait(plot_job)
+            return True
+
+        except:
+            # Queue is full or other error - skip this plot
+            return False
+
+    def _plot_worker(self) -> None:
+        """Background worker that processes plotting jobs."""
+        while not self.shutdown_event.is_set():
+            try:
+                # Get next job with timeout
+                job = self.plot_queue.get(timeout=1.0)
+
+                # Process the plotting job
+                self._process_plot_job(job)
+
+                # Mark job as done
+                self.plot_queue.task_done()
+
+            except:
+                continue
+
+    def _process_plot_job(self, job: Dict[str, Any]) -> None:
+        """Process a single plotting job.
+
+        Args:
+            job (Dict[str, Any]): Plot job containing data and metadata
+        """
+        epoch = job["epoch"]
+
+        try:
+            # Create output directory for this epoch
+            figures_dir = self.output_dir / "figures" / f"chunk_{epoch + 1:06d}"
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            # Prepare kwargs for plot generator
+            plot_kwargs = {
+                "weights": job["weights"],
+                **job["plot_data"],
+            }
+            if job["weights_ff"] is not None:
+                plot_kwargs["feedforward_weights"] = job["weights_ff"]
+
+            # Generate plots using the provided function
+            figures = self.plot_generator(**plot_kwargs)
+
+            # Save plots to disk
+            for plot_name, fig in figures.items():
+                fig_path = figures_dir / f"{plot_name}.png"
+                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+
+            # Upload to wandb if available
+            if self.wandb_logger:
+                import wandb
+
+                wandb_plots = {
+                    f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
+                }
+                wandb.log(wandb_plots, step=epoch + 1)
+
+            # Close figures to free memory
+            # Import here to avoid backend issues
+            from matplotlib import pyplot as plt
+
+            for fig in figures.values():
+                plt.close(fig)
+
+            elapsed = time.time() - job["timestamp"]
+            print(f"  ✓ Async plots for epoch {epoch + 1} completed in {elapsed:.2f}s")
+
+        except Exception as e:
+            print(f"  ✗ Error processing plot job for epoch {epoch + 1}: {e}")
+
+    def close(self, timeout: float = 30.0) -> None:
+        """Gracefully shutdown the async plotter.
+
+        Args:
+            timeout (float): Maximum time to wait for shutdown in seconds
+        """
+        # Signal shutdown
+        self.shutdown_event.set()
+
+        # Wait for remaining jobs to complete
+        try:
+            self.plot_queue.join()
+            self.plot_thread.join(timeout=timeout)
+        except Exception as e:
+            print(f"Warning: AsyncPlotter shutdown encountered an issue: {e}")
