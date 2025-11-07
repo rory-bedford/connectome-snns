@@ -5,7 +5,7 @@ Pydantic models that directly validate TOML configuration files.
 
 import numpy as np
 from typing import Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # =============================================================================
@@ -35,8 +35,8 @@ class TrainingConfig(BaseModel):
 class Targets(BaseModel):
     """Target values."""
 
-    _firing_rates: List[float]
-    _cvs: List[float]
+    _firing_rates: List[float] = Field(alias="firing_rates")
+    _cvs: List[float] = Field(alias="cvs")
 
     @property
     def firing_rates(self) -> np.ndarray:
@@ -48,10 +48,6 @@ class Targets(BaseModel):
 
     class Config:
         populate_by_name = True
-        fields = {
-            "_firing_rates": {"alias": "firing_rates"},
-            "_cvs": {"alias": "cvs"},
-        }
 
 
 class Hyperparameters(BaseModel):
@@ -67,7 +63,7 @@ class CellTypesConfig(BaseModel):
     """Cell types."""
 
     names: List[str]
-    _proportion: List[float]
+    _proportion: List[float] = Field(alias="proportion")
 
     @property
     def proportion(self) -> np.ndarray:
@@ -75,7 +71,6 @@ class CellTypesConfig(BaseModel):
 
     class Config:
         populate_by_name = True
-        fields = {"_proportion": {"alias": "proportion"}}
 
 
 class TopologyConfig(BaseModel):
@@ -84,9 +79,11 @@ class TopologyConfig(BaseModel):
     num_neurons: int
     num_assemblies: Optional[int] = None
     neurons_per_assembly: Optional[int] = None
-    _conn_within: Optional[List[List[float]]] = None
-    _conn_between: Optional[List[List[float]]] = None
-    _conn_inputs: Optional[List[List[float]]] = None
+    _conn_within: Optional[List[List[float]]] = Field(default=None, alias="conn_within")
+    _conn_between: Optional[List[List[float]]] = Field(
+        default=None, alias="conn_between"
+    )
+    _conn_inputs: Optional[List[List[float]]] = Field(default=None, alias="conn_inputs")
 
     @property
     def conn_within(self) -> Optional[np.ndarray]:
@@ -102,18 +99,13 @@ class TopologyConfig(BaseModel):
 
     class Config:
         populate_by_name = True
-        fields = {
-            "_conn_within": {"alias": "conn_within"},
-            "_conn_between": {"alias": "conn_between"},
-            "_conn_inputs": {"alias": "conn_inputs"},
-        }
 
 
 class WeightsConfig(BaseModel):
     """Weight parameters."""
 
-    _w_mu: List[List[float]]
-    _w_sigma: List[List[float]]
+    _w_mu: List[List[float]] = Field(alias="w_mu")
+    _w_sigma: List[List[float]] = Field(alias="w_sigma")
 
     @property
     def w_mu(self) -> np.ndarray:
@@ -125,10 +117,6 @@ class WeightsConfig(BaseModel):
 
     class Config:
         populate_by_name = True
-        fields = {
-            "_w_mu": {"alias": "w_mu"},
-            "_w_sigma": {"alias": "w_sigma"},
-        }
 
 
 class PhysiologyConfig(BaseModel):
@@ -146,10 +134,10 @@ class SynapseConfig(BaseModel):
     """Synapse parameters."""
 
     names: List[str]
-    _tau_rise: List[float]
-    _tau_decay: List[float]
-    _E_syn: List[float]
-    _g_bar: List[float]
+    _tau_rise: List[float] = Field(alias="tau_rise")
+    _tau_decay: List[float] = Field(alias="tau_decay")
+    _E_syn: List[float] = Field(alias="E_syn")
+    _g_bar: List[float] = Field(alias="g_bar")
 
     @property
     def tau_rise(self) -> np.ndarray:
@@ -169,12 +157,6 @@ class SynapseConfig(BaseModel):
 
     class Config:
         populate_by_name = True
-        fields = {
-            "_tau_rise": {"alias": "tau_rise"},
-            "_tau_decay": {"alias": "tau_decay"},
-            "_E_syn": {"alias": "E_syn"},
-            "_g_bar": {"alias": "g_bar"},
-        }
 
 
 class ActivityConfig(BaseModel):
