@@ -5,7 +5,7 @@ Pydantic models that directly validate TOML configuration files.
 
 import numpy as np
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # =============================================================================
@@ -35,16 +35,20 @@ class TrainingConfig(BaseModel):
 class Targets(BaseModel):
     """Target values."""
 
-    _firing_rates: List[float] = Field(alias="firing_rates")
-    _cvs: List[float] = Field(alias="cvs")
+    firing_rates_list: List[float] = Field(alias="firing_rates")
+    cvs_list: List[float] = Field(alias="cvs")
 
+    @computed_field
     @property
     def firing_rates(self) -> np.ndarray:
-        return np.array(self._firing_rates)
+        """Target firing rates as numpy array."""
+        return np.array(self.firing_rates_list)
 
+    @computed_field
     @property
     def cvs(self) -> np.ndarray:
-        return np.array(self._cvs)
+        """Target CVs as numpy array."""
+        return np.array(self.cvs_list)
 
     class Config:
         populate_by_name = True
@@ -63,11 +67,13 @@ class CellTypesConfig(BaseModel):
     """Cell types."""
 
     names: List[str]
-    _proportion: List[float] = Field(alias="proportion")
+    proportion_list: List[float] = Field(alias="proportion")
 
+    @computed_field
     @property
     def proportion(self) -> np.ndarray:
-        return np.array(self._proportion)
+        """Cell type proportions as numpy array."""
+        return np.array(self.proportion_list)
 
     class Config:
         populate_by_name = True
@@ -79,23 +85,45 @@ class TopologyConfig(BaseModel):
     num_neurons: int
     num_assemblies: Optional[int] = None
     neurons_per_assembly: Optional[int] = None
-    _conn_within: Optional[List[List[float]]] = Field(default=None, alias="conn_within")
-    _conn_between: Optional[List[List[float]]] = Field(
+    conn_within_list: Optional[List[List[float]]] = Field(
+        default=None, alias="conn_within"
+    )
+    conn_between_list: Optional[List[List[float]]] = Field(
         default=None, alias="conn_between"
     )
-    _conn_inputs: Optional[List[List[float]]] = Field(default=None, alias="conn_inputs")
+    conn_inputs_list: Optional[List[List[float]]] = Field(
+        default=None, alias="conn_inputs"
+    )
 
+    @computed_field
     @property
     def conn_within(self) -> Optional[np.ndarray]:
-        return np.array(self._conn_within) if self._conn_within is not None else None
+        """Within-assembly connectivity as numpy array."""
+        return (
+            np.array(self.conn_within_list)
+            if self.conn_within_list is not None
+            else None
+        )
 
+    @computed_field
     @property
     def conn_between(self) -> Optional[np.ndarray]:
-        return np.array(self._conn_between) if self._conn_between is not None else None
+        """Between-assembly connectivity as numpy array."""
+        return (
+            np.array(self.conn_between_list)
+            if self.conn_between_list is not None
+            else None
+        )
 
+    @computed_field
     @property
     def conn_inputs(self) -> Optional[np.ndarray]:
-        return np.array(self._conn_inputs) if self._conn_inputs is not None else None
+        """Input connectivity as numpy array."""
+        return (
+            np.array(self.conn_inputs_list)
+            if self.conn_inputs_list is not None
+            else None
+        )
 
     class Config:
         populate_by_name = True
@@ -104,16 +132,20 @@ class TopologyConfig(BaseModel):
 class WeightsConfig(BaseModel):
     """Weight parameters."""
 
-    _w_mu: List[List[float]] = Field(alias="w_mu")
-    _w_sigma: List[List[float]] = Field(alias="w_sigma")
+    w_mu_list: List[List[float]] = Field(alias="w_mu")
+    w_sigma_list: List[List[float]] = Field(alias="w_sigma")
 
+    @computed_field
     @property
     def w_mu(self) -> np.ndarray:
-        return np.array(self._w_mu)
+        """Mean weights as numpy array."""
+        return np.array(self.w_mu_list)
 
+    @computed_field
     @property
     def w_sigma(self) -> np.ndarray:
-        return np.array(self._w_sigma)
+        """Weight standard deviations as numpy array."""
+        return np.array(self.w_sigma_list)
 
     class Config:
         populate_by_name = True
@@ -134,26 +166,34 @@ class SynapseConfig(BaseModel):
     """Synapse parameters."""
 
     names: List[str]
-    _tau_rise: List[float] = Field(alias="tau_rise")
-    _tau_decay: List[float] = Field(alias="tau_decay")
-    _E_syn: List[float] = Field(alias="E_syn")
-    _g_bar: List[float] = Field(alias="g_bar")
+    tau_rise_list: List[float] = Field(alias="tau_rise")
+    tau_decay_list: List[float] = Field(alias="tau_decay")
+    E_syn_list: List[float] = Field(alias="E_syn")
+    g_bar_list: List[float] = Field(alias="g_bar")
 
+    @computed_field
     @property
     def tau_rise(self) -> np.ndarray:
-        return np.array(self._tau_rise)
+        """Rise time constants as numpy array."""
+        return np.array(self.tau_rise_list)
 
+    @computed_field
     @property
     def tau_decay(self) -> np.ndarray:
-        return np.array(self._tau_decay)
+        """Decay time constants as numpy array."""
+        return np.array(self.tau_decay_list)
 
+    @computed_field
     @property
     def E_syn(self) -> np.ndarray:
-        return np.array(self._E_syn)
+        """Reversal potentials as numpy array."""
+        return np.array(self.E_syn_list)
 
+    @computed_field
     @property
     def g_bar(self) -> np.ndarray:
-        return np.array(self._g_bar)
+        """Maximal conductances as numpy array."""
+        return np.array(self.g_bar_list)
 
     class Config:
         populate_by_name = True
@@ -235,9 +275,10 @@ class FeedforwardConfig(BaseModel):
     activity: Dict[str, ActivityConfig]
     synapses: Dict[str, SynapseConfig]
 
+    @computed_field
     @property
     def firing_rates(self) -> np.ndarray:
-        """Extract firing rates as numpy array."""
+        """Firing rates as numpy array."""
         return np.array(
             [self.activity[name].firing_rate for name in self.cell_types.names]
         )
