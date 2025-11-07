@@ -5,7 +5,7 @@ Pydantic models that directly validate TOML configuration files.
 
 import numpy as np
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
 
 
 # =============================================================================
@@ -38,13 +38,11 @@ class Targets(BaseModel):
     firing_rates_list: List[float] = Field(alias="firing_rates")
     cvs_list: List[float] = Field(alias="cvs")
 
-    @computed_field
     @property
     def firing_rates(self) -> np.ndarray:
         """Target firing rates as numpy array."""
         return np.array(self.firing_rates_list)
 
-    @computed_field
     @property
     def cvs(self) -> np.ndarray:
         """Target CVs as numpy array."""
@@ -69,7 +67,6 @@ class CellTypesConfig(BaseModel):
     names: List[str]
     proportion_list: List[float] = Field(alias="proportion")
 
-    @computed_field
     @property
     def proportion(self) -> np.ndarray:
         """Cell type proportions as numpy array."""
@@ -95,7 +92,6 @@ class TopologyConfig(BaseModel):
         default=None, alias="conn_inputs"
     )
 
-    @computed_field
     @property
     def conn_within(self) -> Optional[np.ndarray]:
         """Within-assembly connectivity as numpy array."""
@@ -105,7 +101,6 @@ class TopologyConfig(BaseModel):
             else None
         )
 
-    @computed_field
     @property
     def conn_between(self) -> Optional[np.ndarray]:
         """Between-assembly connectivity as numpy array."""
@@ -115,7 +110,6 @@ class TopologyConfig(BaseModel):
             else None
         )
 
-    @computed_field
     @property
     def conn_inputs(self) -> Optional[np.ndarray]:
         """Input connectivity as numpy array."""
@@ -135,13 +129,11 @@ class WeightsConfig(BaseModel):
     w_mu_list: List[List[float]] = Field(alias="w_mu")
     w_sigma_list: List[List[float]] = Field(alias="w_sigma")
 
-    @computed_field
     @property
     def w_mu(self) -> np.ndarray:
         """Mean weights as numpy array."""
         return np.array(self.w_mu_list)
 
-    @computed_field
     @property
     def w_sigma(self) -> np.ndarray:
         """Weight standard deviations as numpy array."""
@@ -171,25 +163,21 @@ class SynapseConfig(BaseModel):
     E_syn_list: List[float] = Field(alias="E_syn")
     g_bar_list: List[float] = Field(alias="g_bar")
 
-    @computed_field
     @property
     def tau_rise(self) -> np.ndarray:
         """Rise time constants as numpy array."""
         return np.array(self.tau_rise_list)
 
-    @computed_field
     @property
     def tau_decay(self) -> np.ndarray:
         """Decay time constants as numpy array."""
         return np.array(self.tau_decay_list)
 
-    @computed_field
     @property
     def E_syn(self) -> np.ndarray:
         """Reversal potentials as numpy array."""
         return np.array(self.E_syn_list)
 
-    @computed_field
     @property
     def g_bar(self) -> np.ndarray:
         """Maximal conductances as numpy array."""
@@ -275,7 +263,6 @@ class FeedforwardConfig(BaseModel):
     activity: Dict[str, ActivityConfig]
     synapses: Dict[str, SynapseConfig]
 
-    @computed_field
     @property
     def firing_rates(self) -> np.ndarray:
         """Firing rates as numpy array."""
