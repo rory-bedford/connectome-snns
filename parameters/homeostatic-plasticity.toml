@@ -21,6 +21,7 @@ log_interval = 200                     # Log metrics to CSV and wandb every N ch
 checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
 mixed_precision = true                 # Whether to train with mixed precision
 plot_size = 200                        # Number of chunks to save for plotting
+batch_size = 10                        # Number of batches to run in parallel for training
 
 # ====================
 # OPTIMISATION TARGETS

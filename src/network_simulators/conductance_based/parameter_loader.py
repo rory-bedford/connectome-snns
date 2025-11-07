@@ -35,6 +35,7 @@ class TrainingConfig(BaseModel):
     checkpoint_interval: int
     mixed_precision: bool
     plot_size: int
+    batch_size: int
 
 
 class Targets(BaseModel):

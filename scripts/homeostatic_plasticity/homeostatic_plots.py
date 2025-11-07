@@ -43,19 +43,26 @@ def compute_network_statistics(
     Returns:
         dict: Dictionary containing mean firing rates and CVs by cell type
     """
-    # Compute firing rates per neuron (Hz)
-    spike_counts = spikes.sum(axis=1).squeeze()  # Sum over time
+    # Compute firing rates per neuron (Hz), averaged over batch
+    spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
+    spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
     duration_s = spikes.shape[1] * dt / 1000.0  # Convert ms to s
-    firing_rates = spike_counts / duration_s
+    firing_rates = spike_counts_avg / duration_s
 
-    # Compute ISIs and CVs per neuron
+    # Compute ISIs and CVs per neuron, averaged over batch
     cvs = np.full(spikes.shape[2], np.nan)  # Initialize with NaN for silent neurons
     for neuron_idx in range(spikes.shape[2]):
-        spike_times = np.nonzero(spikes[0, :, neuron_idx])[0]
-        if len(spike_times) > 1:
-            isis = np.diff(spike_times.astype(float)) * dt
-            if len(isis) > 0:
-                cvs[neuron_idx] = np.std(isis) / np.mean(isis)
+        neuron_cvs = []
+        for batch_idx in range(spikes.shape[0]):
+            spike_times = np.nonzero(spikes[batch_idx, :, neuron_idx])[0]
+            if len(spike_times) > 1:
+                isis = np.diff(spike_times.astype(float)) * dt
+                if len(isis) > 0:
+                    neuron_cvs.append(np.std(isis) / np.mean(isis))
+        
+        # Average CV across batch (excluding NaN values)
+        if neuron_cvs:
+            cvs[neuron_idx] = np.mean(neuron_cvs)
 
     # Compute statistics by cell type (use actual cell type names)
     stats = {}

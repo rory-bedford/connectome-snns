@@ -203,10 +203,10 @@ def main(
         device=device,
     )
 
-    # Create DataLoader (batch_size=1 for single chunks, no shuffle for continuous time)
+    # Create DataLoader with batch_size from parameters
     spike_dataloader = DataLoader(
         spike_dataset,
-        batch_size=1,
+        batch_size=params.training.batch_size,
         shuffle=False,
         num_workers=0,  # Keep 0 for GPU generation
     )
