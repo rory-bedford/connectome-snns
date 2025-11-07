@@ -35,21 +35,8 @@ class TrainingConfig(BaseModel):
 class Targets(BaseModel):
     """Target values."""
 
-    firing_rates_list: List[float] = Field(alias="firing_rates")
-    cvs_list: List[float] = Field(alias="cvs")
-
-    @property
-    def firing_rates(self) -> np.ndarray:
-        """Target firing rates as numpy array."""
-        return np.array(self.firing_rates_list)
-
-    @property
-    def cvs(self) -> np.ndarray:
-        """Target CVs as numpy array."""
-        return np.array(self.cvs_list)
-
-    class Config:
-        populate_by_name = True
+    firing_rates: float
+    cvs: float
 
 
 class Hyperparameters(BaseModel):
