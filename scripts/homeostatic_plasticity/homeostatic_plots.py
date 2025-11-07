@@ -26,6 +26,31 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def find_neuron_with_feedforward_inputs(
+    feedforward_conductances: np.ndarray,
+) -> int:
+    """Find a neuron that receives feedforward inputs.
+    
+    Args:
+        feedforward_conductances: Array of shape (batch, time, neurons, synapses)
+        
+    Returns:
+        int: Index of a neuron that has non-zero feedforward conductances, or 0 if none found
+    """
+    # Sum over batch and time dimensions to get total conductance per neuron per synapse
+    total_conductances = feedforward_conductances.sum(axis=(0, 1))  # Shape: (neurons, synapses)
+    
+    # Find neurons with any non-zero feedforward conductance
+    neurons_with_inputs = np.any(total_conductances > 1e-10, axis=1)  # Small threshold to avoid numerical issues
+    
+    if np.any(neurons_with_inputs):
+        # Return the first neuron that has feedforward inputs
+        return int(np.nonzero(neurons_with_inputs)[0][0])
+    else:
+        # Fallback to neuron 0 if no feedforward inputs found
+        return 0
+
+
 def compute_network_statistics(
     spikes: np.ndarray,
     cell_type_indices: np.ndarray,
@@ -247,6 +272,9 @@ def generate_training_plots(
     )
 
     # Use pre-computed synapse names (passed as parameters)
+    
+    # Find a neuron that actually receives feedforward inputs
+    neuron_with_ff_inputs = find_neuron_with_feedforward_inputs(conductances_FF)
 
     figures["synaptic_conductances"] = plot_synaptic_conductances(
         output_conductances=conductances,
@@ -257,7 +285,7 @@ def generate_training_plots(
         recurrent_synapse_names=recurrent_synapse_names,
         feedforward_synapse_names=feedforward_synapse_names,
         dt=dt,
-        neuron_id=0,
+        neuron_id=neuron_with_ff_inputs,
         fraction=1.0,
     )
 
