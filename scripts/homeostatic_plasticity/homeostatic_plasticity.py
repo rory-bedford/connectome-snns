@@ -18,7 +18,6 @@ Overview:
 """
 
 import numpy as np
-from collections import deque
 from synthetic_connectome import (
     topology_generators,
     weight_assigners,
@@ -32,20 +31,13 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 from optimisation.loss_functions import CVLoss, FiringRateLoss
-from optimisation.utils import save_checkpoint, load_checkpoint
+from optimisation.utils import save_checkpoint, load_checkpoint, AsyncLogger
 from network_simulators.conductance_based.parameter_loader import (
     HomeostaticPlasticityParams,
 )
 import toml
 import wandb
 from matplotlib import pyplot as plt
-from visualization.connectivity import (
-    plot_assembly_graph,
-    plot_weighted_connectivity,
-    plot_input_count_histogram,
-    plot_feedforward_connectivity,
-    plot_synaptic_input_histogram,
-)
 
 
 # Import local scripts
@@ -90,6 +82,9 @@ def main(
     hyperparameters = params.hyperparameters
     recurrent = params.recurrent
     feedforward = params.feedforward
+
+    # Determine output directory for plots (use resumed_output_dir if resuming)
+    plots_output_dir = resumed_output_dir if resumed_output_dir else output_dir
 
     # Set random seed if provided
     if simulation.seed is not None:
@@ -186,106 +181,9 @@ def main(
     # Move model to device for GPU acceleration
     model.to(device)
 
-    # Use resumed_output_dir for plots if provided (when resuming training)
-    plots_output_dir = (
-        resumed_output_dir if resumed_output_dir is not None else output_dir
-    )
-
-    print("\nSaving initial network structure and weights...")
-    initial_dir = plots_output_dir / "initial"
-    initial_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save initial weights to disk
-    np.save(initial_dir / "recurrent_weights.npy", weights)
-    np.save(initial_dir / "feedforward_weights.npy", feedforward_weights)
-    np.save(initial_dir / "connectivity_graph.npy", connectivity_graph)
-    print(f"✓ Initial weights saved to {initial_dir}")
-
-    # Generate and save initial structure plots
-    print("  Generating initial structure plots...")
-
-    # Plot assembly graph
-    fig_assembly = plot_assembly_graph(
-        connectivity_graph=connectivity_graph,
-        cell_type_indices=cell_type_indices,
-        num_assemblies=recurrent.topology.num_assemblies,
-    )
-    fig_assembly.savefig(
-        initial_dir / "assembly_graph.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig_assembly)
-
-    # Plot feedforward connectivity
-    fig_ff_conn = plot_feedforward_connectivity(
-        feedforward_weights=feedforward_weights,
-        input_cell_type_indices=input_source_indices,
-    )
-    fig_ff_conn.savefig(
-        initial_dir / "feedforward_connectivity.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig_ff_conn)
-
-    # Plot weighted connectivity
-    fig_weighted = plot_weighted_connectivity(
-        weights=weights,
-        cell_type_indices=cell_type_indices,
-        num_assemblies=recurrent.topology.num_assemblies,
-    )
-    fig_weighted.savefig(
-        initial_dir / "weighted_connectivity.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig_weighted)
-
-    # Plot input count histogram
-    fig_input_hist = plot_input_count_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_source_indices,
-        cell_type_names=recurrent.cell_types.names,
-        input_cell_type_names=feedforward.cell_types.names,
-    )
-    fig_input_hist.savefig(
-        initial_dir / "input_count_histogram.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig_input_hist)
-
-    # Plot synaptic input histogram (conductance-weighted)
-    # Prepare g_bar dictionaries
-    recurrent_g_bar_by_type = {}
-    for synapse in recurrent.synapse_params:
-        cell_type_name = recurrent.cell_types.names[synapse.cell_id]
-        if cell_type_name not in recurrent_g_bar_by_type:
-            recurrent_g_bar_by_type[cell_type_name] = 0
-        recurrent_g_bar_by_type[cell_type_name] += synapse.g_bar
-
-    feedforward_g_bar_by_type = {}
-    for synapse in feedforward.synapse_params:
-        cell_type_name = feedforward.cell_types.names[synapse.cell_id]
-        if cell_type_name not in feedforward_g_bar_by_type:
-            feedforward_g_bar_by_type[cell_type_name] = 0
-        feedforward_g_bar_by_type[cell_type_name] += synapse.g_bar
-
-    fig_synaptic_input = plot_synaptic_input_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_source_indices,
-        cell_type_names=recurrent.cell_types.names,
-        input_cell_type_names=feedforward.cell_types.names,
-        recurrent_g_bar_by_type=recurrent_g_bar_by_type,
-        feedforward_g_bar_by_type=feedforward_g_bar_by_type,
-    )
-    fig_synaptic_input.savefig(
-        initial_dir / "synaptic_input_histogram.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig_synaptic_input)
-
-    print(f"✓ Initial structure plots saved to {initial_dir}\n")
-
     # ==============================
     # Setup Optimiser and DataLoader
-    # =================================
+    # ==============================
 
     optimiser = torch.optim.Adam(model.parameters(), lr=hyperparameters.learning_rate)
 
@@ -299,8 +197,6 @@ def main(
     target_rate_tensor = (
         torch.ones(recurrent.topology.num_neurons, device=device) * targets.firing_rate
     )
-
-    # Set up loss functions (FiringRateLoss uses dt for conversion)
     cv_loss_fn = CVLoss(
         target_cv=target_cv_tensor, penalty_value=hyperparameters.cv_high_loss
     )
@@ -313,64 +209,26 @@ def main(
     initial_g = None
     initial_g_FF = None
 
-    # =============
-    # Setup Loggers
-    # =============
+    # Initialize gradient accumulation
+    optimiser.zero_grad(set_to_none=True)  # Faster than zeroing to 0
 
-    if wandb_config and wandb_config.get("enabled", False):
-        # Initialize wandb with config from experiment.toml
-        # Convert NetworkParams to dict for logging
-        params_dict = {
-            "simulation": simulation.model_dump(),
-            "targets": targets.model_dump(),
-            "hyperparameters": hyperparameters.model_dump(),
-            "recurrent": {
-                "topology": {
-                    "num_neurons": recurrent.topology.num_neurons,
-                    "num_assemblies": recurrent.topology.num_assemblies,
-                },
-                "cell_types": {
-                    "names": recurrent.cell_types.names,
-                    "proportions": recurrent.cell_types.proportion.tolist(),
-                },
-            },
-            "feedforward": {
-                "topology": {
-                    "num_neurons": feedforward.topology.num_neurons,
-                },
-                "cell_types": {
-                    "names": feedforward.cell_types.names,
-                    "proportions": feedforward.cell_types.proportion.tolist(),
-                },
-            },
-        }
+    # Accumulators for loss computation (GPU tensors with gradients)
+    loss_spikes = []
 
-        wandb_init_kwargs = {
-            "project": wandb_config["project"],
-            "name": output_dir.name,
-            "config": {
-                **params_dict,
-                "output_dir": str(output_dir),
-                "device": device,
-            },
-            "dir": str(output_dir),  # Save wandb files to output directory
-        }
+    # Accumulators for plotting (CPU numpy arrays, only stored when needed)
+    # These are only populated in the last plot_size epochs before a checkpoint
+    plot_spikes = []
+    plot_voltages = []
+    plot_currents = []
+    plot_currents_FF = []
+    plot_conductances = []
+    plot_conductances_FF = []
+    plot_input_spikes = []
 
-        # Add optional parameters if specified
-        if wandb_config.get("entity"):
-            wandb_init_kwargs["entity"] = wandb_config["entity"]
-        if wandb_config.get("tags"):
-            wandb_init_kwargs["tags"] = wandb_config["tags"]
-        if wandb_config.get("notes"):
-            wandb_init_kwargs["notes"] = wandb_config["notes"]
-
-        wandb.init(**wandb_init_kwargs)
-        wandb.watch(model, log="all", log_freq=training.log_interval)
-
-    # Load checkpoint if resuming
     start_epoch = 0
     best_loss = float("inf")
 
+    # Load checkpoint if resuming
     if resume_from is not None:
         start_epoch, initial_v, initial_g, initial_g_FF, best_loss = load_checkpoint(
             checkpoint_path=resume_from,
@@ -380,6 +238,41 @@ def main(
             device=device,
         )
 
+    # =============
+    # Setup Loggers
+    # =============
+
+    if wandb_config and wandb_config.get("enabled", False):
+        # Build wandb config from network parameters
+        wandb_config_dict = {
+            **params.model_dump(),  # Convert all params to dict
+            "output_dir": str(output_dir),
+            "device": device,
+        }
+
+        # Build init kwargs with only non-None optional parameters
+        wandb_init_kwargs = {
+            "project": wandb_config["project"],
+            "name": output_dir.name,
+            "config": wandb_config_dict,
+            "dir": str(output_dir),
+            **{
+                k: v
+                for k, v in wandb_config.items()
+                if k in ("entity", "tags", "notes") and v is not None
+            },
+        }
+
+        wandb.init(**wandb_init_kwargs)
+        wandb.watch(model, log="all", log_freq=training.log_interval)
+
+    # Initialize async logger for non-blocking metric logging
+    metrics_logger = AsyncLogger(log_dir=output_dir / "metrics", flush_interval=120.0)
+
+    # =================
+    # Run Training Loop
+    # =================
+
     print(f"\nStarting training from chunk {start_epoch}...")
     print(f"Target firing rate: {targets.firing_rate} Hz")
     print(f"Target CV: {targets.cv}")
@@ -387,34 +280,14 @@ def main(
         f"Total chunks: {simulation.num_chunks} ({simulation.num_chunks * simulation.chunk_duration / 1000:.2f} s)"
     )
     print(
-        f"Chunks per loss: {training.chunks_per_loss} chunks ({training.chunks_per_loss * simulation.chunk_duration / 1000:.2f} s)"
-    )
-    print(
-        f"Losses per update: {training.losses_per_update} losses ({training.chunks_per_update * simulation.chunk_duration / 1000:.2f} s)"
+        f"Losses per update: {training.losses_per_update} losses ({training.losses_per_update * simulation.chunk_duration / 1000:.2f} s)"
     )
     print(
         f"Log interval: {training.log_interval} chunks ({training.log_interval * simulation.chunk_duration / 1000:.2f} s)"
     )
-
-    # =================
-    # Run Training Loop
-    # =================
-
-    # Initialize gradient accumulation
-    optimiser.zero_grad()
-
-    # Accumulators for loss computation (GPU tensors with gradients)
-    loss_spikes = []
-
-    # Accumulators for plotting (CPU numpy arrays in deques with maxlen)
-    # These use deques with maxlen=plot_size for efficient memory management
-    plot_spikes = deque(maxlen=training.plot_size)
-    plot_voltages = deque(maxlen=training.plot_size)
-    plot_currents = deque(maxlen=training.plot_size)
-    plot_currents_FF = deque(maxlen=training.plot_size)
-    plot_conductances = deque(maxlen=training.plot_size)
-    plot_conductances_FF = deque(maxlen=training.plot_size)
-    plot_input_spikes = deque(maxlen=training.plot_size)
+    print(
+        f"Checkpoint interval: {training.checkpoint_interval} chunks ({training.checkpoint_interval * simulation.chunk_duration / 1000:.2f} s)"
+    )
 
     # Initialize progress bar for training loop
     pbar = tqdm(
@@ -459,72 +332,78 @@ def main(
         # Accumulate spikes for loss computation (keep on GPU with gradients)
         loss_spikes.append(chunk_s)
 
-        # Accumulate data for plotting (detach and move to CPU as numpy arrays)
-        # These are stored in deques with maxlen, so old data is automatically discarded
-        plot_spikes.append(chunk_s.detach().cpu().numpy())
-        plot_voltages.append(chunk_v.detach().cpu().numpy())
-        plot_currents.append(chunk_I.detach().cpu().numpy())
-        plot_currents_FF.append(chunk_I_FF.detach().cpu().numpy())
-        plot_conductances.append(chunk_g.detach().cpu().numpy())
-        plot_conductances_FF.append(chunk_g_FF.detach().cpu().numpy())
-        plot_input_spikes.append(input_spikes.detach().cpu().numpy())
+        # Check if we're in the window before a checkpoint (last plot_size epochs before a checkpoint_interval)
+        epochs_until_checkpoint = training.checkpoint_interval - (
+            (epoch + 1) % training.checkpoint_interval
+        )
+        if epochs_until_checkpoint == training.checkpoint_interval:
+            epochs_until_checkpoint = 0  # We're at a checkpoint point
+        should_store_for_plot = epochs_until_checkpoint < training.plot_size
+
+        # Accumulate data for plotting only when in the window before a checkpoint
+        if should_store_for_plot:
+            # Use pinned memory for faster transfer to CPU
+            plot_spikes.append(chunk_s.detach().cpu().pin_memory().numpy())
+            plot_voltages.append(chunk_v.detach().cpu().pin_memory().numpy())
+            plot_currents.append(chunk_I.detach().cpu().pin_memory().numpy())
+            plot_currents_FF.append(chunk_I_FF.detach().cpu().pin_memory().numpy())
+            plot_conductances.append(chunk_g.detach().cpu().pin_memory().numpy())
+            plot_conductances_FF.append(chunk_g_FF.detach().cpu().pin_memory().numpy())
+            plot_input_spikes.append(input_spikes.detach().cpu().pin_memory().numpy())
 
         # Delete chunk tensors to free GPU memory immediately
         del chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF
 
-        # Check if it's time to compute loss
-        if (epoch + 1) % simulation.chunks_per_loss == 0:
-            # Indicate gradient computation is starting
-            pbar.set_description("Training [Computing gradients...]")
+        # Compute loss every chunk
+        # Indicate gradient computation is starting
+        pbar.set_description("Training [Computing gradients...]")
 
-            # Concatenate accumulated chunks for loss computation
-            full_spikes = torch.cat(
-                loss_spikes, dim=1
-            )  # (batch, chunks_per_loss * n_steps, n_neurons)
+        # Concatenate accumulated chunks for loss computation
+        full_spikes = torch.cat(
+            loss_spikes, dim=1
+        )  # (batch, accumulated_chunks * n_steps, n_neurons)
 
-            # Compute loss over full trajectory with mixed precision
-            with autocast(
-                device_type="cuda",
-                enabled=simulation.mixed_precision and device == "cuda",
-            ):
-                cv_loss = cv_loss_fn(full_spikes)
-                fr_loss = firing_rate_loss_fn(full_spikes)
-                total_loss = (
-                    hyperparameters.loss_ratio * fr_loss
-                    + (1 - hyperparameters.loss_ratio) * cv_loss
-                )
-
-                # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
-                total_loss = total_loss / (
-                    simulation.chunks_per_update // simulation.chunks_per_loss
-                )
-
-            # Backward pass with gradient scaling (accumulates gradients)
-            scaler.scale(total_loss).backward()
-
-            # Reset description after gradient computation
-            pbar.set_description("Training")
-
-            # Convert to numpy for logging (detach first)
-            cv_loss_np = cv_loss.detach().cpu().item()
-            fr_loss_np = fr_loss.detach().cpu().item()
-            total_loss_np = total_loss.detach().cpu().item()
-
-            # Delete loss tensors and clear loss_spikes accumulator to free GPU memory
-            del cv_loss, fr_loss, total_loss, full_spikes
-            loss_spikes.clear()
-
-            # Update progress bar with loss information
-            pbar.set_postfix(
-                {
-                    "CV": f"{cv_loss_np:.4f}",
-                    "FR": f"{fr_loss_np:.4f}",
-                    "Total": f"{total_loss_np:.4f}",
-                }
+        # Compute loss over full trajectory with mixed precision
+        with autocast(
+            device_type="cuda",
+            enabled=training.mixed_precision and device == "cuda",
+        ):
+            cv_loss = cv_loss_fn(full_spikes)
+            fr_loss = firing_rate_loss_fn(full_spikes)
+            total_loss = (
+                hyperparameters.loss_ratio * fr_loss
+                + (1 - hyperparameters.loss_ratio) * cv_loss
             )
 
+            # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
+            total_loss = total_loss / training.losses_per_update
+
+        # Backward pass with gradient scaling (accumulates gradients)
+        scaler.scale(total_loss).backward()
+
+        # Reset description after gradient computation
+        pbar.set_description("Training")
+
+        # Convert to numpy for logging (detach first)
+        cv_loss_np = cv_loss.detach().cpu().item()
+        fr_loss_np = fr_loss.detach().cpu().item()
+        total_loss_np = total_loss.detach().cpu().item()
+
+        # Delete loss tensors and clear loss_spikes accumulator to free GPU memory
+        del cv_loss, fr_loss, total_loss, full_spikes
+        loss_spikes.clear()
+
+        # Update progress bar with loss information
+        pbar.set_postfix(
+            {
+                "CV": f"{cv_loss_np:.4f}",
+                "FR": f"{fr_loss_np:.4f}",
+                "Total": f"{total_loss_np:.4f}",
+            }
+        )
+
         # Check if it's time to update weights
-        if (epoch + 1) % training.chunks_per_update == 0:
+        if (epoch + 1) % training.losses_per_update == 0:
             # Indicate weight update is starting
             pbar.set_description("Training [Updating weights...]")
 
@@ -537,7 +416,7 @@ def main(
             # Update weights with scaled gradients
             scaler.step(optimiser)
             scaler.update()
-            optimiser.zero_grad()
+            optimiser.zero_grad(set_to_none=True)
 
             # Clear CUDA cache after weight update to release orphaned memory
             if device == "cuda":
@@ -549,8 +428,39 @@ def main(
             # Reset back to normal after a moment
             pbar.set_description("Training")
 
-        # Save checkpoint and statistics periodically
+        # Log metrics to CSV and wandb periodically
         if (epoch + 1) % training.log_interval == 0:
+            # Compute statistics on most recent chunk for logging
+            stats = homeostatic_plots.compute_network_statistics(
+                spikes=chunk_s.detach().cpu().numpy(),
+                cell_type_indices=cell_type_indices,
+                cell_type_names=recurrent.cell_types.names,
+                dt=simulation.dt,
+            )
+
+            # Log all metrics
+            metrics_logger.log(
+                epoch=epoch + 1,
+                cv_loss=cv_loss_np,
+                fr_loss=fr_loss_np,
+                total_loss=total_loss_np,
+                **stats,
+            )
+
+            # Log to wandb (scalars only, no plots)
+            if wandb_config and wandb_config.get("enabled", False):
+                wandb.log(
+                    {
+                        "loss/cv": cv_loss_np,
+                        "loss/firing_rate": fr_loss_np,
+                        "loss/total": total_loss_np,
+                        **stats,
+                    },
+                    step=epoch + 1,
+                )
+
+        # Save checkpoint and generate plots periodically
+        if (epoch + 1) % training.checkpoint_interval == 0:
             # Clear progress bar and print checkpoint header
             pbar.clear()
             print(f"\n{'=' * 60}")
@@ -558,13 +468,13 @@ def main(
             print("=" * 60)
 
             # Concatenate all accumulated data for visualization and checkpointing
-            vis_spikes = np.concatenate(list(plot_spikes), axis=1)
-            vis_voltages = np.concatenate(list(plot_voltages), axis=1)
-            vis_currents = np.concatenate(list(plot_currents), axis=1)
-            vis_currents_FF = np.concatenate(list(plot_currents_FF), axis=1)
-            vis_conductances = np.concatenate(list(plot_conductances), axis=1)
-            vis_conductances_FF = np.concatenate(list(plot_conductances_FF), axis=1)
-            vis_input_spikes = np.concatenate(list(plot_input_spikes), axis=1)
+            vis_spikes = np.concatenate(plot_spikes, axis=1)
+            vis_voltages = np.concatenate(plot_voltages, axis=1)
+            vis_currents = np.concatenate(plot_currents, axis=1)
+            vis_currents_FF = np.concatenate(plot_currents_FF, axis=1)
+            vis_conductances = np.concatenate(plot_conductances, axis=1)
+            vis_conductances_FF = np.concatenate(plot_conductances_FF, axis=1)
+            vis_input_spikes = np.concatenate(plot_input_spikes, axis=1)
 
             # Save checkpoint
             is_best = save_checkpoint(
@@ -573,15 +483,9 @@ def main(
                 model=model,
                 optimiser=optimiser,
                 scaler=scaler,
-                initial_v=initial_v.cpu().numpy()
-                if torch.is_tensor(initial_v)
-                else initial_v,
-                initial_g=initial_g.cpu().numpy()
-                if torch.is_tensor(initial_g)
-                else initial_g,
-                initial_g_FF=initial_g_FF.cpu().numpy()
-                if torch.is_tensor(initial_g_FF)
-                else initial_g_FF,
+                initial_v=initial_v.cpu().pin_memory().numpy(),
+                initial_g=initial_g.cpu().pin_memory().numpy(),
+                initial_g_FF=initial_g_FF.cpu().pin_memory().numpy(),
                 input_spikes=vis_input_spikes,
                 cv_loss=cv_loss_np,
                 fr_loss=fr_loss_np,
@@ -591,7 +495,7 @@ def main(
             if is_best:
                 best_loss = total_loss_np
 
-            # Compute statistics on accumulated trajectory
+            # Compute statistics on accumulated trajectory for display
             stats = homeostatic_plots.compute_network_statistics(
                 spikes=vis_spikes,
                 cell_type_indices=cell_type_indices,
@@ -637,7 +541,7 @@ def main(
                 dt=simulation.dt,
             )
 
-            # Log to wandb (combine all metrics and plots in a single call)
+            # Log plots to wandb
             if wandb_config and wandb_config.get("enabled", False):
                 # Create wandb Images directly from matplotlib figures
                 wandb_plots = {
@@ -645,17 +549,8 @@ def main(
                     for plot_name, fig in figures.items()
                 }
 
-                # Log everything together at the same step
-                wandb.log(
-                    {
-                        "loss/cv": cv_loss_np,
-                        "loss/firing_rate": fr_loss_np,
-                        "loss/total": total_loss_np,
-                        **stats,
-                        **wandb_plots,
-                    },
-                    step=epoch + 1,
-                )
+                # Log plots at the checkpoint step
+                wandb.log(wandb_plots, step=epoch + 1)
 
             # Save figures to disk after wandb has processed them
             for plot_name, fig in figures.items():
@@ -665,6 +560,15 @@ def main(
 
             print(f"  ✓ Saved plots to {figures_dir}")
             print("=" * 60)
+
+            # Clear plot lists to free memory
+            plot_spikes.clear()
+            plot_voltages.clear()
+            plot_currents.clear()
+            plot_currents_FF.clear()
+            plot_conductances.clear()
+            plot_conductances_FF.clear()
+            plot_input_spikes.clear()
 
             # Force garbage collection and clear CUDA cache to ensure memory is freed
             import gc
@@ -681,41 +585,21 @@ def main(
     pbar.close()
 
     # =============================
-    # Save Final Model and Clean Up
+    # Clean Up
     # =============================
 
     print("\n" + "=" * 60)
     print("Training complete!")
     print("=" * 60)
 
-    # Save final checkpoint
-    # Get the last input spikes from the plot queue
-    final_input_spikes = (
-        plot_input_spikes[-1]
-        if len(plot_input_spikes) > 0
-        else input_spikes.detach().cpu().numpy()
-    )
-    save_checkpoint(
-        output_dir=output_dir,
-        epoch=simulation.num_chunks,
-        model=model,
-        optimiser=optimiser,
-        scaler=scaler,
-        initial_v=initial_v.cpu().numpy() if torch.is_tensor(initial_v) else initial_v,
-        initial_g=initial_g.cpu().numpy() if torch.is_tensor(initial_g) else initial_g,
-        initial_g_FF=initial_g_FF.cpu().numpy()
-        if torch.is_tensor(initial_g_FF)
-        else initial_g_FF,
-        input_spikes=final_input_spikes,
-        cv_loss=cv_loss_np,
-        fr_loss=fr_loss_np,
-        total_loss=total_loss_np,
-        best_loss=best_loss,
-    )
-
     # Finish wandb run
     if wandb_config and wandb_config.get("enabled", False):
         wandb.finish()
 
-    print(f"✓ Final checkpoint saved to {output_dir / 'checkpoints'}")
+    # Close async logger and flush all remaining data
+    print("  Flushing metrics to disk...")
+    metrics_logger.close()
+
+    print(f"✓ Checkpoints saved to {output_dir / 'checkpoints'}")
+    print(f"✓ Metrics saved to {output_dir / 'metrics'}")
     print(f"✓ Best loss achieved: {best_loss:.6f}")

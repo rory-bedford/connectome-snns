@@ -5,11 +5,16 @@ This module provides utilities for creating and restoring checkpoints during
 neural network training, enabling training resumption and model recovery.
 """
 
+import csv
+import threading
+import time
+from pathlib import Path
+from queue import Queue
+from typing import Any, Optional, Tuple
+
 import numpy as np
 import torch
-from pathlib import Path
 from torch.amp import GradScaler
-from typing import Optional, Tuple
 
 
 def save_checkpoint(
@@ -169,3 +174,127 @@ def load_checkpoint(
 
     print(f"  ✓ Resumed from epoch {epoch}, best loss: {best_loss:.6f}")
     return epoch, initial_v, initial_g, initial_g_FF, best_loss
+
+
+class AsyncLogger:
+    """Asynchronous logger for training metrics.
+
+    This logger uses background threads to handle I/O operations without blocking
+    the training loop. Metrics are buffered and periodically flushed to a CSV file.
+
+    Args:
+        log_dir (str | Path): Directory where log files will be saved
+        flush_interval (float): Time interval in seconds between automatic flushes
+
+    Example:
+        >>> logger = AsyncLogger(log_dir='training_logs')
+        >>> for step in range(1000):
+        ...     loss, accuracy = train_step()
+        ...     logger.log(epoch=step, loss=loss, accuracy=accuracy)
+        >>> logger.close()
+    """
+
+    def __init__(self, log_dir: str | Path = "logs", flush_interval: float = 5.0):
+        """Initialize the async logger.
+
+        Args:
+            log_dir (str | Path): Directory where log files will be saved
+            flush_interval (float): Time interval in seconds between automatic flushes
+        """
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        self.queue: Queue = Queue()
+        self.csv_buffer: list[dict[str, Any]] = []
+        self.flush_interval = flush_interval
+        self._running = True
+
+        # Initialize CSV file with header
+        self.csv_path = self.log_dir / "training_metrics.csv"
+        self.csv_fieldnames: Optional[list[str]] = None
+
+        # Start worker thread
+        self.worker = threading.Thread(target=self._worker, daemon=True)
+        self.worker.start()
+
+        # Start periodic flush thread
+        self.flusher = threading.Thread(target=self._periodic_flush, daemon=True)
+        self.flusher.start()
+
+    def _worker(self):
+        """Background worker thread that processes the queue."""
+        while True:
+            item = self.queue.get()
+            if item is None:
+                self._flush()
+                break
+
+            metric_type, data = item
+
+            if metric_type == "csv_row":
+                self._log_csv_row(data)
+            elif metric_type == "flush":
+                self._flush()
+
+            self.queue.task_done()
+
+    def _log_csv_row(self, data: dict[str, Any]):
+        """Buffer a row for CSV output.
+
+        Args:
+            data (dict): Dictionary containing all fields for the CSV row
+        """
+        self.csv_buffer.append(data)
+
+    def _flush(self):
+        """Write buffered metrics to disk."""
+        # Flush CSV rows
+        if self.csv_buffer:
+            # Determine fieldnames from first row if not set
+            if self.csv_fieldnames is None:
+                self.csv_fieldnames = list(self.csv_buffer[0].keys())
+
+            # Check if file exists to determine if we need to write header
+            file_exists = self.csv_path.exists()
+
+            with open(self.csv_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
+
+                # Write header if this is a new file
+                if not file_exists:
+                    writer.writeheader()
+
+                # Write all buffered rows
+                writer.writerows(self.csv_buffer)
+
+            self.csv_buffer.clear()
+
+    def _periodic_flush(self):
+        """Periodically flush buffered data to avoid data loss."""
+        while self._running:
+            time.sleep(self.flush_interval)
+            if self._running:
+                self.queue.put(("flush", None))
+
+    def log(self, epoch: int, **metrics: float):
+        """Log metrics for a given epoch (non-blocking).
+
+        Args:
+            epoch (int): Epoch/step number
+            **metrics: Arbitrary keyword arguments for metric names and values
+        """
+        data = {"epoch": epoch, **metrics}
+        self.queue.put(("csv_row", data))
+
+    def flush(self):
+        """Force an immediate flush of all buffered data."""
+        self.queue.put(("flush", None))
+        self.queue.join()
+
+    def close(self):
+        """Shutdown the logger gracefully, flushing all remaining data."""
+        self._running = False
+        self.queue.put(None)
+        self.worker.join(timeout=10)
+        if self.flusher.is_alive():
+            self.flusher.join(timeout=1)

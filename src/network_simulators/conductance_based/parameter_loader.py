@@ -5,7 +5,7 @@ Pydantic models that directly validate TOML configuration files.
 
 import numpy as np
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # =============================================================================
@@ -25,9 +25,9 @@ class SimulationConfig(BaseModel):
 class TrainingConfig(BaseModel):
     """Training parameters."""
 
-    chunks_per_loss: int
     losses_per_update: int
     log_interval: int
+    checkpoint_interval: int
     mixed_precision: bool
     plot_size: int
 
@@ -317,3 +317,18 @@ class HomeostaticPlasticityParams(BaseModel):
     hyperparameters: Hyperparameters
     recurrent: RecurrentConfig
     feedforward: FeedforwardConfig
+
+    @model_validator(mode="after")
+    def validate_checkpoint_alignment(self) -> "HomeostaticPlasticityParams":
+        """Validate that simulation duration aligns with checkpoint interval."""
+        num_chunks = int(
+            self.simulation.duration / (self.simulation.chunk_size * self.simulation.dt)
+        )
+
+        if num_chunks % self.training.checkpoint_interval != 0:
+            raise ValueError(
+                f"Number of chunks ({num_chunks}) must be a multiple of checkpoint_interval "
+                f"({self.training.checkpoint_interval}). Either adjust duration or checkpoint_interval."
+            )
+
+        return self
