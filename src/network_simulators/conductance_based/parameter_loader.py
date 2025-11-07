@@ -20,8 +20,6 @@ class SimulationConfig(BaseModel):
     duration: float
     seed: int
     chunk_size: int
-    num_chunks: int
-    record_v_m: bool
 
 
 class TrainingConfig(BaseModel):
