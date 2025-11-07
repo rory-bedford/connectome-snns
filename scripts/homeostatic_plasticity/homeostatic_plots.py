@@ -1,3 +1,10 @@
+from visualization.connectivity import (
+    plot_assembly_graph,
+    plot_weighted_connectivity,
+    plot_input_count_histogram,
+    plot_synaptic_input_histogram,
+    plot_feedforward_connectivity,
+)
 from visualization.neuronal_dynamics import (
     plot_membrane_voltages,
     plot_mitral_cell_spikes,
@@ -94,8 +101,12 @@ def generate_training_plots(
     feedforward_weights: np.ndarray,
     connectivity_graph: np.ndarray,
     num_assemblies: int,
-    params: dict,
     dt: float,
+    neuron_params: dict,
+    recurrent_synapse_names: dict,
+    feedforward_synapse_names: dict,
+    recurrent_g_bar_by_type: dict,
+    feedforward_g_bar_by_type: dict,
 ) -> dict[str, plt.Figure]:
     """Generate all visualization plots for current training state.
 
@@ -129,9 +140,45 @@ def generate_training_plots(
     conductances = conductances.sum(axis=3)
     conductances_FF = conductances_FF.sum(axis=3)
 
-    # Note: Static network structure plots (assembly_graph, weighted_connectivity,
-    # input_count_histogram, feedforward_connectivity, synaptic_input_histogram) are
-    # generated once at initialization and not included in checkpoint plots to avoid redundancy
+    # Network structure plots
+    figures["assembly_graph"] = plot_assembly_graph(
+        connectivity_graph=connectivity_graph,
+        cell_type_indices=cell_type_indices,
+        num_assemblies=num_assemblies,
+    )
+
+    figures["weighted_connectivity"] = plot_weighted_connectivity(
+        weights=weights,
+        cell_type_indices=cell_type_indices,
+        num_assemblies=num_assemblies,
+    )
+
+    figures["input_count_histogram"] = plot_input_count_histogram(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_cell_type_indices,
+        cell_type_names=cell_type_names,
+        input_cell_type_names=input_cell_type_names,
+    )
+
+    # Prepare g_bar dictionaries for synaptic input histogram (use pre-computed values)
+
+    figures["synaptic_input_histogram"] = plot_synaptic_input_histogram(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_cell_type_indices,
+        cell_type_names=cell_type_names,
+        input_cell_type_names=input_cell_type_names,
+        recurrent_g_bar_by_type=recurrent_g_bar_by_type,
+        feedforward_g_bar_by_type=feedforward_g_bar_by_type,
+    )
+
+    figures["feedforward_connectivity"] = plot_feedforward_connectivity(
+        feedforward_weights=feedforward_weights,
+        input_cell_type_indices=input_cell_type_indices,
+    )
 
     # Input analysis
     figures["mitral_cell_spikes"] = plot_mitral_cell_spikes(
@@ -154,17 +201,7 @@ def generate_training_plots(
         dt=dt,
     )
 
-    # Prepare neuron_params for detailed plots
-    neuron_params = {}
-    physiology = params["recurrent"]["physiology"]
-    for idx, cell_name in enumerate(cell_type_names):
-        cell_params = physiology[cell_name]
-        neuron_params[idx] = {
-            "threshold": cell_params["theta"],
-            "rest": cell_params["U_reset"],
-            "name": cell_name,
-            "sign": 1 if "excit" in cell_name.lower() else -1,
-        }
+    # Use pre-computed neuron_params (passed as parameter)
 
     figures["membrane_voltages"] = plot_membrane_voltages(
         voltages=voltages,
@@ -202,18 +239,7 @@ def generate_training_plots(
         neuron_params=neuron_params,
     )
 
-    # Synaptic conductances
-    recurrent_synapse_names = {}
-    for cell_type in cell_type_names:
-        recurrent_synapse_names[cell_type] = params["recurrent"]["synapses"][cell_type][
-            "names"
-        ]
-
-    feedforward_synapse_names = {}
-    for cell_type in input_cell_type_names:
-        feedforward_synapse_names[cell_type] = params["feedforward"]["synapses"][
-            cell_type
-        ]["names"]
+    # Use pre-computed synapse names (passed as parameters)
 
     figures["synaptic_conductances"] = plot_synaptic_conductances(
         output_conductances=conductances,
