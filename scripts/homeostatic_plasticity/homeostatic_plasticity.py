@@ -22,10 +22,11 @@ from synthetic_connectome import (
     topology_generators,
     weight_assigners,
     cell_types,
-    spike_generators,
 )
+from inputs.dataloaders import PoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
+from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 import sys
 from pathlib import Path
@@ -190,6 +191,28 @@ def main(
     # Mixed precision training scaler (only used if enabled)
     scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
+    # Create firing rates array for input neurons
+    input_firing_rates = np.zeros(feedforward.topology.num_neurons)
+    for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
+        mask = input_source_indices == ct_idx
+        input_firing_rates[mask] = feedforward.activity.firing_rates[ct_name]
+
+    # Initialize Poisson spike generator dataset
+    spike_dataset = PoissonSpikeDataset(
+        firing_rates=input_firing_rates,
+        chunk_size=simulation.chunk_size,
+        dt=simulation.dt,
+        device=device,
+    )
+
+    # Create DataLoader (batch_size=1 for single chunks, no shuffle for continuous time)
+    spike_dataloader = DataLoader(
+        spike_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,  # Keep 0 for GPU generation
+    )
+
     # Define loss functions
     target_cv_tensor = (
         torch.ones(recurrent.topology.num_neurons, device=device) * targets.cv
@@ -298,18 +321,12 @@ def main(
         total=simulation.num_chunks,
     )
 
+    # Create iterator from dataloader for spike generation
+    spike_iter = iter(spike_dataloader)
+
     for epoch in pbar:
-        # Generate new feedforward spikes for this chunk
-        input_spikes = spike_generators.generate_poisson_spikes(
-            n_steps=simulation.chunk_size,
-            dt=simulation.dt,
-            num_neurons=feedforward.topology.num_neurons,
-            cell_type_indices=input_source_indices,
-            cell_type_names=feedforward.cell_types.names,
-            firing_rates=feedforward.activity.firing_rates,
-            batch_size=1,
-            device=device,
-        )
+        # Generate new feedforward spikes for this chunk from dataloader
+        input_spikes = next(spike_iter)  # Shape: (1, chunk_size, num_neurons)
 
         # Run network simulation for this chunk (with mixed precision)
         with autocast(

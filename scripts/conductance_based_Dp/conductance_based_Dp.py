@@ -17,6 +17,7 @@ Overview:
 import numpy as np
 import toml
 from synthetic_connectome import topology_generators, weight_assigners, cell_types
+from inputs.dataloaders import PoissonSpikeDataset
 from network_simulators.conductance_lif_network import ConductanceLIFNetwork
 import torch
 import sys
@@ -222,9 +223,8 @@ def main(output_dir, params_file):
     # STEP 3: Create Feedforward Inputs from Mitral Cells
     # ===================================================
 
-    # Generate Poisson spike trains for feedforward inputs
+    # Calculate number of timesteps
     n_steps = int(duration / dt)
-    shape = (1, n_steps, input_num_neurons)
 
     # Assign cell types to input layer
     input_source_indices = cell_types.assign_cell_types(
@@ -232,13 +232,22 @@ def main(output_dir, params_file):
         cell_type_proportions=input_cell_type_proportions,
     )
 
-    # Generate spikes for each input neuron based on its cell type firing rate
-    input_spikes = np.zeros(shape, dtype=bool)
+    # Create firing rates array for input neurons
+    input_firing_rate_array = np.zeros(input_num_neurons)
     for i, ct_idx in enumerate(input_source_indices):
         ct_name = input_cell_type_names[ct_idx]
-        firing_rate = input_firing_rates[ct_name]
-        p_spike = firing_rate * dt * 1e-3  # rate in Hz, dt in ms
-        input_spikes[:, :, i] = np.random.rand(1, n_steps) < p_spike
+        input_firing_rate_array[i] = input_firing_rates[ct_name]
+
+    # Create Poisson spike generator dataset
+    spike_dataset = PoissonSpikeDataset(
+        firing_rates=input_firing_rate_array,
+        chunk_size=n_steps,
+        dt=dt,
+        device=device,
+    )
+
+    # Generate input spikes (batch_size=1)
+    input_spikes = spike_dataset[0].unsqueeze(0)  # Shape: (1, n_steps, num_neurons)
 
     # Generate feedforward connectivity graph
     feedforward_connectivity_graph = topology_generators.sparse_graph_generator(
