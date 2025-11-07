@@ -9,6 +9,7 @@
 dt = 0.5                               # ms - Time resolution of the simulation
 duration = 10000.0                     # ms - Total simulation duration
 seed = 42                              # Random seed for reproducibility
+chunk_size = 1000                      # Number steps to run per chunk
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY
@@ -111,19 +112,3 @@ tau_rise = [1.0]                       # ms - Synaptic rise time constants
 tau_decay = [6.0]                      # ms - Synaptic decay time constants
 E_syn = [-70.0]                        # mV - Synaptic reversal potentials
 g_bar = [2.0]                          # nS - Synaptic conductances (per spike)
-
-# ================================
-# OPTIMIZATION AND HYPERPARAMETERS
-# ================================
-
-[optimisation]
-scaling_factors = [                    # voxel^-1 - Recurrent scaling factors mapping voxels to weights
-    [1.0, 1.0],
-    [1.0, 1.0],
-]
-scaling_factors_FF = [                 # voxel^-1 - Feedforward scaling factors mapping voxels to weights
-    [1.0, 1.0],
-]
-
-[hyperparameters]
-surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function

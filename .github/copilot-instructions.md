@@ -14,9 +14,15 @@
   - `uv sync --extra cpu` (CPU)
   - `uv sync --extra gpu` (GPU)
 - Dependencies are tracked in `pyproject.toml` and `uv.lock`.
-- Code should conform to Ruff lint/format standards, but **NEVER run command line tools** (testing, linting, formatting, or any terminal commands) - the user handles all testing and execution themselves.
+- Code should conform to Ruff lint/format standards.
 
+## CRITICAL: What the Agent Should NEVER Do
+- **NEVER run tests** - Do not execute test commands, create test scripts, or run pytest
+- **NEVER run code in terminal** - Do not execute Python scripts, linting, formatting, or any command-line tools
+- **NEVER modify pyproject.toml** - Do not add, remove, or change dependencies or project configuration
+- **NEVER run code snippets to "verify" changes** - The user handles all testing and execution
 
+**If you need any of these things done, ASK the user to do them.**
 
 ## Key Patterns & Conventions
 - Follow modular design: keep data processing, model definition, and training logic in separate files.

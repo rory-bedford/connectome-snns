@@ -18,7 +18,6 @@ Overview:
 """
 
 import numpy as np
-import toml
 from collections import deque
 from synthetic_connectome import (
     topology_generators,
@@ -26,7 +25,7 @@ from synthetic_connectome import (
     cell_types,
     spike_generators,
 )
-from network_simulators.conductance_lif_network import ConductanceLIFNetwork
+from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 from torch.amp import autocast, GradScaler
 import sys
@@ -34,6 +33,9 @@ from pathlib import Path
 from tqdm import tqdm
 from optimisation.loss_functions import CVLoss, FiringRateLoss
 from optimisation.utils import save_checkpoint, load_checkpoint
+from network_simulators.conductance_based.parameter_loader import (
+    load_homeostatic_plasticity_params,
+)
 import wandb
 from matplotlib import pyplot as plt
 from visualization.connectivity import (
@@ -66,199 +68,57 @@ def main(
         resume_from (Path, optional): Path to checkpoint to resume from
         resumed_output_dir (Path, optional): Separate directory for plots when resuming training
     """
-    # =============================================
-    # SETUP: Device selection and parameter loading
-    # =============================================
+
+    # ======================================
+    # Device Selection and Parameter Loading
+    # ======================================
 
     # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
     # Load all network parameters from TOML file
-    with open(params_file, "r") as f:
-        params = toml.load(f)
+    params = load_homeostatic_plasticity_params(params_file)
 
-    # ========== OPTIMISATION TARGETS ==========
-    target_firing_rate = float(params["targets"]["firing_rates"])
-    target_cv = float(params["targets"]["cvs"])
+    # Extract commonly used parameter groups
+    simulation = params.simulation
+    training = params.training
+    targets = params.targets
+    hyperparameters = params.hyperparameters
+    recurrent = params.recurrent
+    feedforward = params.feedforward
 
-    # ========== SIMULATION CONFIGURATION ==========
-    dt = float(params["simulation"]["dt"])
-    n_steps = int(params["simulation"]["chunk_size"])
-    seed = params["simulation"].get("seed", None)
-    num_chunks = int(params["simulation"]["num_chunks"])
-    chunks_per_loss = int(params["simulation"]["chunks_per_loss"])
-    losses_per_update = int(params["simulation"]["losses_per_update"])
-    log_interval = int(params["simulation"]["log_interval"])
-    plot_size = int(params["simulation"]["plot_size"])
-
-    # Enable mixed precision training (only beneficial on CUDA)
-    use_mixed_precision = params["simulation"].get("mixed_precision", True)
-
-    # Calculate derived values
-    chunk_duration = n_steps * dt  # Duration in ms
-    chunks_per_update = chunks_per_loss * losses_per_update
-
-    # Validate configuration
-    if log_interval % chunks_per_loss != 0:
-        raise ValueError(
-            f"log_interval ({log_interval}) must be a multiple of chunks_per_loss ({chunks_per_loss}) "
-            "to ensure loss values are always available when checkpointing."
-        )
-
-    # Set global random seed for reproducibility (only if specified in config)
-    if seed is not None:
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        print(f"Using seed: {seed}")
+    # Set random seed if provided
+    if simulation.seed is not None:
+        np.random.seed(simulation.seed)
+        torch.manual_seed(simulation.seed)
+        print(f"Using seed: {simulation.seed}")
     else:
         print("No seed specified - using random initialization")
 
-    # ========== HYPERPARAMETERS ==========
-    surrgrad_scale = float(params["hyperparameters"]["surrgrad_scale"])
-    cv_high_loss = float(params["hyperparameters"]["cv_high_loss"])
-    loss_ratio = float(params["hyperparameters"]["loss_ratio"])
-    learning_rate = float(params["hyperparameters"]["learning_rate"])
+    # ===================================
+    # Create Recurrent Connectivity Graph
+    # ===================================
 
-    # ========== FEEDFORWARD LAYER TOPOLOGY ==========
-    # Feedforward topology
-    input_num_neurons = int(params["feedforward"]["topology"]["num_neurons"])
-    input_conn_inputs = np.array(
-        params["feedforward"]["topology"]["conn_inputs"], dtype=float
-    )
-
-    # Feedforward cell types
-    input_cell_type_names = params["feedforward"]["cell_types"]["names"]
-    input_cell_type_proportions = np.array(
-        params["feedforward"]["cell_types"]["proportion"], dtype=float
-    )
-
-    # Feedforward weights
-    input_w_mu = np.array(params["feedforward"]["weights"]["w_mu"], dtype=float)
-    input_w_sigma = np.array(params["feedforward"]["weights"]["w_sigma"], dtype=float)
-
-    # ========== FEEDFORWARD LAYER ACTIVITY AND SYNAPSES ==========
-    # Feedforward cell parameters (as list of dicts)
-    # Note: Feedforward cells don't have physiological parameters, just name and id
-    cell_params_FF = []
-    input_firing_rates = {}
-    for cell_id, ct in enumerate(input_cell_type_names):
-        firing_rate = float(params["feedforward"]["activity"][ct]["firing_rate"])
-        input_firing_rates[ct] = firing_rate  # Store separately for spike generation
-        cell_params_FF.append(
-            {
-                "name": ct,
-                "cell_id": cell_id,
-            }
-        )
-
-    # Feedforward synapse parameters (as list of dicts, flattened from all cell types)
-    synapse_params_FF = []
-    synapse_id_FF = 0
-    for cell_id, ct in enumerate(input_cell_type_names):
-        synapse_names = params["feedforward"]["synapses"][ct]["names"]
-        tau_rise = params["feedforward"]["synapses"][ct]["tau_rise"]
-        tau_decay = params["feedforward"]["synapses"][ct]["tau_decay"]
-        E_syn = params["feedforward"]["synapses"][ct]["E_syn"]
-        g_bar = params["feedforward"]["synapses"][ct]["g_bar"]
-
-        # Each synapse type for this cell type gets its own entry
-        for i, syn_name in enumerate(synapse_names):
-            synapse_params_FF.append(
-                {
-                    "name": syn_name,
-                    "synapse_id": synapse_id_FF,
-                    "cell_id": cell_id,
-                    "tau_rise": float(tau_rise[i]),
-                    "tau_decay": float(tau_decay[i]),
-                    "E_syn": float(E_syn[i]),
-                    "g_bar": float(g_bar[i]),
-                }
-            )
-            synapse_id_FF += 1
-
-    # ========== RECURRENT LAYER TOPOLOGY ==========
-    # Recurrent topology
-    num_neurons = int(params["recurrent"]["topology"]["num_neurons"])
-    num_assemblies = int(params["recurrent"]["topology"]["num_assemblies"])
-    conn_within = np.array(params["recurrent"]["topology"]["conn_within"])
-    conn_between = np.array(params["recurrent"]["topology"]["conn_between"])
-
-    # Recurrent cell types
-    cell_type_names = params["recurrent"]["cell_types"]["names"]
-    cell_type_proportions = np.array(
-        params["recurrent"]["cell_types"]["proportion"], dtype=float
-    )
-
-    # Recurrent weights
-    w_mu = np.array(params["recurrent"]["weights"]["w_mu"], dtype=float)
-    w_sigma = np.array(params["recurrent"]["weights"]["w_sigma"], dtype=float)
-
-    # ========== RECURRENT LAYER PHYSIOLOGY AND SYNAPSES ==========
-    # Recurrent cell parameters (as list of dicts)
-    cell_params = []
-    for cell_id, ct in enumerate(cell_type_names):
-        cell_params.append(
-            {
-                "name": ct,
-                "cell_id": cell_id,
-                "tau_mem": float(params["recurrent"]["physiology"][ct]["tau_mem"]),
-                "theta": float(params["recurrent"]["physiology"][ct]["theta"]),
-                "U_reset": float(params["recurrent"]["physiology"][ct]["U_reset"]),
-                "E_L": float(params["recurrent"]["physiology"][ct]["E_L"]),
-                "g_L": float(params["recurrent"]["physiology"][ct]["g_L"]),
-                "tau_ref": float(params["recurrent"]["physiology"][ct]["tau_ref"]),
-            }
-        )
-
-    # Recurrent synapse parameters (as list of dicts, flattened from all cell types)
-    synapse_params = []
-    synapse_id = 0
-    for cell_id, ct in enumerate(cell_type_names):
-        synapse_names = params["recurrent"]["synapses"][ct]["names"]
-        tau_rise = params["recurrent"]["synapses"][ct]["tau_rise"]
-        tau_decay = params["recurrent"]["synapses"][ct]["tau_decay"]
-        E_syn = params["recurrent"]["synapses"][ct]["E_syn"]
-        g_bar = params["recurrent"]["synapses"][ct]["g_bar"]
-
-        # Each synapse type for this cell type gets its own entry
-        for i, syn_name in enumerate(synapse_names):
-            synapse_params.append(
-                {
-                    "name": syn_name,
-                    "synapse_id": synapse_id,
-                    "cell_id": cell_id,
-                    "tau_rise": float(tau_rise[i]),
-                    "tau_decay": float(tau_decay[i]),
-                    "E_syn": float(E_syn[i]),
-                    "g_bar": float(g_bar[i]),
-                }
-            )
-            synapse_id += 1
-
-    # ==========================================================
-    # STEP 1: Generate Assembly-Based Topology and Visualization
-    # ==========================================================
-
-    # First assign cell types to source and target neurons (same for recurrent)
+    # Assign cell types to recurrent layer
     cell_type_indices = cell_types.assign_cell_types(
-        num_neurons=num_neurons,
-        cell_type_proportions=cell_type_proportions,
+        num_neurons=recurrent.topology.num_neurons,
+        cell_type_proportions=recurrent.cell_types.proportion,
     )
 
     # Generate assembly-based connectivity graph
     connectivity_graph = topology_generators.assembly_generator(
         source_cell_types=cell_type_indices,
         target_cell_types=cell_type_indices,  # Same for recurrent connections
-        num_assemblies=num_assemblies,
-        conn_within=conn_within,
-        conn_between=conn_between,
+        num_assemblies=recurrent.topology.num_assemblies,
+        conn_within=recurrent.topology.conn_within,
+        conn_between=recurrent.topology.conn_between,
         method="configuration",  # Ensures exact in-degree/out-degree distributions
     )
 
-    # ===============================
-    # STEP 2: Assign Synaptic Weights
-    # ===============================
+    # =======================
+    # Assign Synaptic Weights
+    # =======================
 
     # Assign log-normal weights to connectivity graph (no signs for conductance-based)
     weights = weight_assigners.assign_weights_lognormal(
@@ -266,26 +126,26 @@ def main(
         source_cell_indices=cell_type_indices,
         target_cell_indices=cell_type_indices,  # Same for recurrent connections
         cell_type_signs=None,  # No signs for conductance-based model
-        w_mu_matrix=w_mu,
-        w_sigma_matrix=w_sigma,
+        w_mu_matrix=recurrent.weights.w_mu,
+        w_sigma_matrix=recurrent.weights.w_sigma,
         parameter_space="linear",
     )
 
-    # =================================
-    # STEP 3: Create Feedforward Inputs
-    # =================================
+    # ==========================================
+    # Create Feedforward Connections and Weights
+    # ==========================================
 
     # Assign cell types to input layer
     input_source_indices = cell_types.assign_cell_types(
-        num_neurons=input_num_neurons,
-        cell_type_proportions=input_cell_type_proportions,
+        num_neurons=feedforward.topology.num_neurons,
+        cell_type_proportions=feedforward.cell_types.proportion,
     )
 
     # Generate feedforward connectivity graph
     feedforward_connectivity_graph = topology_generators.sparse_graph_generator(
         source_cell_types=input_source_indices,
         target_cell_types=cell_type_indices,  # Connectome layer cell assignments
-        conn_matrix=input_conn_inputs,  # N_input_types x N_recurrent_types matrix
+        conn_matrix=feedforward.topology.conn_inputs,  # N_input_types x N_recurrent_types matrix
         allow_self_loops=True,  # Allow for feedforward connections
         method="configuration",  # Ensures exact in-degree/out-degree distributions
     )
@@ -296,38 +156,32 @@ def main(
         source_cell_indices=input_source_indices,
         target_cell_indices=cell_type_indices,
         cell_type_signs=None,  # No signs for conductance-based model
-        w_mu_matrix=input_w_mu,
-        w_sigma_matrix=input_w_sigma,
+        w_mu_matrix=feedforward.weights.w_mu,
+        w_sigma_matrix=feedforward.weights.w_sigma,
         parameter_space="linear",
     )
 
-    # ==============================
-    # STEP 4: Initialize LIF Network
-    # ==============================
+    # ======================
+    # Initialize LIF Network
+    # ======================
 
     # Initialize conductance-based LIF network model
     model = ConductanceLIFNetwork(
         weights=weights,
         cell_type_indices=cell_type_indices,
-        cell_params=cell_params,
-        synapse_params=synapse_params,
-        surrgrad_scale=surrgrad_scale,
-        scaling_factors=None,  # No scaling factors for homeostatic plasticity
+        cell_params=recurrent.get_cell_params(),
+        synapse_params=recurrent.get_synapse_params(),
+        surrgrad_scale=hyperparameters.surrgrad_scale,
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
-        cell_params_FF=cell_params_FF,
-        synapse_params_FF=synapse_params_FF,
-        scaling_factors_FF=None,  # No scaling factors for feedforward
+        cell_params_FF=feedforward.get_cell_params(),
+        synapse_params_FF=feedforward.get_synapse_params(),
         optimisable="weights",
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
     # Move model to device for GPU acceleration
     model.to(device)
-
-    # ========================================================
-    # STEP 4.5: Save Initial Network Structure and Weights
-    # ========================================================
 
     # Use resumed_output_dir for plots if provided (when resuming training)
     plots_output_dir = (
@@ -351,7 +205,7 @@ def main(
     fig_assembly = plot_assembly_graph(
         connectivity_graph=connectivity_graph,
         cell_type_indices=cell_type_indices,
-        num_assemblies=num_assemblies,
+        num_assemblies=recurrent.topology.num_assemblies,
     )
     fig_assembly.savefig(
         initial_dir / "assembly_graph.png", dpi=300, bbox_inches="tight"
@@ -372,7 +226,7 @@ def main(
     fig_weighted = plot_weighted_connectivity(
         weights=weights,
         cell_type_indices=cell_type_indices,
-        num_assemblies=num_assemblies,
+        num_assemblies=recurrent.topology.num_assemblies,
     )
     fig_weighted.savefig(
         initial_dir / "weighted_connectivity.png", dpi=300, bbox_inches="tight"
@@ -385,8 +239,8 @@ def main(
         feedforward_weights=feedforward_weights,
         cell_type_indices=cell_type_indices,
         input_cell_type_indices=input_source_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
+        cell_type_names=recurrent.cell_types.names,
+        input_cell_type_names=feedforward.cell_types.names,
     )
     fig_input_hist.savefig(
         initial_dir / "input_count_histogram.png", dpi=300, bbox_inches="tight"
@@ -396,22 +250,26 @@ def main(
     # Plot synaptic input histogram (conductance-weighted)
     # Prepare g_bar dictionaries
     recurrent_g_bar_by_type = {}
-    for cell_type in cell_type_names:
-        g_bar_values = params["recurrent"]["synapses"][cell_type]["g_bar"]
-        recurrent_g_bar_by_type[cell_type] = sum(g_bar_values)
+    for synapse in recurrent.synapse_params:
+        cell_type_name = recurrent.cell_types.names[synapse.cell_id]
+        if cell_type_name not in recurrent_g_bar_by_type:
+            recurrent_g_bar_by_type[cell_type_name] = 0
+        recurrent_g_bar_by_type[cell_type_name] += synapse.g_bar
 
     feedforward_g_bar_by_type = {}
-    for cell_type in input_cell_type_names:
-        g_bar_values = params["feedforward"]["synapses"][cell_type]["g_bar"]
-        feedforward_g_bar_by_type[cell_type] = sum(g_bar_values)
+    for synapse in feedforward.synapse_params:
+        cell_type_name = feedforward.cell_types.names[synapse.cell_id]
+        if cell_type_name not in feedforward_g_bar_by_type:
+            feedforward_g_bar_by_type[cell_type_name] = 0
+        feedforward_g_bar_by_type[cell_type_name] += synapse.g_bar
 
     fig_synaptic_input = plot_synaptic_input_histogram(
         weights=weights,
         feedforward_weights=feedforward_weights,
         cell_type_indices=cell_type_indices,
         input_cell_type_indices=input_source_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
+        cell_type_names=recurrent.cell_types.names,
+        input_cell_type_names=feedforward.cell_types.names,
         recurrent_g_bar_by_type=recurrent_g_bar_by_type,
         feedforward_g_bar_by_type=feedforward_g_bar_by_type,
     )
@@ -422,39 +280,73 @@ def main(
 
     print(f"✓ Initial structure plots saved to {initial_dir}\n")
 
-    # =======================
-    # STEP 5: Setup Optimiser
-    # =======================
+    # ==============================
+    # Setup Optimiser and DataLoader
+    # =================================
 
-    optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimiser = torch.optim.Adam(model.parameters(), lr=hyperparameters.learning_rate)
 
-    # Initialize GradScaler for mixed precision training
-    scaler = GradScaler("cuda", enabled=use_mixed_precision and device == "cuda")
+    # Mixed precision training scaler (only used if enabled)
+    scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
-    # Initialize target tensors for loss functions
-    target_cv_tensor = torch.ones(num_neurons, device=device) * target_cv
-    target_rate_tensor = torch.ones(num_neurons, device=device) * target_firing_rate
+    # Define loss functions
+    target_cv_tensor = (
+        torch.ones(recurrent.topology.num_neurons, device=device) * targets.cv
+    )
+    target_rate_tensor = (
+        torch.ones(recurrent.topology.num_neurons, device=device) * targets.firing_rate
+    )
 
-    # Initialize loss functions
-    cv_loss_fn = CVLoss(target_cv=target_cv_tensor, penalty_value=cv_high_loss)
-    firing_rate_loss_fn = FiringRateLoss(target_rate=target_rate_tensor, dt=dt)
+    # Set up loss functions (FiringRateLoss uses dt for conversion)
+    cv_loss_fn = CVLoss(
+        target_cv=target_cv_tensor, penalty_value=hyperparameters.cv_high_loss
+    )
+    firing_rate_loss_fn = FiringRateLoss(
+        target_rate=target_rate_tensor, dt=simulation.dt
+    )
 
     # Initial arrays for chunk inputs
     initial_v = None
     initial_g = None
     initial_g_FF = None
 
-    # ========================================
-    # STEP 6: Initialize wandb (if requested)
-    # ========================================
+    # =============
+    # Setup Loggers
+    # =============
 
     if wandb_config and wandb_config.get("enabled", False):
         # Initialize wandb with config from experiment.toml
+        # Convert NetworkParams to dict for logging
+        params_dict = {
+            "simulation": simulation.model_dump(),
+            "targets": targets.model_dump(),
+            "hyperparameters": hyperparameters.model_dump(),
+            "recurrent": {
+                "topology": {
+                    "num_neurons": recurrent.topology.num_neurons,
+                    "num_assemblies": recurrent.topology.num_assemblies,
+                },
+                "cell_types": {
+                    "names": recurrent.cell_types.names,
+                    "proportions": recurrent.cell_types.proportion.tolist(),
+                },
+            },
+            "feedforward": {
+                "topology": {
+                    "num_neurons": feedforward.topology.num_neurons,
+                },
+                "cell_types": {
+                    "names": feedforward.cell_types.names,
+                    "proportions": feedforward.cell_types.proportion.tolist(),
+                },
+            },
+        }
+
         wandb_init_kwargs = {
             "project": wandb_config["project"],
             "name": output_dir.name,
             "config": {
-                **params,  # Log all parameters
+                **params_dict,
                 "output_dir": str(output_dir),
                 "device": device,
             },
@@ -470,7 +362,7 @@ def main(
             wandb_init_kwargs["notes"] = wandb_config["notes"]
 
         wandb.init(**wandb_init_kwargs)
-        wandb.watch(model, log="all", log_freq=log_interval)
+        wandb.watch(model, log="all", log_freq=training.log_interval)
 
     # Load checkpoint if resuming
     start_epoch = 0
@@ -486,22 +378,24 @@ def main(
         )
 
     print(f"\nStarting training from chunk {start_epoch}...")
-    print(f"Target firing rate: {target_firing_rate} Hz")
-    print(f"Target CV: {target_cv}")
-    print(f"Total chunks: {num_chunks} ({num_chunks * chunk_duration / 1000:.2f} s)")
+    print(f"Target firing rate: {targets.firing_rate} Hz")
+    print(f"Target CV: {targets.cv}")
     print(
-        f"Chunks per loss: {chunks_per_loss} chunks ({chunks_per_loss * chunk_duration / 1000:.2f} s)"
+        f"Total chunks: {simulation.num_chunks} ({simulation.num_chunks * simulation.chunk_duration / 1000:.2f} s)"
     )
     print(
-        f"Losses per update: {losses_per_update} losses ({chunks_per_update * chunk_duration / 1000:.2f} s)"
+        f"Chunks per loss: {training.chunks_per_loss} chunks ({training.chunks_per_loss * simulation.chunk_duration / 1000:.2f} s)"
     )
     print(
-        f"Log interval: {log_interval} chunks ({log_interval * chunk_duration / 1000:.2f} s)"
+        f"Losses per update: {training.losses_per_update} losses ({training.chunks_per_update * simulation.chunk_duration / 1000:.2f} s)"
+    )
+    print(
+        f"Log interval: {training.log_interval} chunks ({training.log_interval * simulation.chunk_duration / 1000:.2f} s)"
     )
 
-    # =========================
-    # STEP 7: Run Training Loop
-    # =========================
+    # =================
+    # Run Training Loop
+    # =================
 
     # Initialize gradient accumulation
     optimiser.zero_grad()
@@ -511,43 +405,43 @@ def main(
 
     # Accumulators for plotting (CPU numpy arrays in deques with maxlen)
     # These use deques with maxlen=plot_size for efficient memory management
-    plot_spikes = deque(maxlen=plot_size)
-    plot_voltages = deque(maxlen=plot_size)
-    plot_currents = deque(maxlen=plot_size)
-    plot_currents_FF = deque(maxlen=plot_size)
-    plot_conductances = deque(maxlen=plot_size)
-    plot_conductances_FF = deque(maxlen=plot_size)
-    plot_input_spikes = deque(maxlen=plot_size)
+    plot_spikes = deque(maxlen=training.plot_size)
+    plot_voltages = deque(maxlen=training.plot_size)
+    plot_currents = deque(maxlen=training.plot_size)
+    plot_currents_FF = deque(maxlen=training.plot_size)
+    plot_conductances = deque(maxlen=training.plot_size)
+    plot_conductances_FF = deque(maxlen=training.plot_size)
+    plot_input_spikes = deque(maxlen=training.plot_size)
 
     # Initialize progress bar for training loop
     pbar = tqdm(
-        range(start_epoch, num_chunks),
+        range(start_epoch, simulation.num_chunks),
         desc="Training",
         unit="chunk",
         initial=start_epoch,
-        total=num_chunks,
+        total=simulation.num_chunks,
     )
 
     for epoch in pbar:
         # Generate new feedforward spikes for this chunk
         input_spikes = spike_generators.generate_poisson_spikes(
-            n_steps=n_steps,
-            dt=dt,
-            num_neurons=input_num_neurons,
+            n_steps=simulation.chunk_size,
+            dt=simulation.dt,
+            num_neurons=feedforward.topology.num_neurons,
             cell_type_indices=input_source_indices,
-            cell_type_names=input_cell_type_names,
-            firing_rates=input_firing_rates,
+            cell_type_names=feedforward.cell_types.names,
+            firing_rates=feedforward.activity.firing_rates,
             batch_size=1,
             device=device,
         )
 
         # Run network simulation for this chunk (with mixed precision)
         with autocast(
-            device_type="cuda", enabled=use_mixed_precision and device == "cuda"
+            device_type="cuda", enabled=training.mixed_precision and device == "cuda"
         ):
             chunk_s, chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF = model.forward(
-                n_steps=n_steps,
-                dt=dt,
+                n_steps=simulation.chunk_size,
+                dt=simulation.dt,
                 inputs=input_spikes,
                 initial_v=initial_v,
                 initial_g=initial_g,
@@ -576,7 +470,7 @@ def main(
         del chunk_v, chunk_I, chunk_I_FF, chunk_g, chunk_g_FF
 
         # Check if it's time to compute loss
-        if (epoch + 1) % chunks_per_loss == 0:
+        if (epoch + 1) % simulation.chunks_per_loss == 0:
             # Indicate gradient computation is starting
             pbar.set_description("Training [Computing gradients...]")
 
@@ -587,14 +481,20 @@ def main(
 
             # Compute loss over full trajectory with mixed precision
             with autocast(
-                device_type="cuda", enabled=use_mixed_precision and device == "cuda"
+                device_type="cuda",
+                enabled=simulation.mixed_precision and device == "cuda",
             ):
                 cv_loss = cv_loss_fn(full_spikes)
                 fr_loss = firing_rate_loss_fn(full_spikes)
-                total_loss = loss_ratio * fr_loss + (1 - loss_ratio) * cv_loss
+                total_loss = (
+                    hyperparameters.loss_ratio * fr_loss
+                    + (1 - hyperparameters.loss_ratio) * cv_loss
+                )
 
                 # Scale loss by number of loss computations per update (so gradient magnitude is consistent)
-                total_loss = total_loss / (chunks_per_update // chunks_per_loss)
+                total_loss = total_loss / (
+                    simulation.chunks_per_update // simulation.chunks_per_loss
+                )
 
             # Backward pass with gradient scaling (accumulates gradients)
             scaler.scale(total_loss).backward()
@@ -621,7 +521,7 @@ def main(
             )
 
         # Check if it's time to update weights
-        if (epoch + 1) % chunks_per_update == 0:
+        if (epoch + 1) % training.chunks_per_update == 0:
             # Indicate weight update is starting
             pbar.set_description("Training [Updating weights...]")
 
@@ -647,11 +547,11 @@ def main(
             pbar.set_description("Training")
 
         # Save checkpoint and statistics periodically
-        if (epoch + 1) % log_interval == 0:
+        if (epoch + 1) % training.log_interval == 0:
             # Clear progress bar and print checkpoint header
             pbar.clear()
             print(f"\n{'=' * 60}")
-            print(f"Checkpoint at chunk {epoch + 1}/{num_chunks}")
+            print(f"Checkpoint at chunk {epoch + 1}/{simulation.num_chunks}")
             print("=" * 60)
 
             # Concatenate all accumulated data for visualization and checkpointing
@@ -692,8 +592,8 @@ def main(
             stats = homeostatic_plots.compute_network_statistics(
                 spikes=vis_spikes,
                 cell_type_indices=cell_type_indices,
-                cell_type_names=cell_type_names,
-                dt=dt,
+                cell_type_names=recurrent.cell_types.names,
+                dt=simulation.dt,
             )
 
             # Log to console
@@ -701,7 +601,7 @@ def main(
             print(f"  FR Loss: {fr_loss_np:.6f}")
             print(f"  Total Loss: {total_loss_np:.6f}")
             # Print statistics by cell type
-            for cell_type_name in cell_type_names:
+            for cell_type_name in recurrent.cell_types.names:
                 mean_fr = stats[f"firing_rate/{cell_type_name}/mean"]
                 mean_cv = stats[f"cv/{cell_type_name}/mean"]
                 frac_active = stats[f"fraction_active/{cell_type_name}"]
@@ -724,14 +624,14 @@ def main(
                 input_spikes=vis_input_spikes,
                 cell_type_indices=cell_type_indices,
                 input_cell_type_indices=input_source_indices,
-                cell_type_names=cell_type_names,
-                input_cell_type_names=input_cell_type_names,
+                cell_type_names=recurrent.cell_types.names,
+                input_cell_type_names=feedforward.cell_types.names,
                 weights=weights,
                 feedforward_weights=feedforward_weights,
                 connectivity_graph=connectivity_graph,
-                num_assemblies=num_assemblies,
-                params=params,
-                dt=dt,
+                num_assemblies=recurrent.topology.num_assemblies,
+                params=params.model_dump(),
+                dt=simulation.dt,
             )
 
             # Log to wandb (combine all metrics and plots in a single call)
@@ -777,9 +677,9 @@ def main(
     # Close progress bar
     pbar.close()
 
-    # =====================================
-    # STEP 8: Save Final Model and Clean Up
-    # =====================================
+    # =============================
+    # Save Final Model and Clean Up
+    # =============================
 
     print("\n" + "=" * 60)
     print("Training complete!")
@@ -794,7 +694,7 @@ def main(
     )
     save_checkpoint(
         output_dir=output_dir,
-        epoch=num_chunks,
+        epoch=simulation.num_chunks,
         model=model,
         optimiser=optimiser,
         scaler=scaler,

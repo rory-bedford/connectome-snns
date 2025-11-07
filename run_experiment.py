@@ -18,7 +18,7 @@ from pathlib import Path
 # Add src to path so we can import utils
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from utils.runners import run_experiment
+from utils.experiment_runners import run_experiment
 
 
 if __name__ == "__main__":

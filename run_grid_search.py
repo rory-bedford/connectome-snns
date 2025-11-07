@@ -13,7 +13,7 @@ from pathlib import Path
 # Add src to path so we can import utils
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from utils.runners import run_custom_search
+from utils.experiment_runners import run_custom_search
 
 CUDA_VISIBLE_DEVICES = [0, 1]  # Edit with available GPU IDs
 

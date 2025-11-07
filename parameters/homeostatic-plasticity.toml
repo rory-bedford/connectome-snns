@@ -1,14 +1,26 @@
 # Parameters for use with our current-based LIF network simulating zebrafish Dp
 # Adapted from Meissner-Bernard et al. (2025)
 
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+seed = 42                              # Random seed for reproducibility
+dt = 1.0                               # ms - Time resolution of the simulation
+duration = 100000                      # ms - Total duration of the simulation
+chunk_size = 50                        # Number of timesteps per chunk
+
 # ======================
-# WANDB CONFIGURATION
+# TRAINING CONFIGURATION
 # ======================
 
-[wandb]
-enabled = true                         # Whether to use Weights & Biases for logging
-project = "homeostatic-plasticity"     # W&B project name
-notes = "First brief trial run"
+[training]
+chunks_per_loss = 400                  # Number of chunks per loss calculation
+losses_per_update = 2                  # Number of loss calculations per gradient step
+log_interval = 2000                    # Save checkpoints and log every N chunks
+mixed_precision = true                 # Whether to train with mixed precision
+plot_size = 200                        # Number of chunks to save for plotting
 
 # ====================
 # OPTIMISATION TARGETS
@@ -17,21 +29,6 @@ notes = "First brief trial run"
 [targets]
 firing_rates = 0.5                     # Hz - Target firing rate for all neuron types
 cvs = 1.0                              # Target correlation coefficient for all neuron types
-
-# ========================
-# SIMULATION CONFIGURATION
-# ========================
-
-[simulation]
-seed = 42                              # Random seed for reproducibility
-dt = 1.0                               # ms - Time resolution of the simulation
-chunk_size = 50                        # Number of timesteps per chunk
-num_chunks = 20000                     # Total number of chunks to simulate
-chunks_per_loss = 400                  # Number of chunks per loss calculation
-losses_per_update = 2                  # Number of loss calculations per gradient step
-log_interval = 2000                    # Save checkpoints and log to wandb every N chunks
-mixed_precision = true                 # Whether to train with mixed precision
-plot_size = 200                        # Number of chunks to save for plotting
 
 # ===============
 # HYPERPARAMETERS
