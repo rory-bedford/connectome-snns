@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 from tqdm import tqdm
-from network_simulators.conductance_lif_io import ConductanceLIFNetwork_IO
+from network_simulators.conductance_based.model_init import ConductanceLIFNetwork_IO
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
