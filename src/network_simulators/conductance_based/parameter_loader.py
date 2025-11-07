@@ -65,30 +65,28 @@ class TopologyConfig(BaseModel):
     """Network topology configuration."""
 
     num_neurons: int
-    num_assemblies: int
-    neurons_per_assembly: int
-    _conn_within: List[List[float]]
-    _conn_between: List[List[float]]
-    _conn_inputs: List[List[float]]  # For feedforward connections
+    num_assemblies: Optional[int] = None
+    _conn_within: Optional[List[List[float]]] = None
+    _conn_between: Optional[List[List[float]]] = None
+    _conn_inputs: Optional[List[List[float]]] = None
 
     @property
-    def conn_within(self) -> np.ndarray:
+    def conn_within(self) -> Optional[np.ndarray]:
         """Return connectivity within assemblies as numpy array."""
-        return np.array(self._conn_within)
+        return np.array(self._conn_within) if self._conn_within is not None else None
 
     @property
-    def conn_between(self) -> np.ndarray:
+    def conn_between(self) -> Optional[np.ndarray]:
         """Return connectivity between assemblies as numpy array."""
-        return np.array(self._conn_between)
+        return np.array(self._conn_between) if self._conn_between is not None else None
 
     @property
-    def conn_inputs(self) -> np.ndarray:
+    def conn_inputs(self) -> Optional[np.ndarray]:
         """Return input connectivity as numpy array."""
-        return np.array(self._conn_inputs)
+        return np.array(self._conn_inputs) if self._conn_inputs is not None else None
 
     class Config:
         populate_by_name = True
-        # Accept both 'conn_within' and '_conn_within' during initialization
         fields = {
             "_conn_within": {"alias": "conn_within"},
             "_conn_between": {"alias": "conn_between"},
