@@ -34,8 +34,9 @@ from tqdm import tqdm
 from optimisation.loss_functions import CVLoss, FiringRateLoss
 from optimisation.utils import save_checkpoint, load_checkpoint
 from network_simulators.conductance_based.parameter_loader import (
-    load_homeostatic_plasticity_params,
+    HomeostaticPlasticityParams,
 )
+import toml
 import wandb
 from matplotlib import pyplot as plt
 from visualization.connectivity import (
@@ -78,7 +79,9 @@ def main(
     print(f"Using device: {device}")
 
     # Load all network parameters from TOML file
-    params = load_homeostatic_plasticity_params(params_file)
+    with open(params_file, "r") as f:
+        data = toml.load(f)
+    params = HomeostaticPlasticityParams(**data)
 
     # Extract commonly used parameter groups
     simulation = params.simulation
