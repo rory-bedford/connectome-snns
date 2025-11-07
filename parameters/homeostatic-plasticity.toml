@@ -16,7 +16,7 @@ chunk_size = 50                        # Number of timesteps per chunk
 # ======================
 
 [training]
-losses_per_update = 2                  # Number of loss calculations per gradient step
+chunks_per_update = 2                  # Number of loss calculations per gradient step
 log_interval = 200                     # Log metrics to CSV and wandb every N chunks
 checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
 mixed_precision = true                 # Whether to train with mixed precision

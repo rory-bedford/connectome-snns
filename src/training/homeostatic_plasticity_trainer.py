@@ -121,6 +121,10 @@ class HomeostaticPlasticityTrainer:
         for epoch in range(self.current_epoch, self.simulation.num_chunks):
             self.current_epoch = epoch
 
+            # Update progress bar at start of iteration
+            if self.pbar:
+                self.pbar.update(1)
+
             # Forward pass
             chunk_outputs = self._forward_pass()
 
@@ -147,14 +151,19 @@ class HomeostaticPlasticityTrainer:
                     epoch, losses, self.best_loss, output_dir
                 )
 
-            # Update progress bar
+            # Update progress bar postfix with losses
             self._update_progress_bar(losses)
 
             # Memory cleanup
             self._cleanup_chunk_data(chunk_outputs)
 
+        # Close progress bar
         if self.pbar:
             self.pbar.close()
+
+        # Flush async logger to ensure all data is written
+        if hasattr(self.metrics_logger, 'close'):
+            self.metrics_logger.close()
 
         return self.best_loss
 
@@ -209,15 +218,16 @@ class HomeostaticPlasticityTrainer:
                     tensor = chunk_outputs["input_spikes"]
                 else:
                     tensor = chunk_outputs[key]
-                self.plot_accumulators[key].append(
-                    tensor.detach().cpu().pin_memory().numpy()
-                )
+                
+                if self.device == "cuda":
+                    numpy_array = tensor.detach().cpu().pin_memory().numpy()
+                else:
+                    numpy_array = tensor.detach().numpy()
+                
+                self.plot_accumulators[key].append(numpy_array)
 
     def _compute_losses(self) -> Dict[str, float]:
         """Compute losses and perform backward pass."""
-        if self.pbar:
-            self.pbar.set_description("Training [Computing gradients...]")
-
         # Concatenate accumulated spikes
         full_spikes = torch.cat(self.loss_accumulators, dim=1)
 
@@ -238,7 +248,7 @@ class HomeostaticPlasticityTrainer:
                 total_loss += weight * loss_value
 
             # Scale by number of loss computations per update
-            total_loss = total_loss / self.training.losses_per_update
+            total_loss = total_loss / self.training.chunks_per_update
 
         # Backward pass with weighted total loss
         self.scaler.scale(total_loss).backward()
@@ -255,16 +265,10 @@ class HomeostaticPlasticityTrainer:
             del loss_value
         self.loss_accumulators.clear()
 
-        if self.pbar:
-            self.pbar.set_description("Training")
-
         return losses
 
     def _update_weights(self) -> None:
         """Update model weights."""
-        if self.pbar:
-            self.pbar.set_description("Training [Updating weights...]")
-
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.scaler.step(self.optimizer)
@@ -273,10 +277,6 @@ class HomeostaticPlasticityTrainer:
 
         if self.device == "cuda":
             torch.cuda.empty_cache()
-
-        if self.pbar:
-            self.pbar.set_description("Training [✓ Weights updated]")
-            self.pbar.set_description("Training")
 
     def _log_metrics(
         self, losses: Dict[str, float], spikes: torch.Tensor, epoch: int
@@ -446,11 +446,18 @@ class HomeostaticPlasticityTrainer:
 
                     postfix[display_name] = f"{loss_value:.4f}"
 
+            # Add weight update indicator
+            chunks_since_update = (self.current_epoch + 1) % self.training.chunks_per_update
+            if chunks_since_update == 0:
+                postfix["Status"] = "Updated"
+            else:
+                postfix["Status"] = f"{chunks_since_update}/{self.training.chunks_per_update}"
+
             self.pbar.set_postfix(postfix)
 
     def _should_update_weights(self, epoch: int) -> bool:
         """Check if weights should be updated."""
-        return (epoch + 1) % self.training.losses_per_update == 0
+        return (epoch + 1) % self.training.chunks_per_update == 0
 
     def _should_log(self, epoch: int) -> bool:
         """Check if metrics should be logged."""
@@ -484,6 +491,19 @@ class HomeostaticPlasticityTrainer:
         initial_g: torch.Tensor,
         initial_g_FF: torch.Tensor,
     ) -> None:
+        """
+        Set checkpoint state for resuming training.
+
+        Args:
+            epoch (int): The epoch to resume from
+            best_loss (float): The best loss achieved so far
+            initial_v (torch.Tensor): Initial voltage states
+            initial_g (torch.Tensor): Initial conductance states
+            initial_g_FF (torch.Tensor): Initial feedforward conductance states
+        """
+        self.current_epoch = epoch
+        self.best_loss = best_loss
+        self.initial_states = {"v": initial_v, "g": initial_g, "g_FF": initial_g_FF}
         """
         Set checkpoint state for resuming training.
 

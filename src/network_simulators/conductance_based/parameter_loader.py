@@ -21,11 +21,16 @@ class SimulationConfig(BaseModel):
     seed: int
     chunk_size: int
 
+    @property
+    def num_chunks(self) -> int:
+        """Total number of chunks"""
+        return int(self.duration // self.chunk_size)
+
 
 class TrainingConfig(BaseModel):
     """Training parameters."""
 
-    losses_per_update: int
+    chunks_per_update: int
     log_interval: int
     checkpoint_interval: int
     mixed_precision: bool

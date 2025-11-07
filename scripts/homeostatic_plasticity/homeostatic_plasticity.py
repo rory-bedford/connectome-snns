@@ -193,7 +193,7 @@ def main(
     input_firing_rates = np.zeros(feedforward.topology.num_neurons)
     for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
         mask = input_source_indices == ct_idx
-        input_firing_rates[mask] = feedforward.activity.firing_rates[ct_name]
+        input_firing_rates[mask] = feedforward.activity[ct_name].firing_rate
 
     # Initialize Poisson spike generator dataset
     spike_dataset = PoissonSpikeDataset(
@@ -213,10 +213,10 @@ def main(
 
     # Define loss functions
     target_cv_tensor = (
-        torch.ones(recurrent.topology.num_neurons, device=device) * targets.cv
+        torch.ones(recurrent.topology.num_neurons, device=device) * targets.cvs
     )
     target_rate_tensor = (
-        torch.ones(recurrent.topology.num_neurons, device=device) * targets.firing_rate
+        torch.ones(recurrent.topology.num_neurons, device=device) * targets.firing_rates
     )
     cv_loss_fn = CVLoss(
         target_cv=target_cv_tensor, penalty_value=hyperparameters.cv_high_loss
@@ -270,8 +270,8 @@ def main(
     for idx, cell_name in enumerate(params.recurrent.cell_types.names):
         cell_params = params.recurrent.physiology[cell_name]
         neuron_params[idx] = {
-            "threshold": cell_params["theta"],
-            "rest": cell_params["U_reset"],
+            "threshold": cell_params.theta,
+            "rest": cell_params.U_reset,
             "name": cell_name,
             "sign": 1 if "excit" in cell_name.lower() else -1,
         }
@@ -279,25 +279,21 @@ def main(
     # Synapse names for plotting
     recurrent_synapse_names = {}
     for cell_type in params.recurrent.cell_types.names:
-        recurrent_synapse_names[cell_type] = params.recurrent.synapses[cell_type][
-            "names"
-        ]
+        recurrent_synapse_names[cell_type] = params.recurrent.synapses[cell_type].names
 
     feedforward_synapse_names = {}
     for cell_type in params.feedforward.cell_types.names:
-        feedforward_synapse_names[cell_type] = params.feedforward.synapses[cell_type][
-            "names"
-        ]
+        feedforward_synapse_names[cell_type] = params.feedforward.synapses[cell_type].names
 
     # Compute g_bar values for synaptic input histogram
     recurrent_g_bar_by_type = {}
     for cell_type in params.recurrent.cell_types.names:
-        g_bar_values = params.recurrent.synapses[cell_type]["g_bar"]
+        g_bar_values = params.recurrent.synapses[cell_type].g_bar
         recurrent_g_bar_by_type[cell_type] = sum(g_bar_values)
 
     feedforward_g_bar_by_type = {}
     for cell_type in params.feedforward.cell_types.names:
-        g_bar_values = params.feedforward.synapses[cell_type]["g_bar"]
+        g_bar_values = params.feedforward.synapses[cell_type].g_bar
         feedforward_g_bar_by_type[cell_type] = sum(g_bar_values)
 
     # Create pre-configured plot generator function

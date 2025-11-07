@@ -27,10 +27,8 @@ def save_checkpoint(
     initial_g: np.ndarray,
     initial_g_FF: np.ndarray,
     input_spikes: np.ndarray,
-    cv_loss: float,
-    fr_loss: float,
-    total_loss: float,
     best_loss: float,
+    **losses: float,
 ) -> bool:
     """Save model checkpoint to disk.
 
@@ -44,10 +42,8 @@ def save_checkpoint(
         initial_g (np.ndarray): Current recurrent conductances
         initial_g_FF (np.ndarray): Current feedforward conductances
         input_spikes (np.ndarray): Input spike trains
-        cv_loss (float): Current CV loss value
-        fr_loss (float): Current firing rate loss value
-        total_loss (float): Current total loss value
         best_loss (float): Best loss seen so far
+        **losses: Arbitrary loss values (must include 'total' for comparison)
 
     Returns:
         bool: True if this is the best model so far, False otherwise
@@ -64,13 +60,26 @@ def save_checkpoint(
         "initial_g": initial_g,
         "initial_g_FF": initial_g_FF,
         "input_spikes": input_spikes,
-        "cv_loss": cv_loss,
-        "fr_loss": fr_loss,
-        "total_loss": total_loss,
         "best_loss": best_loss,
         "rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
+        **losses,  # Include all provided losses
     }
+
+    # Save as latest checkpoint (for resumption)
+    latest_path = checkpoint_dir / "checkpoint_latest.pt"
+    torch.save(checkpoint, latest_path)
+
+    # Save as best if this is the best model (requires 'total' loss)
+    total_loss = losses.get("total")
+    if total_loss is None:
+        raise ValueError("save_checkpoint requires 'total' loss for best model comparison")
+    
+    is_best = total_loss <= best_loss
+    if is_best:
+        best_path = checkpoint_dir / "checkpoint_best.pt"
+        torch.save(checkpoint, best_path)
+        print(f"  ✓ New best model saved (loss: {total_loss:.6f})")
 
     # Save as latest checkpoint (for resumption)
     latest_path = checkpoint_dir / "checkpoint_latest.pt"
