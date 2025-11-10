@@ -129,7 +129,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Spike train storage (batch_size, n_steps, n_neurons)
         all_s = torch.empty(
             (batch_size, n_steps, self.n_neurons),
-            dtype=torch.float32,
+            dtype=torch.bool,
             device=self.device,
         )
 
@@ -217,7 +217,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             v = (
                 self.E_L  # Resting potential
                 + (v - self.E_L) * beta  # Leak
-                - (I.sum(dim=2) + (I_FF.sum(dim=2) if inputs is not None else 0)) * dt / self.C_m  # Combined current
+                - (I.sum(dim=2) + (I_FF.sum(dim=2) if inputs is not None else 0))
+                * dt
+                / self.C_m  # Combined current
             )
 
             # Reset membrane potentials where spikes occurred
@@ -226,21 +228,20 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             # Compute conductance updates
             g = (
                 g * alpha  # Decay with synapse time constant
-                + (torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
-                    :, :, None, :
-                ]  # Sum over spikes with weights
-                * g_scale[
-                    None, None, :, :
-                ])  # Scale by g_bar and normalization factor for both rise and decay components
+                + (
+                    torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
+                        :, :, None, :
+                    ]  # Sum over spikes with weights
+                    * g_scale[None, None, :, :]
+                )  # Scale by g_bar and normalization factor for both rise and decay components
             )
 
             if inputs is not None:
-                g_FF = (
-                    g_FF * alpha_FF
-                    + (torch.einsum(
+                g_FF = g_FF * alpha_FF + (
+                    torch.einsum(
                         "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
                     )[:, :, None, :]
-                    * g_scale_FF[None, None, :, :])
+                    * g_scale_FF[None, None, :, :]
                 )
 
             # Store variables
