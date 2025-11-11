@@ -16,9 +16,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
     def forward(
         self,
-        n_steps: int,
-        dt: float,
-        inputs: FloatArray | None = None,
+        input_spikes: FloatArray | None = None,
         initial_v: FloatArray | None = None,
         initial_g: FloatArray | None = None,
         initial_g_FF: FloatArray | None = None,
@@ -27,9 +25,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         Simulate the network for a given number of time steps.
 
         Args:
-            n_steps (int): Number of time steps to simulate.
-            dt (float): Time step duration in milliseconds.
-            inputs (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
+            input_spikes (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
             initial_v (FloatArray | None): Initial membrane potentials of shape (batch_size, n_neurons). Defaults to resting potentials.
             initial_g (FloatArray | None): Initial synaptic conductances of shape (batch_size, n_neurons, 2, n_cell_types). Defaults to zeros.
             initial_g_FF (FloatArray | None): Initial feedforward synaptic conductances of shape (batch_size, n_neurons, 2, n_cell_types_FF). Defaults to zeros.
@@ -48,45 +44,30 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Validate inputs
         # ===============
 
-        self._validate_forward(n_steps, dt, inputs, initial_v, initial_g, initial_g_FF)
+        self._validate_forward(input_spikes, initial_v, initial_g, initial_g_FF)
 
         # ==========================
         # Initialize state variables
         # ==========================
 
-        batch_size = inputs.shape[0] if inputs is not None else 1
-
-        # Input spike trains (n_steps, n_inputs)
-        if inputs is not None:
-            inputs = torch.as_tensor(inputs, dtype=torch.float32, device=self.device)
+        batch_size = input_spikes.shape[0]
+        n_steps = input_spikes.shape[1]
 
         # Membrane potentials (batch_size, n_neurons)
         if initial_v is not None:
-            v = torch.as_tensor(
-                initial_v, dtype=torch.float32, device=self.device
-            ).clone()
+            v = initial_v
         else:
             v = self.U_reset.clone().detach()
             v = v.repeat(batch_size, 1)
 
-        # Synaptic conductances (batch_size, n_neurons, 2, n_synapse_types)
+        # Synaptic conductances (batch_size, n_neurons, 2, n_synapse_types + n_synapse_types_FF)
         if initial_g is not None:
-            g = torch.as_tensor(initial_g, dtype=torch.float32, device=self.device)
+            g = torch.stack(
+                [initial_g, initial_g_FF], dim=-1
+            )
         else:
             g = torch.zeros(
-                (batch_size, self.n_neurons, 2, self.n_synapse_types),
-                dtype=torch.float32,
-                device=self.device,
-            )
-
-        # Feedforward synaptic conductances (batch_size, n_neurons, 2, n_synapse_types_FF)
-        if initial_g_FF is not None:
-            g_FF = torch.as_tensor(
-                initial_g_FF, dtype=torch.float32, device=self.device
-            )
-        else:
-            g_FF = torch.zeros(
-                (batch_size, self.n_neurons, 2, self.n_synapse_types_FF),
+                (batch_size, self.n_neurons, 2, self.n_synapse_types + self.n_synapse_types_FF),
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -100,28 +81,14 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         # Synaptic conductance storage (batch_size, n_steps, n_neurons, 2, n_synapse_types)
         all_g = torch.empty(
-            (batch_size, n_steps, self.n_neurons, 2, self.n_synapse_types),
-            dtype=torch.float32,
-            device=self.device,
-        )
-
-        # Feedforward synaptic conductance storage (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF)
-        all_g_FF = torch.empty(
-            (batch_size, n_steps, self.n_neurons, 2, self.n_synapse_types_FF),
+            (batch_size, n_steps, self.n_neurons, 2, self.n_synapse_types + self.n_synapse_types_FF),
             dtype=torch.float32,
             device=self.device,
         )
 
         # Synaptic input current storage (batch_size, n_steps, n_neurons, n_synapse_types)
         all_I = torch.empty(
-            (batch_size, n_steps, self.n_neurons, self.n_synapse_types),
-            dtype=torch.float32,
-            device=self.device,
-        )
-
-        # Feedforward synaptic input current storage (batch_size, n_steps, n_neurons, n_synapse_types_FF)
-        all_I_FF = torch.empty(
-            (batch_size, n_steps, self.n_neurons, self.n_synapse_types_FF),
+            (batch_size, n_steps, self.n_neurons, self.n_synapse_types + self.n_synapse_types_FF),
             dtype=torch.float32,
             device=self.device,
         )
@@ -133,41 +100,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             device=self.device,
         )
 
-        # Precompute decay factors
-        tau_syn = torch.stack(
-            (self.tau_rise, self.tau_decay), dim=0
-        )  # Shape (2, n_synapse_types)
-        alpha = torch.exp(-dt / tau_syn)  # Shape (2, n_synapse_types)
-
-        if inputs is not None:
-            tau_syn_FF = torch.stack(
-                (self.tau_rise_FF, self.tau_decay_FF), dim=0
-            )  # Shape (2, n_synapse_types_FF)
-            alpha_FF = torch.exp(-dt / tau_syn_FF)  # Shape (2, n_synapse_types_FF)
-
-        beta = torch.exp(-dt / self.tau_mem)  # Shape (n_neurons,)
-
-        # Stack g_bar with its negative to simplify the difference of exponential conductance update
-        g_scale = torch.stack(
-            [-self.g_bar, self.g_bar], dim=0
-        )  # Shape (2, n_synapse_types)
-
-        # Normalize by peak (so that g_bar corresponds to peak conductance in the difference of exponentials)
-        norm_peak = (self.tau_decay / self.tau_rise) ** (
-            self.tau_rise / (self.tau_decay - self.tau_rise)
-        )
-        g_scale /= norm_peak
-
-        if inputs is not None:
-            g_scale_FF = torch.stack(
-                [-self.g_bar_FF, self.g_bar_FF], dim=0
-            )  # Shape (2, n_synapse_types_FF)
-
-            norm_peak_FF = (self.tau_decay_FF / self.tau_rise_FF) ** (
-                self.tau_rise_FF / (self.tau_decay_FF - self.tau_rise_FF)
-            )
-            g_scale_FF /= norm_peak_FF
-
         # ==============
         # Run simulation
         # ==============
@@ -178,26 +110,20 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         for t in iterator:
             # === Simulation Variables ===
-            # s:                           (batch_size, n_neurons)                        -- spikes at current time step
-            # I:                           (batch_size, n_neurons, n_synapse_types)       -- input current at current time step
-            # I_FF:                        (batch_size, n_neurons, n_synapse_types_FF)    -- feedforward input current at current time step
-            # v:                           (batch_size, n_neurons)                        -- membrane potentials at current time step
-            # g:                           (batch_size, n_neurons, 2, n_synapse_types)    -- synaptic conductances at current time step
-            # g_FF:                        (batch_size, n_neurons, 2, n_synapse_types_FF) -- feedforward synaptic conductances at current time step
-            # self.U_rest:                 (n_neurons,)                                   -- resting potentials
-            # self.E_L:                    (n_neurons,)                                   -- leak reversal potentials
-            # self.g_L:                    (n_neurons,)                                   -- leak conductances
-            # self.C_m:                    (n_neurons,)                                   -- membrane capacitances
-            # alpha:                       (2, n_synapse_types)                           -- synaptic conductance decay factors
-            # alpha_FF:                    (2, n_synapse_types_FF)                        -- feedforward synaptic conductance decay factors
-            # beta:                        (n_neurons,)                                   -- membrane potential decay factors
-            # self.theta:                  (n_neurons,)                                   -- spike thresholds
-            # g_scale:                     (2, n_synapse_types)                           -- maximal synaptic conductances, stacked for easy summation
-            # g_scale_FF:                  (2, n_synapse_types_FF)                        -- maximal feedforward synaptic conductances, stacked for easy summation
-            # self.E_syn:                  (n_synapse_types,)                             -- synaptic reversal potentials
-            # self.E_syn_FF:               (n_synapse_types_FF,)                          -- feedforward synaptic reversal potentials
-            # self.cell_typed_weights:     (n_synapse_types, n_neurons, n_neurons)        -- recurrent synaptic weights
-            # self.cell_typed_weights_FF:  (n_synapse_types_FF, n_inputs, n_neurons)      -- feedforward synaptic weights
+            # s:                           (batch_size, n_neurons)                                              -- spikes at current time step
+            # I:                           (batch_size, n_neurons, n_synapse_types + n_synapse_types_FF)       -- input current at current time step
+            # v:                           (batch_size, n_neurons)                                              -- membrane potentials at current time step
+            # g:                           (batch_size, n_neurons, 2, n_synapse_types + n_synapse_types_FF)    -- synaptic conductances at current time step
+            # self.U_rest:                 (n_neurons,)                                                         -- resting potentials
+            # self.E_L:                    (n_neurons,)                                                         -- leak reversal potentials
+            # self.g_L:                    (n_neurons,)                                                         -- leak conductances
+            # self.C_m:                    (n_neurons,)                                                         -- membrane capacitances
+            # self.alpha:                  (2, n_synapse_types + n_synapse_types_FF)                           -- synaptic conductance decay factors
+            # beta:                        (n_neurons,)                                                         -- membrane potential decay factors
+            # self.theta:                  (n_neurons,)                                                         -- spike thresholds
+            # self.g_scale:                (2, n_synapse_types + n_synapse_types_FF)                           -- maximal synaptic conductances, stacked for easy summation
+            # self.E_syn:                  (n_synapse_types + n_synapse_types_FF,)                             -- synaptic reversal potentials (recurrent + feedforward)
+            # self.weights_combined:       (n_neurons + n_inputs, n_neurons)                                   -- combined weight matrix (recurrent + feedforward stacked vertically)
             # ============================
 
             # Compute spikes
@@ -209,16 +135,16 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             )  # Conductance times driving force (conductance is difference of rise and decay here)
             I_FF = (
                 g_FF.sum(dim=2) * (v[:, :, None] - self.E_syn_FF[None, None, :])
-                if inputs is not None
+                if input_spikes is not None
                 else 0
             )
 
             # Update membrane potentials (without reset)
             v = (
                 self.E_L  # Resting potential
-                + (v - self.E_L) * beta  # Leak
-                - (I.sum(dim=2) + (I_FF.sum(dim=2) if inputs is not None else 0))
-                * dt
+                + (v - self.E_L) * self.beta  # Leak
+                - (I.sum(dim=2) + (I_FF.sum(dim=2) if input_spikes is not None else 0))
+                * self.dt
                 / self.C_m  # Combined current
             )
 
@@ -227,19 +153,19 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
             # Compute conductance updates
             g = (
-                g * alpha  # Decay with synapse time constant
+                g * self.alpha  # Decay with synapse time constant
                 + (
                     torch.einsum("bi,cij->bjc", s, self.cell_typed_weights)[
                         :, :, None, :
                     ]  # Sum over spikes with weights
-                    * g_scale[None, None, :, :]
+                    * self.g_scale[None, None, :, :]
                 )  # Scale by g_bar and normalization factor for both rise and decay components
             )
 
-            if inputs is not None:
+            if input_spikes is not None:
                 g_FF = g_FF * alpha_FF + (
                     torch.einsum(
-                        "bi,cij->bjc", inputs[:, t, :], self.cell_typed_weights_FF
+                        "bi,cij->bjc", input_spikes[:, t, :], self.cell_typed_weights_FF
                     )[:, :, None, :]
                     * g_scale_FF[None, None, :, :]
                 )
@@ -248,8 +174,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             all_s[:, t, :] = s
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
-            all_I_FF[:, t, :, :] = I_FF
             all_g[:, t, :, :, :] = g
-            all_g_FF[:, t, :, :, :] = g_FF
 
-        return all_s, all_v, all_I, all_I_FF, all_g, all_g_FF
+        return all_s, all_v, all_I[:, :, :, :self.n_synapse_types], all_I[:, :, :, self.n_synapse_types:], all_g[:, :, :, :, :self.n_synapse_types], all_g[:, :, :, :, self.n_synapse_types:]
