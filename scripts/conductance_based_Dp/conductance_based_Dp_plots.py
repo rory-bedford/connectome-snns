@@ -153,7 +153,27 @@ def generate_training_plots(
     """Generate all visualization plots for current training state.
 
     Args:
-        Same as homeostatic plots but for conductance-based model without training
+        spikes (np.ndarray): Network spike trains (batch, time, neurons)
+        voltages (np.ndarray): Membrane voltages (batch, time, neurons)
+        conductances (np.ndarray): Recurrent synaptic conductances (batch, time, neurons, synapses, rise/decay)
+        conductances_FF (np.ndarray): Feedforward synaptic conductances (batch, time, neurons, synapses, rise/decay)
+        currents (np.ndarray): Recurrent synaptic currents (batch, time, neurons, synapses)
+        currents_FF (np.ndarray): Feedforward synaptic currents (batch, time, neurons, synapses)
+        input_spikes (np.ndarray): Input spike trains (batch, time, neurons)
+        cell_type_indices (np.ndarray): Cell type assignments
+        input_cell_type_indices (np.ndarray): Input cell type assignments
+        cell_type_names (list[str]): Names of cell types
+        input_cell_type_names (list[str]): Names of input cell types
+        weights (np.ndarray): Recurrent weights
+        feedforward_weights (np.ndarray): Feedforward weights
+        connectivity_graph (np.ndarray): Connectivity graph
+        num_assemblies (int): Number of assemblies
+        dt (float): Time step in ms
+        neuron_params (dict): Neuron parameters for plotting
+        recurrent_synapse_names (dict): Names of recurrent synapses by cell type
+        feedforward_synapse_names (dict): Names of feedforward synapses by cell type
+        recurrent_g_bar_by_type (dict): Maximum conductance values for recurrent synapses
+        feedforward_g_bar_by_type (dict): Maximum conductance values for feedforward synapses
 
     Returns:
         dict: Dictionary of figure objects keyed by plot name

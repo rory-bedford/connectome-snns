@@ -30,19 +30,23 @@ def find_neuron_with_feedforward_inputs(
     feedforward_conductances: np.ndarray,
 ) -> int:
     """Find a neuron that receives feedforward inputs.
-    
+
     Args:
         feedforward_conductances: Array of shape (batch, time, neurons, synapses)
-        
+
     Returns:
         int: Index of a neuron that has non-zero feedforward conductances, or 0 if none found
     """
     # Sum over batch and time dimensions to get total conductance per neuron per synapse
-    total_conductances = feedforward_conductances.sum(axis=(0, 1))  # Shape: (neurons, synapses)
-    
+    total_conductances = feedforward_conductances.sum(
+        axis=(0, 1)
+    )  # Shape: (neurons, synapses)
+
     # Find neurons with any non-zero feedforward conductance
-    neurons_with_inputs = np.any(total_conductances > 1e-10, axis=1)  # Small threshold to avoid numerical issues
-    
+    neurons_with_inputs = np.any(
+        total_conductances > 1e-10, axis=1
+    )  # Small threshold to avoid numerical issues
+
     if np.any(neurons_with_inputs):
         # Return the first neuron that has feedforward inputs
         return int(np.nonzero(neurons_with_inputs)[0][0])
@@ -84,7 +88,7 @@ def compute_network_statistics(
                 isis = np.diff(spike_times.astype(float)) * dt
                 if len(isis) > 0:
                     neuron_cvs.append(np.std(isis) / np.mean(isis))
-        
+
         # Average CV across batch (excluding NaN values)
         if neuron_cvs:
             cvs[neuron_idx] = np.mean(neuron_cvs)
@@ -143,8 +147,6 @@ def generate_training_plots(
     """Generate all visualization plots for current training state.
 
     Args:
-        output_dir (Path): Directory where plots will be saved
-        epoch (int): Current epoch number
         spikes (np.ndarray): Network spike trains (batch, time, neurons)
         voltages (np.ndarray): Membrane voltages (batch, time, neurons)
         conductances (np.ndarray): Recurrent synaptic conductances (batch, time, neurons, synapses, rise/decay)
@@ -160,8 +162,12 @@ def generate_training_plots(
         feedforward_weights (np.ndarray): Feedforward weights
         connectivity_graph (np.ndarray): Connectivity graph
         num_assemblies (int): Number of assemblies
-        params (dict): All parameters from config file
         dt (float): Time step in ms
+        neuron_params (dict): Neuron parameters for plotting
+        recurrent_synapse_names (dict): Names of recurrent synapses by cell type
+        feedforward_synapse_names (dict): Names of feedforward synapses by cell type
+        recurrent_g_bar_by_type (dict): Maximum conductance values for recurrent synapses
+        feedforward_g_bar_by_type (dict): Maximum conductance values for feedforward synapses
 
     Returns:
         dict: Dictionary of figure objects keyed by plot name
@@ -169,8 +175,11 @@ def generate_training_plots(
     figures = {}
 
     # Sum over rise/decay dimension (axis=3) to get total conductance
-    conductances = conductances.sum(axis=3)
-    conductances_FF = conductances_FF.sum(axis=3)
+    # Check if conductances have the rise/decay dimension
+    if len(conductances.shape) > 3 and conductances.shape[3] == 2:
+        conductances = conductances.sum(axis=3)
+    if len(conductances_FF.shape) > 3 and conductances_FF.shape[3] == 2:
+        conductances_FF = conductances_FF.sum(axis=3)
 
     # Network structure plots
     figures["assembly_graph"] = plot_assembly_graph(
@@ -272,7 +281,7 @@ def generate_training_plots(
     )
 
     # Use pre-computed synapse names (passed as parameters)
-    
+
     # Find a neuron that actually receives feedforward inputs
     neuron_with_ff_inputs = find_neuron_with_feedforward_inputs(conductances_FF)
 
