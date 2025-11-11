@@ -173,6 +173,7 @@ def main(output_dir, params_file):
 
     # Initialize conductance-based LIF network model
     model = ConductanceLIFNetwork(
+        dt=simulation.dt,
         weights=weights,
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
@@ -210,9 +211,7 @@ def main(output_dir, params_file):
             output_conductances,
             output_conductances_FF,
         ) = model.forward(
-            n_steps=n_steps,
-            dt=simulation.dt,
-            inputs=input_spikes,
+            input_spikes=input_spikes,
         )
 
     # Move tensors to CPU and convert to numpy arrays in one step
