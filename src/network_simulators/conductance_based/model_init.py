@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from numpy.typing import NDArray
 from typing import Literal
-from optimisation.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
@@ -251,7 +250,10 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
         # ======================================================================
 
-        self.surrgrad_scale = surrgrad_scale
+        # Convert surrgrad_scale to tensor for JIT compatibility
+        self.register_buffer(
+            "surrgrad_scale", torch.tensor(surrgrad_scale, dtype=torch.float32)
+        )
 
         # Initialize timestep-dependent parameters
         self.set_timestep(dt)
@@ -393,20 +395,6 @@ class ConductanceLIFNetwork_IO(nn.Module):
     def device(self):
         """Get the device the model is on"""
         return self.weights.device
-
-    @property
-    def spike_fn(self):
-        """
-        Get the surrogate gradient spike function with the current scale parameter.
-
-        Returns:
-            Callable: Partial function for SurrGradSpike with configured scale.
-        """
-
-        def spike_function(x):
-            return SurrGradSpike.apply(x, self.surrgrad_scale)
-
-        return spike_function
 
     def set_timestep(self, dt: float) -> None:
         """
