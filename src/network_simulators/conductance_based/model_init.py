@@ -142,66 +142,10 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self.register_buffer("weights_mask", torch.from_numpy(weights_mask))
         self.register_buffer("weights_mask_FF", torch.from_numpy(weights_mask_FF))
 
-        # Create and register mapping from synapse_id to cell_id for recurrent
-        synapse_to_cell_mapping = np.zeros(self.n_synapse_types, dtype=np.int64)
-        for synapse in synapse_params:
-            synapse_to_cell_mapping[synapse["synapse_id"]] = synapse["cell_id"]
-        self.register_buffer(
-            "synapse_to_cell_id", torch.from_numpy(synapse_to_cell_mapping)
-        )
-
-        # Create and register mapping from synapse_id to cell_id for feedforward
-        synapse_to_cell_mapping_FF = np.zeros(self.n_synapse_types_FF, dtype=np.int64)
-        for synapse in synapse_params_FF:
-            synapse_to_cell_mapping_FF[synapse["synapse_id"]] = synapse["cell_id"]
-        self.register_buffer(
-            "synapse_to_cell_id_FF", torch.from_numpy(synapse_to_cell_mapping_FF)
-        )
-
-        # Create boolean masks: cell_to_synapse_mask[cell_type] gives boolean mask for synapse types
-        # Masks cover both recurrent and feedforward synapses (concatenated)
-        total_synapse_types = self.n_synapse_types + self.n_synapse_types_FF
-
-        # Get unique cell type IDs from the actual parameters (might not be contiguous)
-        recurrent_cell_types = sorted(
-            set(synapse["cell_id"] for synapse in synapse_params)
-        )
-        max_recurrent_cell_type = (
-            max(recurrent_cell_types) if recurrent_cell_types else -1
-        )
-
-        cell_to_synapse_mask = torch.zeros(
-            max_recurrent_cell_type + 1, total_synapse_types, dtype=torch.bool
-        )
-        for cell_type in recurrent_cell_types:
-            cell_to_synapse_mask[cell_type, : self.n_synapse_types] = (
-                self.synapse_to_cell_id == cell_type
-            )
-        self.register_buffer("cell_to_synapse_mask", cell_to_synapse_mask)
-
-        # Same for feedforward cell types
-        ff_cell_types = sorted(set(synapse["cell_id"] for synapse in synapse_params_FF))
-        max_ff_cell_type = max(ff_cell_types) if ff_cell_types else -1
-
-        cell_to_synapse_mask_FF = torch.zeros(
-            max_ff_cell_type + 1, total_synapse_types, dtype=torch.bool
-        )
-        for cell_type in ff_cell_types:
-            cell_to_synapse_mask_FF[cell_type, self.n_synapse_types :] = (
-                self.synapse_to_cell_id_FF == cell_type
-            )
-        self.register_buffer("cell_to_synapse_mask_FF", cell_to_synapse_mask_FF)
-
-        # Precompute cell type masks for efficient indexing
-        cell_type_masks = []
-        for cell_type in recurrent_cell_types:
-            cell_type_masks.append(self.cell_type_indices == cell_type)
-        self.cell_type_masks = cell_type_masks
-
-        cell_type_masks_FF = []
-        for cell_type in ff_cell_types:
-            cell_type_masks_FF.append(self.cell_type_indices_FF == cell_type)
-        self.cell_type_masks_FF = cell_type_masks_FF
+        # Create synapse-to-cell and cell-to-synapse mapping arrays
+        self._create_synapse_to_cell_mappings(synapse_params, synapse_params_FF)
+        self._create_cell_to_synapse_masks(synapse_params, synapse_params_FF)
+        self._create_cell_type_masks(synapse_params, synapse_params_FF)
 
         # Create neuron-indexed arrays from cell parameters
         neuron_params = self._create_neuron_param_arrays(cell_params, cell_type_indices)
@@ -434,6 +378,142 @@ class ConductanceLIFNetwork_IO(nn.Module):
         )
         g_scale = g_scale / norm_peak
         self.register_buffer("g_scale", g_scale)
+
+    def _create_synapse_to_cell_mappings(
+        self, synapse_params: list[dict], synapse_params_FF: list[dict]
+    ) -> None:
+        """
+        Create and register lookup arrays mapping synapse IDs to their parent cell type IDs.
+
+        This creates two mapping tensors:
+        - synapse_to_cell_id: Maps recurrent synapse_id -> cell_id (shape: [n_synapse_types])
+        - synapse_to_cell_id_FF: Maps feedforward synapse_id -> cell_id (shape: [n_synapse_types_FF])
+
+        Each synapse type belongs to a specific presynaptic cell type, and these mappings
+        enable fast lookup of which cell type produces a given synapse type.
+
+        Args:
+            synapse_params: List of recurrent synapse parameter dicts with 'synapse_id' and 'cell_id'
+            synapse_params_FF: List of feedforward synapse parameter dicts with 'synapse_id' and 'cell_id'
+        """
+        # Create mapping from synapse_id to cell_id for recurrent connections
+        synapse_to_cell_mapping = np.zeros(self.n_synapse_types, dtype=np.int64)
+        for synapse in synapse_params:
+            synapse_to_cell_mapping[synapse["synapse_id"]] = synapse["cell_id"]
+        self.register_buffer(
+            "synapse_to_cell_id", torch.from_numpy(synapse_to_cell_mapping)
+        )
+
+        # Create mapping from synapse_id to cell_id for feedforward connections
+        synapse_to_cell_mapping_FF = np.zeros(self.n_synapse_types_FF, dtype=np.int64)
+        for synapse in synapse_params_FF:
+            synapse_to_cell_mapping_FF[synapse["synapse_id"]] = synapse["cell_id"]
+        self.register_buffer(
+            "synapse_to_cell_id_FF", torch.from_numpy(synapse_to_cell_mapping_FF)
+        )
+
+    def _create_cell_to_synapse_masks(
+        self, synapse_params: list[dict], synapse_params_FF: list[dict]
+    ) -> None:
+        """
+        Create boolean masks for mapping cell types to their associated synapse types.
+
+        Creates two boolean mask tensors that enable efficient lookup of which synapse types
+        are produced by each cell type:
+
+        - cell_to_synapse_mask: Shape [max_recurrent_cell_type + 1, total_synapse_types]
+          For recurrent connections, mask[cell_type, :n_synapse_types] indicates which
+          recurrent synapse types this cell type produces
+
+        - cell_to_synapse_mask_FF: Shape [max_ff_cell_type + 1, total_synapse_types]
+          For feedforward connections, mask[cell_type, n_synapse_types:] indicates which
+          feedforward synapse types this cell type produces
+
+        The second dimension covers ALL synapse types (recurrent + feedforward concatenated)
+        to enable unified indexing during simulation.
+
+        Args:
+            synapse_params: List of recurrent synapse parameter dicts
+            synapse_params_FF: List of feedforward synapse parameter dicts
+        """
+        # Total synapse types (recurrent + feedforward)
+        total_synapse_types = self.n_synapse_types + self.n_synapse_types_FF
+
+        # Get unique cell type IDs from recurrent synapses
+        recurrent_cell_types = sorted(
+            set(synapse["cell_id"] for synapse in synapse_params)
+        )
+        max_recurrent_cell_type = (
+            max(recurrent_cell_types) if recurrent_cell_types else -1
+        )
+
+        # Create boolean mask for recurrent cell types -> synapse types
+        cell_to_synapse_mask = torch.zeros(
+            max_recurrent_cell_type + 1, total_synapse_types, dtype=torch.bool
+        )
+        for cell_type in recurrent_cell_types:
+            # Only mark recurrent synapse positions (first n_synapse_types columns)
+            cell_to_synapse_mask[cell_type, : self.n_synapse_types] = (
+                self.synapse_to_cell_id == cell_type
+            )
+        self.register_buffer("cell_to_synapse_mask", cell_to_synapse_mask)
+
+        # Get unique cell type IDs from feedforward synapses
+        ff_cell_types = sorted(set(synapse["cell_id"] for synapse in synapse_params_FF))
+        max_ff_cell_type = max(ff_cell_types) if ff_cell_types else -1
+
+        # Create boolean mask for feedforward cell types -> synapse types
+        cell_to_synapse_mask_FF = torch.zeros(
+            max_ff_cell_type + 1, total_synapse_types, dtype=torch.bool
+        )
+        for cell_type in ff_cell_types:
+            # Only mark feedforward synapse positions (last n_synapse_types_FF columns)
+            cell_to_synapse_mask_FF[cell_type, self.n_synapse_types :] = (
+                self.synapse_to_cell_id_FF == cell_type
+            )
+        self.register_buffer("cell_to_synapse_mask_FF", cell_to_synapse_mask_FF)
+
+    def _create_cell_type_masks(
+        self, synapse_params: list[dict], synapse_params_FF: list[dict]
+    ) -> None:
+        """
+        Create boolean masks for efficient neuron/input indexing by cell type.
+
+        Precomputes boolean masks that indicate which neurons belong to each cell type,
+        avoiding repeated tensor comparisons during simulation:
+
+        - cell_type_masks: List of boolean tensors, where cell_type_masks[i] has shape [n_neurons]
+          and indicates which neurons belong to recurrent cell type i
+
+        - cell_type_masks_FF: List of boolean tensors, where cell_type_masks_FF[i] has shape [n_inputs]
+          and indicates which inputs belong to feedforward cell type i
+
+        These are stored as Python lists (not registered buffers) since the list length
+        varies and PyTorch buffers require fixed tensor shapes.
+
+        Args:
+            synapse_params: List of recurrent synapse parameter dicts (used to extract cell types)
+            synapse_params_FF: List of feedforward synapse parameter dicts (used to extract cell types)
+        """
+        # Get unique recurrent cell types
+        recurrent_cell_types = sorted(
+            set(synapse["cell_id"] for synapse in synapse_params)
+        )
+
+        # Precompute boolean masks for each recurrent cell type
+        cell_type_masks = []
+        for cell_type in recurrent_cell_types:
+            cell_type_masks.append(self.cell_type_indices == cell_type)
+        self.cell_type_masks = cell_type_masks
+
+        # Get unique feedforward cell types
+        ff_cell_types = sorted(set(synapse["cell_id"] for synapse in synapse_params_FF))
+
+        # Precompute boolean masks for each feedforward cell type
+        cell_type_masks_FF = []
+        for cell_type in ff_cell_types:
+            cell_type_masks_FF.append(self.cell_type_indices_FF == cell_type)
+        self.cell_type_masks_FF = cell_type_masks_FF
 
     def _validate(
         self,

@@ -24,20 +24,12 @@ import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for cluster environments
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 import sys
-import csv
+from pathlib import Path
 from network_simulators.conductance_based.parameter_loader import (
     ConductanceBasedParams,
 )
 import toml
-from analysis.firing_statistics import (
-    compute_firing_rate_by_cell_type,
-    compute_cv_by_cell_type,
-)
-from analysis.voltage_statistics import (
-    compute_membrane_potential_by_cell_type,
-)
 
 
 def find_neuron_with_feedforward_inputs(
@@ -69,7 +61,73 @@ def find_neuron_with_feedforward_inputs(
         return 0
 
 
-def generate_conductance_plots(
+def compute_network_statistics(
+    spikes: np.ndarray,
+    cell_type_indices: np.ndarray,
+    cell_type_names: list[str],
+    dt: float,
+) -> dict[str, float]:
+    """Compute summary statistics from network activity.
+
+    Args:
+        spikes (np.ndarray): Spike tensor of shape (batch, time, neurons)
+        cell_type_indices (np.ndarray): Cell type index for each neuron
+        cell_type_names (list[str]): Names of cell types
+        dt (float): Time step in milliseconds
+
+    Returns:
+        dict: Dictionary containing mean firing rates and CVs by cell type
+    """
+    # Compute firing rates per neuron (Hz), averaged over batch
+    spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
+    spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
+    duration_s = spikes.shape[1] * dt / 1000.0  # Convert ms to s
+    firing_rates = spike_counts_avg / duration_s
+
+    # Compute ISIs and CVs per neuron, averaged over batch
+    cvs = np.full(spikes.shape[2], np.nan)  # Initialize with NaN for silent neurons
+    for neuron_idx in range(spikes.shape[2]):
+        neuron_cvs = []
+        for batch_idx in range(spikes.shape[0]):
+            spike_times = np.nonzero(spikes[batch_idx, :, neuron_idx])[0]
+            if len(spike_times) > 1:
+                isis = np.diff(spike_times.astype(float)) * dt
+                if len(isis) > 0:
+                    neuron_cvs.append(np.std(isis) / np.mean(isis))
+
+        # Average CV across batch (excluding NaN values)
+        if neuron_cvs:
+            cvs[neuron_idx] = np.mean(neuron_cvs)
+
+    # Compute statistics by cell type (use actual cell type names)
+    stats = {}
+    for cell_type in np.unique(cell_type_indices):
+        mask = cell_type_indices == cell_type
+        cell_type_name = cell_type_names[int(cell_type)]
+
+        # Firing rate statistics
+        stats[f"firing_rate/{cell_type_name}/mean"] = float(firing_rates[mask].mean())
+        stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
+
+        # CV statistics (only for neurons with valid CVs)
+        cell_cvs = cvs[mask]
+        valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
+        stats[f"cv/{cell_type_name}/mean"] = (
+            float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+        )
+        stats[f"cv/{cell_type_name}/std"] = (
+            float(np.std(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+        )
+
+        # Fraction active
+        stats[f"fraction_active/{cell_type_name}"] = float(
+            (firing_rates[mask] > 0).mean()
+        )
+
+    return stats
+
+
+def generate_training_plots(
     spikes: np.ndarray,
     voltages: np.ndarray,
     conductances: np.ndarray,
@@ -92,7 +150,7 @@ def generate_conductance_plots(
     recurrent_g_bar_by_type: dict,
     feedforward_g_bar_by_type: dict,
 ) -> dict[str, plt.Figure]:
-    """Generate all visualization plots for conductance-based simulation.
+    """Generate all visualization plots for current training state.
 
     Args:
         Same as homeostatic plots but for conductance-based model without training
@@ -254,15 +312,14 @@ def generate_conductance_plots(
     return figures
 
 
-def main(output_dir_path):
-    """Main plotting function for Dp network simulation outputs.
+if __name__ == "__main__":
+    """Standalone script interface - loads data from disk and generates plots."""
+    if len(sys.argv) != 2:
+        print("Usage: python conductance_based_Dp_plots.py <output_directory>")
+        print("Example: python conductance_based_Dp_plots.py /path/to/output/folder")
+        sys.exit(1)
 
-    Loads parameters and generates all plots.
-
-    Args:
-        output_dir_path (str or Path): Path to directory containing simulation outputs
-    """
-    output_dir = Path(output_dir_path)
+    output_dir = Path(sys.argv[1])
     results_dir = output_dir / "results"
     figures_dir = output_dir / "figures"
 
@@ -294,11 +351,7 @@ def main(output_dir_path):
     output_conductances = np.load(results_dir / "output_conductances.npy")
     input_conductances = np.load(results_dir / "input_conductances.npy")
 
-    print(f"Generating plots and saving to {figures_dir}...")
-
-    # Prepare pre-computed static data for plotting functions
-
-    # Neuron parameters for plotting
+    # Prepare parameters for plotting
     neuron_params = {}
     for idx, cell_name in enumerate(params.recurrent.cell_types.names):
         cell_params = params.recurrent.physiology[cell_name]
@@ -331,8 +384,10 @@ def main(output_dir_path):
         g_bar_values = params.feedforward.synapses[cell_type].g_bar
         feedforward_g_bar_by_type[cell_type] = sum(g_bar_values)
 
-    # Generate all plots using the new function-based approach
-    figures = generate_conductance_plots(
+    print(f"Generating plots and saving to {figures_dir}...")
+
+    # Generate all plots using the uniform function
+    figures = generate_training_plots(
         spikes=output_spikes,
         voltages=output_voltages,
         conductances=output_conductances,
@@ -380,111 +435,5 @@ def main(output_dir_path):
             fig.savefig(figures_dir / filename, dpi=300, bbox_inches="tight")
             plt.close(fig)
 
+    print(f"✓ Saved all plots to {figures_dir}")
     print("All plots generated successfully!")
-
-    # ============================================
-    # Compute and Save Statistics to CSVs
-    # ============================================
-    # Create analysis directory if it doesn't exist
-    analysis_dir = output_dir / "analysis"
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Computing statistics and saving to {analysis_dir}...")
-
-    # Compute firing rate statistics
-    firing_rate_stats = compute_firing_rate_by_cell_type(
-        spike_trains=output_spikes,
-        cell_type_indices=cell_type_indices,
-        duration=params.simulation.duration,
-    )
-
-    # Save firing rate statistics to CSV
-    firing_rate_csv_path = analysis_dir / "firing_rate_statistics.csv"
-    with open(firing_rate_csv_path, "w", newline="") as csvfile:
-        fieldnames = [
-            "cell_type",
-            "cell_type_name",
-            "mean_firing_rate_hz",
-            "std_firing_rate_hz",
-            "n_silent_cells",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for cell_type_idx, stats in firing_rate_stats.items():
-            writer.writerow(
-                {
-                    "cell_type": cell_type_idx,
-                    "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                    "mean_firing_rate_hz": stats["mean_firing_rate_hz"],
-                    "std_firing_rate_hz": stats["std_firing_rate_hz"],
-                    "n_silent_cells": stats["n_silent_cells"],
-                }
-            )
-    print(f"  Saved firing rate statistics to {firing_rate_csv_path}")
-
-    # Compute CV statistics
-    cv_stats = compute_cv_by_cell_type(
-        spike_trains=output_spikes,
-        cell_type_indices=cell_type_indices,
-        dt=params.simulation.dt,
-    )
-
-    # Save CV statistics to CSV
-    cv_csv_path = analysis_dir / "cv_statistics.csv"
-    with open(cv_csv_path, "w", newline="") as csvfile:
-        fieldnames = ["cell_type", "cell_type_name", "mean_cv", "std_cv"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for cell_type_idx, stats in cv_stats.items():
-            writer.writerow(
-                {
-                    "cell_type": cell_type_idx,
-                    "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                    "mean_cv": stats["mean_cv"],
-                    "std_cv": stats["std_cv"],
-                }
-            )
-    print(f"  Saved CV statistics to {cv_csv_path}")
-
-    # Compute membrane potential statistics
-    voltage_stats = compute_membrane_potential_by_cell_type(
-        voltages=output_voltages,
-        cell_type_indices=cell_type_indices,
-    )
-
-    # Save membrane potential statistics to CSV
-    voltage_csv_path = analysis_dir / "voltage_statistics.csv"
-    with open(voltage_csv_path, "w", newline="") as csvfile:
-        fieldnames = [
-            "cell_type",
-            "cell_type_name",
-            "mean_of_means",
-            "std_of_means",
-            "mean_of_stds",
-            "std_of_stds",
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for cell_type_idx, stats in voltage_stats.items():
-            writer.writerow(
-                {
-                    "cell_type": cell_type_idx,
-                    "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                    "mean_of_means": stats["mean_of_means"],
-                    "std_of_means": stats["std_of_means"],
-                    "mean_of_stds": stats["mean_of_stds"],
-                    "std_of_stds": stats["std_of_stds"],
-                }
-            )
-
-    print("All statistics saved successfully!")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python conductance_based_Dp_plots.py <output_directory>")
-        print("Example: python conductance_based_Dp_plots.py /path/to/output/folder")
-        sys.exit(1)
-
-    output_directory = sys.argv[1]
-    main(output_directory)

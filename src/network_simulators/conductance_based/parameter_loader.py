@@ -24,7 +24,7 @@ class SimulationConfig(BaseModel):
     @property
     def num_chunks(self) -> int:
         """Total number of chunks"""
-        return int(self.duration // self.chunk_size)
+        return int(self.duration / (self.chunk_size * self.dt))
 
 
 class TrainingConfig(BaseModel):
