@@ -300,26 +300,23 @@ def main(output_dir, params_file):
     results_dir = output_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save output arrays to results/
-    np.save(results_dir / "output_spikes.npy", output_spikes)
-    np.save(results_dir / "output_voltages.npy", output_voltages)
-    np.save(results_dir / "output_currents.npy", output_currents)
-    np.save(results_dir / "input_currents.npy", output_currents_FF)
-    np.save(results_dir / "output_conductances.npy", output_conductances)
-    np.save(
-        results_dir / "input_conductances.npy",
-        output_conductances_FF,
+    # Save spike trains (the main output for analysis)
+    np.savez_compressed(
+        results_dir / "spike_data.npz",
+        output_spikes=output_spikes.astype(np.bool_),
+        input_spikes=input_spikes.astype(np.bool_),
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_source_indices,
     )
 
-    # Save input data and network structure to results/
-    np.save(results_dir / "input_spikes.npy", input_spikes)
-    np.save(results_dir / "cell_type_indices.npy", cell_type_indices)
-    np.save(results_dir / "input_cell_type_indices.npy", input_source_indices)
-    np.save(results_dir / "connectivity_graph.npy", connectivity_graph)
-    np.save(results_dir / "weights.npy", weights)
-    np.save(results_dir / "feedforward_weights.npy", feedforward_weights)
+    # Save connectivity/weights (needed for network analysis)
+    np.savez_compressed(
+        results_dir / "network_structure.npz",
+        weights=weights.astype(np.float32),
+        feedforward_weights=feedforward_weights.astype(np.float32),
+    )
 
-    print(f"✓ Saved all arrays to {results_dir}")
+    print(f"✓ Saved data to {results_dir} (spikes + connectivity)")
 
     # =============================================
     # Generate All Plots and Visualizations
