@@ -85,20 +85,11 @@ def compute_network_statistics(
     duration_s = spikes.shape[1] * dt / 1000.0  # Convert ms to s
     firing_rates = spike_counts_avg / duration_s
 
-    # Compute ISIs and CVs per neuron, averaged over batch
-    cvs = np.full(spikes.shape[2], np.nan)  # Initialize with NaN for silent neurons
-    for neuron_idx in range(spikes.shape[2]):
-        neuron_cvs = []
-        for batch_idx in range(spikes.shape[0]):
-            spike_times = np.nonzero(spikes[batch_idx, :, neuron_idx])[0]
-            if len(spike_times) > 1:
-                isis = np.diff(spike_times.astype(float)) * dt
-                if len(isis) > 0:
-                    neuron_cvs.append(np.std(isis) / np.mean(isis))
+    # Vectorized CV computation using the analysis module
+    from analysis.firing_statistics import compute_spike_train_cv
 
-        # Average CV across batch (excluding NaN values)
-        if neuron_cvs:
-            cvs[neuron_idx] = np.mean(neuron_cvs)
+    cv_values = compute_spike_train_cv(spikes, dt=dt)  # Shape: (batch, neurons)
+    cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
 
     # Compute statistics by cell type (use actual cell type names)
     stats = {}
@@ -111,7 +102,7 @@ def compute_network_statistics(
         stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
 
         # CV statistics (only for neurons with valid CVs)
-        cell_cvs = cvs[mask]
+        cell_cvs = cv_per_neuron[mask]
         valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
         stats[f"cv/{cell_type_name}/mean"] = (
             float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else 0.0

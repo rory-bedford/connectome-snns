@@ -290,29 +290,26 @@ def plot_isi_histogram(
     batch_size, n_steps, n_neurons = spike_trains.shape
 
     # Create time indices in seconds (dt is in milliseconds)
-    time_indices = np.arange(n_steps, dtype=np.float32) * dt * 1e-3
+    time_step = dt * 1e-3
 
-    # Collect ISIs for each cell type
+    # Vectorized ISI computation - collect ISIs for each cell type
     isis_by_type = [[] for _ in range(n_cell_types)]
 
-    for batch_idx in range(batch_size):
-        for neuron_idx in range(n_neurons):
-            # Find time indices where spikes occur for this neuron
-            spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
+    # Process all neurons and batches vectorized where possible
+    for cell_type_idx in range(n_cell_types):
+        cell_type_mask = cell_type_indices == cell_type_idx
+        neuron_indices = np.where(cell_type_mask)[0]
 
-            # Need at least 2 spikes to compute ISIs
-            if len(spike_indices) < 2:
-                continue
+        for neuron_idx in neuron_indices:
+            for batch_idx in range(batch_size):
+                # Find spike indices for this neuron in this batch
+                spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
 
-            # Convert to time units
-            spike_times = time_indices[spike_indices]
-
-            # Compute inter-spike intervals
-            isis = spike_times[1:] - spike_times[:-1]
-
-            # Add to appropriate cell type
-            cell_type = cell_type_indices[neuron_idx]
-            isis_by_type[cell_type].append(isis)
+                # Need at least 2 spikes to compute ISIs
+                if len(spike_indices) >= 2:
+                    # Compute ISIs directly from indices (more efficient)
+                    isis = np.diff(spike_indices.astype(np.float32)) * time_step
+                    isis_by_type[cell_type_idx].append(isis)
 
     # Collect all ISIs across cell types to determine global x-axis limit
     all_isis_combined = []

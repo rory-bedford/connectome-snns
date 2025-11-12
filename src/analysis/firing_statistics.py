@@ -84,26 +84,31 @@ def compute_spike_train_fano_factor(
     if n_windows < 1:
         return fano_values
 
-    for batch_idx in range(batch_size):
-        for neuron_idx in range(n_neurons):
-            # Extract spike train for this neuron
-            neuron_spikes = spike_trains[
-                batch_idx, : n_windows * window_size, neuron_idx
-            ]
+    # Vectorized computation: reshape all data at once
+    # Trim to complete windows and reshape
+    trimmed_length = n_windows * window_size
+    trimmed_spikes = spike_trains[
+        :, :trimmed_length, :
+    ]  # (batch_size, trimmed_length, n_neurons)
 
-            # Reshape into windows and count spikes per window
-            # Shape: (n_windows, window_size) -> (n_windows,)
-            spike_counts = (
-                neuron_spikes.reshape(n_windows, window_size)
-                .sum(axis=1)
-                .astype(np.float32)
-            )
+    # Reshape to windows: (batch_size, n_windows, window_size, n_neurons)
+    windowed_spikes = trimmed_spikes.reshape(
+        batch_size, n_windows, window_size, n_neurons
+    )
 
-            # Compute Fano factor = var(spike_counts) / mean(spike_counts)
-            mean_count = spike_counts.mean()
-            if mean_count > 0 and n_windows > 1:
-                var_count = spike_counts.var(ddof=1)  # unbiased variance
-                fano_values[batch_idx, neuron_idx] = var_count / mean_count
+    # Sum over window dimension to get spike counts per window
+    # Shape: (batch_size, n_windows, n_neurons)
+    spike_counts = windowed_spikes.sum(axis=2)
+
+    # Compute mean and variance across windows for each neuron in each batch
+    # Shape: (batch_size, n_neurons)
+    mean_counts = spike_counts.mean(axis=1)  # Mean across windows
+    var_counts = spike_counts.var(axis=1, ddof=1)  # Variance across windows
+
+    # Compute Fano factor = var/mean, avoiding division by zero
+    # Only compute where mean > 0 and we have more than 1 window
+    valid_mask = (mean_counts > 0) & (n_windows > 1)
+    fano_values[valid_mask] = var_counts[valid_mask] / mean_counts[valid_mask]
 
     return fano_values
 

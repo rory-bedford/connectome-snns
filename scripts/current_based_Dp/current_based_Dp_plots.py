@@ -298,7 +298,7 @@ def plot_firing_rate_distribution(output_spikes, neuron_types, duration, save_pa
 
 
 def plot_psth(output_spikes, neuron_types, window_size, dt, save_path):
-    """Plot Peri-Stimulus Time Histogram (PSTH) split by cell type.
+    """Plot Peri-Stimulus Time Histogram (PSTH) split by cell type with overlapping windows.
 
     Args:
         output_spikes (np.ndarray): Output spike array of shape (batch, time, neurons)
@@ -309,11 +309,11 @@ def plot_psth(output_spikes, neuron_types, window_size, dt, save_path):
     """
     batch_size, n_steps, n_neurons = output_spikes.shape
 
-    # Convert time to milliseconds and create time bins
-    total_duration_ms = n_steps * dt
-    n_bins = int(np.ceil(total_duration_ms / window_size))
-    time_bins = np.linspace(0, total_duration_ms, n_bins + 1)
-    time_centers = (time_bins[:-1] + time_bins[1:]) / 2
+    # Convert window size to timesteps
+    window_steps = int(np.round(window_size / dt))
+
+    # Create time array for bin centers (one bin per timestep)
+    time_centers = np.arange(n_steps) * dt * 1e-3  # Convert to seconds
 
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -322,7 +322,7 @@ def plot_psth(output_spikes, neuron_types, window_size, dt, save_path):
     colors = {"excitatory": "#0000FF", "inhibitory": "#FF0000"}  # Blue and red from bwr
     type_labels = {1: "excitatory", -1: "inhibitory"}
 
-    # Calculate PSTH for each neuron type
+    # Calculate PSTH for each neuron type using vectorized convolution
     for neuron_type_val, type_name in type_labels.items():
         type_mask = neuron_types == neuron_type_val
         n_neurons_type = type_mask.sum()
@@ -333,29 +333,23 @@ def plot_psth(output_spikes, neuron_types, window_size, dt, save_path):
         # Sum spikes across neurons of this type and all batches
         spike_counts = output_spikes[:, :, type_mask].sum(
             axis=(0, 2)
-        )  # Sum over batch and neurons
+        )  # Shape: (n_steps,)
 
-        # Bin the spike counts
-        binned_counts = []
-        for i in range(n_bins):
-            start_idx = int(time_bins[i] / dt)
-            end_idx = int(time_bins[i + 1] / dt)
-            end_idx = min(end_idx, n_steps)  # Ensure we don't exceed array bounds
+        # Use convolution for efficient sliding window operation
+        # Create uniform kernel for averaging over window
+        kernel = np.ones(window_steps) / window_steps
 
-            if start_idx < n_steps:
-                bin_count = spike_counts[start_idx:end_idx].sum()
-                # Normalize by window size (in seconds), number of neurons, and number of batches
-                rate = bin_count / (window_size * 1e-3) / n_neurons_type / batch_size
-                binned_counts.append(rate)
-            else:
-                binned_counts.append(0.0)
+        # Apply convolution with 'same' mode to keep same length
+        convolved = np.convolve(spike_counts, kernel, mode="same")
 
-        binned_counts = np.array(binned_counts)
+        # Convert to firing rate: spikes per window -> Hz
+        # Normalize by window duration (in seconds), number of neurons, and number of batches
+        firing_rates = convolved / (window_size * 1e-3) / n_neurons_type / batch_size
 
         # Plot PSTH
         ax.plot(
-            time_centers * 1e-3,  # Convert to seconds
-            binned_counts,
+            time_centers,
+            firing_rates,
             color=colors[type_name],
             linewidth=2,
             alpha=0.6,
