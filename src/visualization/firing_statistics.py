@@ -390,6 +390,103 @@ def plot_isi_histogram(
     return fig
 
 
+def plot_psth(
+    spike_trains: NDArray[np.int32],
+    cell_type_indices: NDArray[np.int32],
+    cell_type_names: list[str],
+    window_size: float,
+    dt: float = 1.0,
+    ax: plt.Axes | None = None,
+    title: str | None = None,
+) -> Figure:
+    """
+    Plot Peri-Stimulus Time Histogram (PSTH) split by cell type with overlapping windows.
+
+    Args:
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
+        cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
+        cell_type_names (list[str]): Names of cell types.
+        window_size (float): Window size for PSTH bins in milliseconds.
+        dt (float): Time step duration in milliseconds. Defaults to 1.0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        title (str | None): Optional custom title. If None, uses default title.
+
+    Returns:
+        Figure: Matplotlib figure object.
+    """
+    batch_size, n_steps, n_neurons = spike_trains.shape
+    n_cell_types = len(cell_type_names)
+
+    # Define colors: red, blue, then tab10 colormap for additional types
+    base_colors = ["#FF0000", "#0000FF"]
+    if n_cell_types <= 2:
+        colors_map = base_colors[:n_cell_types]
+    else:
+        cmap = plt.cm.get_cmap("tab10")
+        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
+        colors_map = base_colors + additional_colors
+
+    # Convert window size to timesteps
+    window_steps = int(np.round(window_size / dt))
+
+    # Create time array for bin centers (one bin per timestep)
+    time_centers = np.arange(n_steps) * dt * 1e-3  # Convert to seconds
+
+    # Create figure
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(12, 6))
+    else:
+        fig = ax.get_figure()
+
+    # Calculate PSTH for each cell type using vectorized convolution
+    for cell_type_idx in range(n_cell_types):
+        cell_type_mask = cell_type_indices == cell_type_idx
+        n_neurons_type = cell_type_mask.sum()
+
+        if n_neurons_type == 0:
+            continue
+
+        # Sum spikes across neurons of this type and all batches
+        spike_counts = spike_trains[:, :, cell_type_mask].sum(
+            axis=(0, 2)
+        )  # Shape: (n_steps,)
+
+        # Use convolution for efficient sliding window operation
+        # Create uniform kernel for averaging over window
+        kernel = np.ones(window_steps) / window_steps
+
+        # Apply convolution with 'same' mode to keep same length
+        # This gives us the mean spike count in each overlapping window
+        convolved = np.convolve(spike_counts, kernel, mode="same")
+
+        # Convert to firing rate: spikes per window -> Hz
+        # Normalize by window duration (in seconds), number of neurons, and number of batches
+        firing_rates = convolved / (window_size * 1e-3) / n_neurons_type / batch_size
+
+        # Plot PSTH
+        ax.plot(
+            time_centers,
+            firing_rates,
+            color=colors_map[cell_type_idx],
+            linewidth=2,
+            alpha=0.6,
+            label=f"{cell_type_names[cell_type_idx]} (n={n_neurons_type})",
+        )
+
+    ax.set_xlabel("Time (s)", fontsize=12)
+    ax.set_ylabel("Firing Rate (Hz)", fontsize=12)
+
+    if title is None:
+        title = f"Peri-Stimulus Time Histogram (window = {window_size:.1f} ms)"
+    ax.set_title(title, fontsize=14)
+
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    return fig
+
+
 def plot_firing_rate_distribution(
     output_spikes: NDArray[np.int32],
     cell_type_indices: NDArray[np.int32],

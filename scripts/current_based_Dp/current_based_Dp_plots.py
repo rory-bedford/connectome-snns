@@ -297,6 +297,81 @@ def plot_firing_rate_distribution(output_spikes, neuron_types, duration, save_pa
     plt.close()
 
 
+def plot_psth(output_spikes, neuron_types, window_size, dt, save_path):
+    """Plot Peri-Stimulus Time Histogram (PSTH) split by cell type.
+
+    Args:
+        output_spikes (np.ndarray): Output spike array of shape (batch, time, neurons)
+        neuron_types (np.ndarray): Neuron type assignments (+1 excitatory, -1 inhibitory)
+        window_size (float): Window size for PSTH bins in milliseconds
+        dt (float): Time step in milliseconds
+        save_path (Path): Path to save the plot
+    """
+    batch_size, n_steps, n_neurons = output_spikes.shape
+
+    # Convert time to milliseconds and create time bins
+    total_duration_ms = n_steps * dt
+    n_bins = int(np.ceil(total_duration_ms / window_size))
+    time_bins = np.linspace(0, total_duration_ms, n_bins + 1)
+    time_centers = (time_bins[:-1] + time_bins[1:]) / 2
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Define colors and labels for each neuron type
+    colors = {"excitatory": "#0000FF", "inhibitory": "#FF0000"}  # Blue and red from bwr
+    type_labels = {1: "excitatory", -1: "inhibitory"}
+
+    # Calculate PSTH for each neuron type
+    for neuron_type_val, type_name in type_labels.items():
+        type_mask = neuron_types == neuron_type_val
+        n_neurons_type = type_mask.sum()
+
+        if n_neurons_type == 0:
+            continue
+
+        # Sum spikes across neurons of this type and all batches
+        spike_counts = output_spikes[:, :, type_mask].sum(
+            axis=(0, 2)
+        )  # Sum over batch and neurons
+
+        # Bin the spike counts
+        binned_counts = []
+        for i in range(n_bins):
+            start_idx = int(time_bins[i] / dt)
+            end_idx = int(time_bins[i + 1] / dt)
+            end_idx = min(end_idx, n_steps)  # Ensure we don't exceed array bounds
+
+            if start_idx < n_steps:
+                bin_count = spike_counts[start_idx:end_idx].sum()
+                # Normalize by window size (in seconds), number of neurons, and number of batches
+                rate = bin_count / (window_size * 1e-3) / n_neurons_type / batch_size
+                binned_counts.append(rate)
+            else:
+                binned_counts.append(0.0)
+
+        binned_counts = np.array(binned_counts)
+
+        # Plot PSTH
+        ax.plot(
+            time_centers * 1e-3,  # Convert to seconds
+            binned_counts,
+            color=colors[type_name],
+            linewidth=2,
+            alpha=0.6,
+            label=f"{type_name.capitalize()} (n={n_neurons_type})",
+        )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Firing Rate (Hz)")
+    ax.set_title(f"Peri-Stimulus Time Histogram (window = {window_size:.1f} ms)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
 def main(output_dir_path):
     """Main plotting function for Dp network simulation outputs.
 
@@ -393,6 +468,14 @@ def main(output_dir_path):
         output_dir / "07_firing_rate_distribution.png",
     )
 
+    plot_psth(
+        output_spikes,
+        neuron_types,
+        window_size=50.0,  # 50 ms window size
+        dt=delta_t,
+        save_path=output_dir / "08_psth.png",
+    )
+
     # Use cell_type_indices if available, otherwise fall back to neuron_types
     neuron_type_indices = (
         cell_type_indices if cell_type_indices is not None else neuron_types
@@ -411,7 +494,7 @@ def main(output_dir_path):
         y_min=-100,
         y_max=0,
         y_tick_step=50,
-        save_path=output_dir / "08_membrane_voltages.png",
+        save_path=output_dir / "09_membrane_voltages.png",
     )
 
     plot_synaptic_currents(
@@ -425,7 +508,7 @@ def main(output_dir_path):
         duration=duration,
         n_neurons_plot=10,
         fraction=1,
-        save_path=output_dir / "09_synaptic_currents.png",
+        save_path=output_dir / "10_synaptic_currents.png",
     )
 
     print("All plots generated successfully!")

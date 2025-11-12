@@ -17,6 +17,7 @@ from visualization.firing_statistics import (
     plot_cv_histogram,
     plot_isi_histogram,
     plot_firing_rate_distribution,
+    plot_psth,
 )
 
 import matplotlib
@@ -330,6 +331,31 @@ def generate_training_plots(
         cell_type_names=cell_type_names,
         dt=dt,
         bins=100,
+    )
+
+    figures["psth"] = plot_psth(
+        spike_trains=spikes,
+        cell_type_indices=cell_type_indices,
+        cell_type_names=cell_type_names,
+        window_size=50.0,  # 50 ms window size - can be made configurable
+        dt=dt,
+    )
+
+    # Assembly PSTH - slice to first assembly (assemblies are equal-sized and contiguous)
+    n_neurons = spikes.shape[2]
+    neurons_per_assembly = n_neurons // num_assemblies
+    assembly_start = 0  # First assembly
+    assembly_end = neurons_per_assembly
+
+    figures["assembly_psth"] = plot_psth(
+        spike_trains=spikes[
+            :, :, assembly_start:assembly_end
+        ],  # Slice to first assembly
+        cell_type_indices=cell_type_indices[assembly_start:assembly_end],
+        cell_type_names=cell_type_names,
+        window_size=50.0,  # 50 ms window size - can be made configurable
+        dt=dt,
+        title="Assembly 1 PSTH (window = 50.0 ms)",
     )
 
     return figures
