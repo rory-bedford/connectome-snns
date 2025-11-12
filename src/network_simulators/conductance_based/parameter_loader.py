@@ -246,6 +246,34 @@ class RecurrentConfig(BaseModel):
                 )
         return synapse_params
 
+    def get_g_bar_by_type(self) -> Dict[str, float]:
+        """Get total maximal conductance for each cell type.
+
+        Returns:
+            Dict mapping cell type names to total g_bar values.
+        """
+        return {
+            cell_type: float(sum(synapse_config.g_bar))
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_neuron_params_for_plotting(self) -> Dict[int, Dict[str, float | str]]:
+        """Get neuron parameters formatted for visualization functions.
+
+        Returns:
+            Dict mapping cell type indices to parameter dicts with keys:
+            'threshold', 'rest', 'name', 'sign'.
+        """
+        return {
+            idx: {
+                "threshold": self.physiology[cell_name].theta,
+                "rest": self.physiology[cell_name].U_reset,
+                "name": cell_name,
+                "sign": 1 if "excit" in cell_name.lower() else -1,
+            }
+            for idx, cell_name in enumerate(self.cell_types.names)
+        }
+
 
 class FeedforwardConfig(BaseModel):
     """Feedforward layer (matches [feedforward] section in TOML)."""
@@ -299,6 +327,17 @@ class FeedforwardConfig(BaseModel):
                     }
                 )
         return synapse_params
+
+    def get_g_bar_by_type(self) -> Dict[str, float]:
+        """Get total maximal conductance for each cell type.
+
+        Returns:
+            Dict mapping cell type names to total g_bar values.
+        """
+        return {
+            cell_type: float(sum(synapse_config.g_bar))
+            for cell_type, synapse_config in self.synapses.items()
+        }
 
 
 # =============================================================================

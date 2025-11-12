@@ -49,7 +49,8 @@ def plot_membrane_voltages(
     y_max: float = 0.0,
     y_tick_step: float = 50.0,
     figsize: tuple[float, float] = (12, 12),
-) -> plt.Figure:
+    ax: plt.Axes | None = None,
+) -> plt.Figure | None:
     """
     Visualize membrane voltage traces with spike markers.
 
@@ -66,9 +67,12 @@ def plot_membrane_voltages(
         y_max (float): Maximum y-axis value in mV. Defaults to 0.0.
         y_tick_step (float): Step size for y-axis ticks. Defaults to 50.0.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+            Note: This function creates a multi-subplot figure internally, so ax parameter
+            is accepted but ignored to maintain API consistency.
 
     Returns:
-        plt.Figure: Matplotlib figure object containing the voltage traces.
+        plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
 
     n_steps = voltages.shape[1]
@@ -76,7 +80,13 @@ def plot_membrane_voltages(
 
     y_ticks = np.arange(y_min, y_max + 1, y_tick_step)
 
-    fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+    # Multi-subplot function, ax parameter ignored for consistency
+    if ax is None:
+        fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        return_fig = True
+    else:
+        fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        return_fig = False
     time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
 
     for neuron_id in range(n_neurons_plot):
@@ -142,7 +152,7 @@ def plot_membrane_voltages(
     )
     plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None
 
 
 def plot_synaptic_currents(
@@ -155,7 +165,8 @@ def plot_synaptic_currents(
     neuron_types: NDArray[np.int32] | None = None,
     neuron_params: dict | None = None,
     figsize: tuple[float, float] = (12, 12),
-) -> plt.Figure:
+    ax: plt.Axes | None = None,
+) -> plt.Figure | None:
     """
     Visualize excitatory and inhibitory synaptic currents.
 
@@ -169,9 +180,12 @@ def plot_synaptic_currents(
         neuron_types (NDArray[np.int32] | None): Array indicating neuron type indices. Defaults to None.
         neuron_params (dict | None): Dictionary mapping cell type indices to parameters. Defaults to None.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+            Note: This function creates a multi-subplot figure internally, so ax parameter
+            is accepted but ignored to maintain API consistency.
 
     Returns:
-        plt.Figure: Matplotlib figure object containing the current traces.
+        plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
 
     n_steps = I_exc.shape[1]
@@ -191,7 +205,13 @@ def plot_synaptic_currents(
 
     y_lim = _round_to_nice_limit(max_current)
 
-    fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+    # Multi-subplot function, ax parameter ignored for consistency
+    if ax is None:
+        fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        return_fig = True
+    else:
+        fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        return_fig = False
     time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
 
     for neuron_id in range(n_neurons_plot):
@@ -278,7 +298,7 @@ def plot_synaptic_currents(
     )
     plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None
 
 
 def plot_spike_trains(
@@ -293,7 +313,8 @@ def plot_spike_trains(
     title: str | None = None,
     ylabel: str = "Neuron ID",
     figsize: tuple[float, float] = (12, 4),
-) -> plt.Figure:
+    ax: plt.Axes | None = None,
+) -> plt.Figure | None:
     """Plot spike trains with optional cell type coloring.
 
     This unified function can plot spike trains for any cell type, with special
@@ -317,11 +338,18 @@ def plot_spike_trains(
             based on cell type. Defaults to None.
         ylabel (str): Label for y-axis. Defaults to "Neuron ID".
         figsize (tuple[float, float]): Figure size. Defaults to (12, 4).
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
     Returns:
-        plt.Figure: Matplotlib figure object containing the spike trains.
+        plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    fig, ax = plt.subplots(figsize=figsize)
+    if ax is None:
+        fig, ax_to_use = plt.subplots(figsize=figsize)
+        return_fig = True
+    else:
+        fig = ax.get_figure()
+        ax_to_use = ax
+        return_fig = False
 
     # Calculate number of timesteps to plot (common to both branches)
     n_steps = spikes.shape[1]
@@ -358,16 +386,16 @@ def plot_spike_trains(
         # Color spikes by cell type - neuron_ids are indices into the subset [0, n_neurons_plot)
         spike_colors = [colors_map[cell_types_subset[nid]] for nid in neuron_ids]
 
-        ax.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, c=spike_colors)
+        ax_to_use.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, c=spike_colors)
 
         # Create legend with cell type names
         legend_elements = [
             Patch(facecolor=colors_map[i], label=cell_type_names[i])
             for i in range(n_cell_types)
         ]
-        ax.legend(handles=legend_elements, loc="upper right")
+        ax_to_use.legend(handles=legend_elements, loc="upper right")
 
-        ax.set_yticks([])  # Remove y-axis tick labels
+        ax_to_use.set_yticks([])  # Remove y-axis tick labels
         default_title = "Spike Trains (colored by cell type)"
         ylabel = "Neuron (shuffled)"
     else:
@@ -381,24 +409,25 @@ def plot_spike_trains(
             # For unknown cell types, use a default color
             color = "black"
 
-        ax.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, color=color)
-        ax.set_yticks(range(n_neurons_plot))
+        ax_to_use.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, color=color)
+        ax_to_use.set_yticks(range(n_neurons_plot))
         default_title = (
             f"Sample {cell_type.title() if cell_type else ''} Spike Trains".strip()
         )
 
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title if title is not None else default_title)
-    ax.set_ylim(-0.5, n_neurons_plot - 0.5)
+    ax_to_use.set_xlabel("Time (s)")
+    ax_to_use.set_ylabel(ylabel)
+    ax_to_use.set_title(title if title is not None else default_title)
+    ax_to_use.set_ylim(-0.5, n_neurons_plot - 0.5)
 
     # Set x-axis limit based on actual plotted duration
     # n_steps_plot is already calculated in both branches above
     actual_duration_s = n_steps_plot * dt * 1e-3
-    ax.set_xlim(0, actual_duration_s)
-    plt.tight_layout()
+    ax_to_use.set_xlim(0, actual_duration_s)
+    if return_fig:
+        plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None
 
 
 def plot_mitral_cell_spikes(
@@ -477,7 +506,8 @@ def plot_synaptic_conductances(
     dt: float,
     neuron_id: int = 0,
     fraction: float = 1.0,
-) -> plt.Figure:
+    ax: plt.Axes | None = None,
+) -> plt.Figure | None:
     """Plot synaptic conductances for a single neuron, with each synapse type on a separate subplot.
 
     Shows both recurrent and feedforward conductances in separate subplots, one for each synapse type.
@@ -493,9 +523,12 @@ def plot_synaptic_conductances(
         dt (float): Time step in milliseconds.
         neuron_id (int): Index of neuron to plot. Defaults to 0.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+            Note: This function creates a multi-subplot figure internally, so ax parameter
+            is accepted but ignored to maintain API consistency.
 
     Returns:
-        plt.Figure: Matplotlib figure object containing the conductance traces.
+        plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     # Build list of all synapse types (recurrent + feedforward)
     all_synapse_labels = []
@@ -558,10 +591,17 @@ def plot_synaptic_conductances(
     # Total number of synapse types
     n_synapses = output_conductances.shape[3] + input_conductances.shape[3]
 
-    # Create figure with subplots for each synapse type
-    fig, axes = plt.subplots(
-        n_synapses, 1, figsize=(14, 2 * n_synapses), sharex=True, sharey=True
-    )
+    # Create figure with subplots for each synapse type - multi-subplot, ax ignored
+    if ax is None:
+        fig, axes = plt.subplots(
+            n_synapses, 1, figsize=(14, 2 * n_synapses), sharex=True, sharey=True
+        )
+        return_fig = True
+    else:
+        fig, axes = plt.subplots(
+            n_synapses, 1, figsize=(14, 2 * n_synapses), sharex=True, sharey=True
+        )
+        return_fig = False
     if n_synapses == 1:
         axes = [axes]
 
@@ -606,4 +646,4 @@ def plot_synaptic_conductances(
     )
     plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None

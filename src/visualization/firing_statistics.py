@@ -32,7 +32,7 @@ def plot_fano_factor_vs_window_size(
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
     Returns:
-        Figure: Matplotlib figure object.
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     # Convert window sizes from steps to seconds
     window_sizes_s = np.array(window_sizes) * dt * 1e-3  # Convert ms to s
@@ -48,16 +48,19 @@ def plot_fano_factor_vs_window_size(
         additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
         colors_map = base_colors + additional_colors
 
-    # Create subplots
+    # Create subplots - multi-subplot function, ax parameter ignored for consistency
     if ax is None:
         fig, axes = plt.subplots(
             1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
         )
-        if n_cell_types == 1:
-            axes = [axes]
+        return_fig = True
     else:
-        fig = ax.get_figure()
-        axes = [ax]
+        fig, axes = plt.subplots(
+            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
+        )
+        return_fig = False
+    if n_cell_types == 1:
+        axes = [axes]
 
     # Plot each cell type
     for cell_type_idx in range(n_cell_types):
@@ -154,7 +157,7 @@ def plot_fano_factor_vs_window_size(
     fig.suptitle("Fano Factor vs Window Size", fontsize=16, y=1.02)
     plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None
 
 
 def plot_cv_histogram(
@@ -178,7 +181,7 @@ def plot_cv_histogram(
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
     Returns:
-        Figure: Matplotlib figure object.
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
 
@@ -194,16 +197,19 @@ def plot_cv_histogram(
     # Compute CV for all neurons (convert dt from ms to s)
     cv_values = compute_spike_train_cv(spike_trains, dt=dt * 1e-3)
 
-    # Create subplots
+    # Create subplots - multi-subplot function, ax parameter ignored for consistency
     if ax is None:
         fig, axes = plt.subplots(
             1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
         )
-        if n_cell_types == 1:
-            axes = [axes]
+        return_fig = True
     else:
-        fig = ax.get_figure()
-        axes = [ax]
+        fig, axes = plt.subplots(
+            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
+        )
+        return_fig = False
+    if n_cell_types == 1:
+        axes = [axes]
 
     # Plot each cell type
     for i in range(n_cell_types):
@@ -250,7 +256,7 @@ def plot_cv_histogram(
             ax.set_title(f"{cell_type_names[i]}", fontsize=14)
 
     plt.tight_layout()
-    return fig
+    return fig if return_fig else None
 
 
 def plot_isi_histogram(
@@ -274,7 +280,7 @@ def plot_isi_histogram(
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
     Returns:
-        Figure: Matplotlib figure object.
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
 
@@ -325,16 +331,19 @@ def plot_isi_histogram(
     else:
         x_limit = None
 
-    # Create subplots
+    # Create subplots - multi-subplot function, ax parameter ignored for consistency
     if ax is None:
         fig, axes = plt.subplots(
             1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
         )
-        if n_cell_types == 1:
-            axes = [axes]
+        return_fig = True
     else:
-        fig = ax.get_figure()
-        axes = [ax]
+        fig, axes = plt.subplots(
+            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
+        )
+        return_fig = False
+    if n_cell_types == 1:
+        axes = [axes]
 
     # Plot each cell type
     for i in range(n_cell_types):
@@ -384,7 +393,7 @@ def plot_isi_histogram(
             ax.set_title(f"{cell_type_names[i]}", fontsize=14)
 
     plt.tight_layout()
-    return fig
+    return fig if return_fig else None
 
 
 def plot_psth(
@@ -409,7 +418,7 @@ def plot_psth(
         title (str | None): Optional custom title. If None, uses default title.
 
     Returns:
-        Figure: Matplotlib figure object.
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     batch_size, n_steps, n_neurons = spike_trains.shape
     n_cell_types = len(cell_type_names)
@@ -431,9 +440,12 @@ def plot_psth(
 
     # Create figure
     if ax is None:
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax_to_use = plt.subplots(figsize=(12, 6))
+        return_fig = True
     else:
         fig = ax.get_figure()
+        ax_to_use = ax
+        return_fig = False
 
     # Calculate PSTH for each cell type using vectorized convolution
     for cell_type_idx in range(n_cell_types):
@@ -461,7 +473,7 @@ def plot_psth(
         firing_rates = convolved / (window_size * 1e-3) / n_neurons_type / batch_size
 
         # Plot PSTH
-        ax.plot(
+        ax_to_use.plot(
             time_centers,
             firing_rates,
             color=colors_map[cell_type_idx],
@@ -470,18 +482,19 @@ def plot_psth(
             label=f"{cell_type_names[cell_type_idx]} (n={n_neurons_type})",
         )
 
-    ax.set_xlabel("Time (s)", fontsize=12)
-    ax.set_ylabel("Firing Rate (Hz)", fontsize=12)
+    ax_to_use.set_xlabel("Time (s)", fontsize=12)
+    ax_to_use.set_ylabel("Firing Rate (Hz)", fontsize=12)
 
     if title is None:
         title = f"Peri-Stimulus Time Histogram (window = {window_size:.1f} ms)"
-    ax.set_title(title, fontsize=14)
+    ax_to_use.set_title(title, fontsize=14)
 
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
+    ax_to_use.legend()
+    ax_to_use.grid(True, alpha=0.3)
+    if return_fig:
+        plt.tight_layout()
 
-    return fig
+    return fig if return_fig else None
 
 
 def plot_firing_rate_distribution(
@@ -489,7 +502,8 @@ def plot_firing_rate_distribution(
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     dt: float,
-) -> plt.Figure:
+    ax: plt.Axes | None = None,
+) -> plt.Figure | None:
     """Plot distribution of firing rates in the Dp network by cell type.
 
     Args:
@@ -497,9 +511,12 @@ def plot_firing_rate_distribution(
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of cell types.
         dt (float): Time step in milliseconds.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+            Note: This function creates a multi-subplot figure internally, so ax parameter
+            is accepted but ignored to maintain API consistency.
 
     Returns:
-        plt.Figure: Matplotlib figure object containing the firing rate distribution.
+        plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
 
@@ -523,10 +540,17 @@ def plot_firing_rate_distribution(
     # Filter out zero firing rates for log scale
     firing_rates_nonzero = firing_rates[firing_rates > 0]
 
-    # Create subplots
-    fig, axes = plt.subplots(
-        1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-    )
+    # Create subplots - multi-subplot function, ax parameter ignored for consistency
+    if ax is None:
+        fig, axes = plt.subplots(
+            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
+        )
+        return_fig = True
+    else:
+        fig, axes = plt.subplots(
+            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
+        )
+        return_fig = False
     if n_cell_types == 1:
         axes = [axes]
 
@@ -637,4 +661,4 @@ def plot_firing_rate_distribution(
     fig.suptitle("Firing Rate Distribution (log scale)", fontsize=14, y=1.02)
     plt.tight_layout(rect=[0, 0, 1, 0.98])
 
-    return fig
+    return fig if return_fig else None
