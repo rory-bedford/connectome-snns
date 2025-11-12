@@ -404,6 +404,8 @@ def main(output_dir, params_file):
         ("fano_factor", "12_fano_factor_vs_window_size.png"),
         ("cv_histogram", "13_cv_histogram.png"),
         ("isi_histogram", "14_isi_histogram.png"),
+        ("psth", "15_psth.png"),
+        ("assembly_psth", "16_assembly_psth.png"),
     ]
 
     for plot_key, filename in plot_names:
