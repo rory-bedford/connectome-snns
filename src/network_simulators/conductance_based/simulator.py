@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch
+from typing import List
 from numpy.typing import NDArray
 from tqdm import tqdm
 from network_simulators.conductance_based.model_init import ConductanceLIFNetwork_IO
@@ -118,36 +119,94 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Run simulation
         # ==============
 
+        # Gather cached weight tensors into lists once (outside the loop)
+        cached_rec = [
+            getattr(self, f"cached_rec_{i}")
+            for i in range(len(self.cached_weights_rec_masks))
+        ]
+        cached_ff = [
+            getattr(self, f"cached_ff_{i}")
+            for i in range(len(self.cached_weights_ff_masks))
+        ]
+
         iterator = range(n_steps)
         if self.use_tqdm:
             iterator = tqdm(iterator, desc="Simulating network", unit="step")
 
         for t in iterator:
-            # Call single timestep method
-            v, g, s, I = self._step(
-                v,
-                g,
-                input_spikes[:, t, :],
-                self.theta,
-                self.surrgrad_scale,
-                self.dt,
-                self.beta,
-                self.alpha,
-                self.E_syn,
-                self.E_L,
-                self.C_m,
-                self.U_reset,
-                self.weights,
-                self.weights_FF,
-                self.cell_type_masks,
-                self.cell_type_masks_FF,
-                self.cell_to_synapse_mask,
-                self.cell_to_synapse_mask_FF,
-                self.scaling_factors,
-                self.scaling_factors_FF,
-                self.cell_type_indices,
-                self.g_scale,
-            )
+            # Call the appropriate _step method based on optimization mode
+            if self.optimisable is None:
+                v, g, s, I = self._step_inference(
+                    v,
+                    g,
+                    input_spikes[:, t, :],
+                    self.theta,
+                    self.surrgrad_scale,
+                    self.dt,
+                    self.beta,
+                    self.alpha,
+                    self.E_syn,
+                    self.E_L,
+                    self.C_m,
+                    self.U_reset,
+                    self.cached_weights_rec_masks,
+                    self.cached_weights_rec_syn_masks,
+                    cached_rec,
+                    self.cached_weights_ff_masks,
+                    self.cached_weights_ff_syn_masks,
+                    cached_ff,
+                )
+            elif self.optimisable == "weights":
+                v, g, s, I = self._step_optimize_weights(
+                    v,
+                    g,
+                    input_spikes[:, t, :],
+                    self.theta,
+                    self.surrgrad_scale,
+                    self.dt,
+                    self.beta,
+                    self.alpha,
+                    self.E_syn,
+                    self.E_L,
+                    self.C_m,
+                    self.U_reset,
+                    self.weights,
+                    self.weights_FF,
+                    self.cached_weights_rec_masks,
+                    self.cached_weights_rec_syn_masks,
+                    self.cached_weights_rec_indices,
+                    cached_rec,
+                    self.cached_weights_ff_masks,
+                    self.cached_weights_ff_syn_masks,
+                    self.cached_weights_ff_indices,
+                    cached_ff,
+                )
+            elif self.optimisable == "scaling_factors":
+                v, g, s, I = self._step_optimize_scaling_factors(
+                    v,
+                    g,
+                    input_spikes[:, t, :],
+                    self.theta,
+                    self.surrgrad_scale,
+                    self.dt,
+                    self.beta,
+                    self.alpha,
+                    self.E_syn,
+                    self.E_L,
+                    self.C_m,
+                    self.U_reset,
+                    self.scaling_factors,
+                    self.scaling_factors_FF,
+                    self.cell_type_indices,
+                    self.cached_weights_rec_masks,
+                    self.cached_weights_rec_syn_masks,
+                    self.cached_weights_rec_indices,
+                    cached_rec,
+                    self.cached_weights_ff_masks,
+                    self.cached_weights_ff_syn_masks,
+                    self.cached_weights_ff_indices,
+                    cached_ff,
+                )
 
             # Store variables
             all_s[:, t, :] = s.bool()
@@ -165,7 +224,62 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         )
 
     @staticmethod
-    def _step(
+    def _step_inference(
+        v: torch.Tensor,
+        g: torch.Tensor,
+        input_spikes_t: torch.Tensor,
+        theta: torch.Tensor,
+        surrgrad_scale: torch.Tensor,
+        dt: torch.Tensor,
+        beta: torch.Tensor,
+        alpha: torch.Tensor,
+        E_syn: torch.Tensor,
+        E_L: torch.Tensor,
+        C_m: torch.Tensor,
+        U_reset: torch.Tensor,
+        masks_rec: List[torch.Tensor],
+        syn_masks_rec: List[torch.Tensor],
+        weights_rec: List[torch.Tensor],
+        masks_ff: List[torch.Tensor],
+        syn_masks_ff: List[torch.Tensor],
+        weights_ff: List[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Optimized _step for inference mode (optimisable=None).
+
+        Uses fully precomputed weights * scaling_factors * g_scale.
+        No runtime multiplications except the einsum.
+        """
+        # Compute spikes
+        s = SurrGradSpike.apply(v - theta, surrgrad_scale)
+
+        # Compute currents
+        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+
+        # Update membrane potential with reset
+        v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
+            1 - s
+        ) + U_reset * s.detach()
+
+        # Decay conductances
+        g *= alpha
+
+        # Update conductances (recurrent) - everything precomputed
+        for mask, syn_mask, weights in zip(masks_rec, syn_masks_rec, weights_rec):
+            # s[:, mask] → (batch, n_in_type)
+            # weights → (n_in_type, n_neurons, 2, n_syn)
+            # Result after einsum: (batch, n_neurons, 2, n_syn)
+            g[:, :, :, syn_mask] += torch.einsum("bi,ijkl->bjkl", s[:, mask], weights)
+
+        # Update conductances (feedforward) - everything precomputed
+        for mask, syn_mask, weights in zip(masks_ff, syn_masks_ff, weights_ff):
+            g[:, :, :, syn_mask] += torch.einsum(
+                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weights
+            )
+
+        return v, g, s, I
+
+    @staticmethod
+    def _step_optimize_weights(
         v: torch.Tensor,
         g: torch.Tensor,
         input_spikes_t: torch.Tensor,
@@ -180,90 +294,119 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         U_reset: torch.Tensor,
         weights: torch.Tensor,
         weights_FF: torch.Tensor,
-        cell_type_masks: list[torch.Tensor],
-        cell_type_masks_FF: list[torch.Tensor],
-        cell_to_synapse_mask: torch.Tensor,
-        cell_to_synapse_mask_FF: torch.Tensor,
-        scaling_factors: torch.Tensor,
-        scaling_factors_FF: torch.Tensor,
-        cell_type_indices: torch.Tensor,
-        g_scale: torch.Tensor,
+        masks_rec: List[torch.Tensor],
+        syn_masks_rec: List[torch.Tensor],
+        indices_rec: List[int],
+        cached_weights_rec: List[torch.Tensor],
+        masks_ff: List[torch.Tensor],
+        syn_masks_ff: List[torch.Tensor],
+        indices_ff: List[int],
+        cached_weights_ff: List[torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Single timestep of conductance-based LIF network simulation.
+        """Optimized _step for training weights (optimisable="weights").
 
-        Computes membrane potential updates, synaptic conductance dynamics, and spike generation
-        for one simulation timestep using Euler integration.
-
-        Args:
-            v: Membrane potentials (batch_size, n_neurons) in mV.
-            g: Synaptic conductances (batch_size, n_neurons, 2, n_synapse_types_total) in nS.
-                Dimension 2 represents rise/decay components.
-            input_spikes_t: External input spikes (batch_size, n_inputs) for current timestep.
-            theta: Spike thresholds (n_neurons,) in mV.
-            surrgrad_scale: Surrogate gradient scale parameter for spike function.
-            dt: Integration timestep in ms.
-            beta: Membrane potential decay factors (n_neurons,) = exp(-dt/tau_m).
-            alpha: Synaptic decay factors (2, n_synapse_types_total) = exp(-dt/tau_syn).
-            E_syn: Synaptic reversal potentials (n_synapse_types_total,) in mV.
-            E_L: Leak reversal potentials (n_neurons,) in mV.
-            C_m: Membrane capacitances (n_neurons,) in pF.
-            U_reset: Reset potentials (n_neurons,) in mV.
-            weights: Recurrent connectivity weights (n_neurons, n_neurons).
-            weights_FF: Feedforward connectivity weights (n_inputs, n_neurons).
-            cell_type_masks: Boolean masks for grouping recurrent neurons by cell type.
-            cell_type_masks_FF: Boolean masks for grouping inputs by cell type.
-            cell_to_synapse_mask: Maps recurrent cell types to their synapse types.
-            cell_to_synapse_mask_FF: Maps feedforward cell types to their synapse types.
-            scaling_factors: Recurrent scaling factors (n_cell_types, n_cell_types).
-            scaling_factors_FF: Feedforward scaling factors (n_cell_types_FF, n_cell_types).
-            cell_type_indices: Maps each neuron to its cell type (n_neurons,).
-            g_scale: Conductance scaling factors (2, n_synapse_types_total) in nS.
-                Converts weight units to conductance units. First dimension is [rise, decay].
-
-        Returns:
-            tuple: (updated_v, updated_g, spikes, synaptic_currents) where:
-                - updated_v: New membrane potentials (batch_size, n_neurons).
-                - updated_g: New synaptic conductances (batch_size, n_neurons, 2, n_synapse_types_total).
-                - spikes: Binary spike indicators (batch_size, n_neurons).
-                - synaptic_currents: Total synaptic currents (batch_size, n_neurons, n_synapse_types_total).
+        Uses precomputed scaling_factors * g_scale.
+        Weights remain dynamic for gradient flow.
         """
-        # Compute spikes using surrogate gradient for backpropagation
+        # Compute spikes
         s = SurrGradSpike.apply(v - theta, surrgrad_scale)
 
         # Compute currents
-        I = (
-            g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
-        )  # Conductance times driving force (conductance is difference of rise and decay here)
+        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
 
-        # Fused membrane potential update with numerical reset
+        # Update membrane potential with reset
         v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
             1 - s
         ) + U_reset * s.detach()
 
-        # Compute conductance updates with decay
-        g *= alpha  # Decay with synapse time constant
+        # Decay conductances
+        g *= alpha
 
-        # Loop over cell types to update conductances, split by presynaptic cell type
-        for k, cell_type_mask in enumerate(cell_type_masks):
-            if cell_to_synapse_mask[k].any():
-                g[:, :, :, cell_to_synapse_mask[k]] += (
-                    torch.matmul(
-                        s[:, cell_type_mask],
-                        weights[cell_type_mask, :]
-                        * scaling_factors[k, cell_type_indices][None, :],
-                    )[:, :, None, None]
-                    * g_scale[None, None, :, cell_to_synapse_mask[k]]
-                )
+        # Update conductances (recurrent) - weights stay dynamic
+        for mask, syn_mask, k, cached in zip(
+            masks_rec, syn_masks_rec, indices_rec, cached_weights_rec
+        ):
+            # weights[mask, :] → (n_in_type, n_neurons)
+            # cached → (n_neurons, 2, n_syn)
+            # Multiply them: (n_in_type, n_neurons, 2, n_syn)
+            weighted = weights[mask, :][:, :, None, None] * cached[None, :, :, :]
+            g[:, :, :, syn_mask] += torch.einsum("bi,ijkl->bjkl", s[:, mask], weighted)
 
-        for k, cell_type_mask_FF in enumerate(cell_type_masks_FF):
-            if cell_to_synapse_mask_FF[k].any():
-                g[:, :, :, cell_to_synapse_mask_FF[k]] += (
-                    torch.matmul(
-                        input_spikes_t[:, cell_type_mask_FF].float(),
-                        weights_FF[cell_type_mask_FF, :]
-                        * scaling_factors_FF[k, cell_type_indices][None, :],
-                    )[:, :, None, None]
-                    * g_scale[None, None, :, cell_to_synapse_mask_FF[k]]
-                )
+        # Update conductances (feedforward) - weights stay dynamic
+        for mask, syn_mask, k, cached in zip(
+            masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
+        ):
+            weighted = weights_FF[mask, :][:, :, None, None] * cached[None, :, :, :]
+            g[:, :, :, syn_mask] += torch.einsum(
+                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weighted
+            )
+
+        return v, g, s, I
+
+    @staticmethod
+    def _step_optimize_scaling_factors(
+        v: torch.Tensor,
+        g: torch.Tensor,
+        input_spikes_t: torch.Tensor,
+        theta: torch.Tensor,
+        surrgrad_scale: torch.Tensor,
+        dt: torch.Tensor,
+        beta: torch.Tensor,
+        alpha: torch.Tensor,
+        E_syn: torch.Tensor,
+        E_L: torch.Tensor,
+        C_m: torch.Tensor,
+        U_reset: torch.Tensor,
+        scaling_factors: torch.Tensor,
+        scaling_factors_FF: torch.Tensor,
+        cell_type_indices: torch.Tensor,
+        masks_rec: List[torch.Tensor],
+        syn_masks_rec: List[torch.Tensor],
+        indices_rec: List[int],
+        cached_weights_rec: List[torch.Tensor],
+        masks_ff: List[torch.Tensor],
+        syn_masks_ff: List[torch.Tensor],
+        indices_ff: List[int],
+        cached_weights_ff: List[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Optimized _step for training scaling factors (optimisable="scaling_factors").
+
+        Uses precomputed weights * g_scale.
+        Scaling factors remain dynamic for gradient flow.
+        """
+        # Compute spikes
+        s = SurrGradSpike.apply(v - theta, surrgrad_scale)
+
+        # Compute currents
+        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+
+        # Update membrane potential with reset
+        v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
+            1 - s
+        ) + U_reset * s.detach()
+
+        # Decay conductances
+        g *= alpha
+
+        # Update conductances (recurrent) - scaling_factors stay dynamic
+        for mask, syn_mask, k, cached in zip(
+            masks_rec, syn_masks_rec, indices_rec, cached_weights_rec
+        ):
+            # cached → (n_in_type, n_neurons, 2, n_syn)
+            # scaling_factors[k, cell_type_indices] → (n_neurons,)
+            # Multiply them: (n_in_type, n_neurons, 2, n_syn)
+            scaled = cached * scaling_factors[k, cell_type_indices][None, :, None, None]
+            g[:, :, :, syn_mask] += torch.einsum("bi,ijkl->bjkl", s[:, mask], scaled)
+
+        # Update conductances (feedforward) - scaling_factors stay dynamic
+        for mask, syn_mask, k, cached in zip(
+            masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
+        ):
+            scaled = (
+                cached * scaling_factors_FF[k, cell_type_indices][None, :, None, None]
+            )
+            g[:, :, :, syn_mask] += torch.einsum(
+                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), scaled
+            )
 
         return v, g, s, I

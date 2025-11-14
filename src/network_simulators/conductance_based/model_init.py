@@ -207,6 +207,141 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # Initialize timestep-dependent parameters
         self.set_timestep(dt)
 
+    def _precompute_weight_products(self) -> None:
+        """Precompute weight-related products based on optimization mode.
+
+        Three optimization modes:
+        1. optimisable=None (inference): Precompute weights * scaling_factors * g_scale (fully optimized)
+        2. optimisable="weights": Precompute scaling_factors * g_scale (weights stay dynamic)
+        3. optimisable="scaling_factors": Precompute weights * g_scale (scaling_factors stay dynamic)
+
+        Stores precomputed tensors as buffers using register_buffer() for automatic device management.
+        Metadata (masks, indices) stored as regular Python lists since they're small.
+        """
+        # Store metadata (stays CPU, tiny)
+        self.cached_weights_rec_masks = []
+        self.cached_weights_rec_syn_masks = []
+        self.cached_weights_rec_indices = []  # Only for training modes
+
+        self.cached_weights_ff_masks = []
+        self.cached_weights_ff_syn_masks = []
+        self.cached_weights_ff_indices = []  # Only for training modes
+
+        if self.optimisable is None:
+            # === INFERENCE MODE: Precompute everything ===
+            # Tensors have shape (n_neurons_in_type, n_neurons, 2, n_synapses_in_mask)
+            for k in range(len(self.cell_type_masks)):
+                mask = self.cell_type_masks[k]
+                syn_mask = self.cell_to_synapse_mask[k]
+                if syn_mask.any():
+                    # weights[mask, :] → (n_in_type, n_neurons)
+                    # scaling_factors[k, cell_type_indices] → (n_neurons,)
+                    # g_scale[:, syn_mask] → (2, n_syn)
+                    # Final: (n_in_type, n_neurons, 2, n_syn)
+                    weights_product = (
+                        self.weights[mask, :][:, :, None, None]
+                        * self.scaling_factors[k, self.cell_type_indices][
+                            None, :, None, None
+                        ]
+                        * self.g_scale[None, None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_rec_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_rec_masks.append(mask)
+                    self.cached_weights_rec_syn_masks.append(syn_mask)
+
+            for k in range(len(self.cell_type_masks_FF)):
+                mask = self.cell_type_masks_FF[k]
+                syn_mask = self.cell_to_synapse_mask_FF[k]
+                if syn_mask.any():
+                    weights_product = (
+                        self.weights_FF[mask, :][:, :, None, None]
+                        * self.scaling_factors_FF[k, self.cell_type_indices][
+                            None, :, None, None
+                        ]
+                        * self.g_scale[None, None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_ff_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_ff_masks.append(mask)
+                    self.cached_weights_ff_syn_masks.append(syn_mask)
+
+        elif self.optimisable == "weights":
+            # === OPTIMIZE WEIGHTS: Precompute scaling_factors * g_scale ===
+            # Tensors have shape (n_neurons, 2, n_synapses_in_mask)
+            for k in range(len(self.cell_type_masks)):
+                mask = self.cell_type_masks[k]
+                syn_mask = self.cell_to_synapse_mask[k]
+                if syn_mask.any():
+                    # scaling_factors[k, cell_type_indices] → (n_neurons,)
+                    # g_scale[:, syn_mask] → (2, n_syn)
+                    # Final: (n_neurons, 2, n_syn)
+                    weights_product = (
+                        self.scaling_factors[k, self.cell_type_indices][:, None, None]
+                        * self.g_scale[None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_rec_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_rec_masks.append(mask)
+                    self.cached_weights_rec_syn_masks.append(syn_mask)
+                    self.cached_weights_rec_indices.append(k)
+
+            for k in range(len(self.cell_type_masks_FF)):
+                mask = self.cell_type_masks_FF[k]
+                syn_mask = self.cell_to_synapse_mask_FF[k]
+                if syn_mask.any():
+                    weights_product = (
+                        self.scaling_factors_FF[k, self.cell_type_indices][
+                            :, None, None
+                        ]
+                        * self.g_scale[None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_ff_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_ff_masks.append(mask)
+                    self.cached_weights_ff_syn_masks.append(syn_mask)
+                    self.cached_weights_ff_indices.append(k)
+
+        elif self.optimisable == "scaling_factors":
+            # === OPTIMIZE SCALING_FACTORS: Precompute weights * g_scale ===
+            # Tensors have shape (n_neurons_in_type, n_neurons, 2, n_synapses_in_mask)
+            for k in range(len(self.cell_type_masks)):
+                mask = self.cell_type_masks[k]
+                syn_mask = self.cell_to_synapse_mask[k]
+                if syn_mask.any():
+                    # weights[mask, :] → (n_in_type, n_neurons)
+                    # g_scale[:, syn_mask] → (2, n_syn)
+                    # Final: (n_in_type, n_neurons, 2, n_syn)
+                    weights_product = (
+                        self.weights[mask, :][:, :, None, None]
+                        * self.g_scale[None, None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_rec_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_rec_masks.append(mask)
+                    self.cached_weights_rec_syn_masks.append(syn_mask)
+                    self.cached_weights_rec_indices.append(k)
+
+            for k in range(len(self.cell_type_masks_FF)):
+                mask = self.cell_type_masks_FF[k]
+                syn_mask = self.cell_to_synapse_mask_FF[k]
+                if syn_mask.any():
+                    weights_product = (
+                        self.weights_FF[mask, :][:, :, None, None]
+                        * self.g_scale[None, None, :, syn_mask]
+                    )
+                    self.register_buffer(
+                        f"cached_ff_{k}", weights_product, persistent=False
+                    )
+                    self.cached_weights_ff_masks.append(mask)
+                    self.cached_weights_ff_syn_masks.append(syn_mask)
+                    self.cached_weights_ff_indices.append(k)
+
     def _register_parameter_or_buffer(
         self, name: str, value: torch.Tensor | np.ndarray, trainable: bool = False
     ) -> None:
@@ -383,6 +518,30 @@ class ConductanceLIFNetwork_IO(nn.Module):
         )
         g_scale = g_scale / norm_peak
         self.register_buffer("g_scale", g_scale)
+
+        # Recompute weight products after timestep change
+        self._precompute_weight_products()
+
+    def compile_step(self) -> None:
+        """JIT compile the appropriate _step method based on optimization mode.
+
+        This should be called after moving the model to the target device and before
+        running the forward pass for maximum performance.
+
+        Example:
+            >>> model = ConductanceLIFNetwork(...)
+            >>> model.to('cuda')
+            >>> model.compile_step()
+            >>> output = model(input_spikes)
+        """
+        if self.optimisable is None:
+            self._step_inference = torch.jit.script(self._step_inference)
+        elif self.optimisable == "weights":
+            self._step_optimize_weights = torch.jit.script(self._step_optimize_weights)
+        elif self.optimisable == "scaling_factors":
+            self._step_optimize_scaling_factors = torch.jit.script(
+                self._step_optimize_scaling_factors
+            )
 
     def _create_synapse_to_cell_mappings(
         self, synapse_params: list[dict], synapse_params_FF: list[dict]
