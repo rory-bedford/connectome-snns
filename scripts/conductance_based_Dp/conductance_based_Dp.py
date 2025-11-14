@@ -198,7 +198,7 @@ def main(output_dir, params_file):
     print(f"Model moved to device: {device}")
 
     # Jit compile the model for faster execution
-    model._step = torch.jit.script(model._step)
+    model.compile_step()
     print("✓ Model JIT compiled for faster execution")
 
     print("\n" + "=" * len("STARTING CHUNKED NETWORK SIMULATION"))
