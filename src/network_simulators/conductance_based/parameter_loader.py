@@ -12,6 +12,10 @@ from pydantic import BaseModel, Field, model_validator
 # SIMPLE CONFIG MODELS (match TOML structure exactly)
 # =============================================================================
 
+# Hardcoding synapse types for simplicity
+EXCITATORY_SYNAPSE_TYPES = ["AMPA", "NMDA"]
+INHIBITORY_SYNAPSE_TYPES = ["GABA_A", "GABA_B"]
+
 
 class SimulationConfig(BaseModel):
     """Simulation parameters."""
@@ -274,6 +278,51 @@ class RecurrentConfig(BaseModel):
             for idx, cell_name in enumerate(self.cell_types.names)
         }
 
+    def get_synapse_names(self) -> Dict[str, List[str]]:
+        """Get synapse names for each cell type.
+
+        Returns:
+            Dict mapping cell type names to lists of synapse names.
+        """
+        return {
+            cell_type_name: synapse_config.names
+            for cell_type_name, synapse_config in self.synapses.items()
+        }
+
+    def get_excitatory_synapse_indices(self) -> List[int]:
+        """Get indices of excitatory synapses across all cell types.
+
+        Returns:
+            List of synapse indices (flattened across all cell types) that are excitatory.
+        """
+        excitatory_indices = []
+        synapse_idx = 0
+        for cell_type_name in self.cell_types.names:
+            if cell_type_name in self.synapses:
+                synapse_config = self.synapses[cell_type_name]
+                for syn_name in synapse_config.names:
+                    if syn_name in EXCITATORY_SYNAPSE_TYPES:
+                        excitatory_indices.append(synapse_idx)
+                    synapse_idx += 1
+        return excitatory_indices
+
+    def get_inhibitory_synapse_indices(self) -> List[int]:
+        """Get indices of inhibitory synapses across all cell types.
+
+        Returns:
+            List of synapse indices (flattened across all cell types) that are inhibitory.
+        """
+        inhibitory_indices = []
+        synapse_idx = 0
+        for cell_type_name in self.cell_types.names:
+            if cell_type_name in self.synapses:
+                synapse_config = self.synapses[cell_type_name]
+                for syn_name in synapse_config.names:
+                    if syn_name in INHIBITORY_SYNAPSE_TYPES:
+                        inhibitory_indices.append(synapse_idx)
+                    synapse_idx += 1
+        return inhibitory_indices
+
 
 class FeedforwardConfig(BaseModel):
     """Feedforward layer (matches [feedforward] section in TOML)."""
@@ -338,6 +387,51 @@ class FeedforwardConfig(BaseModel):
             cell_type: float(sum(synapse_config.g_bar))
             for cell_type, synapse_config in self.synapses.items()
         }
+
+    def get_synapse_names(self) -> Dict[str, List[str]]:
+        """Get synapse names for each cell type.
+
+        Returns:
+            Dict mapping cell type names to lists of synapse names.
+        """
+        return {
+            cell_type_name: synapse_config.names
+            for cell_type_name, synapse_config in self.synapses.items()
+        }
+
+    def get_excitatory_synapse_indices(self) -> List[int]:
+        """Get indices of excitatory synapses across all cell types.
+
+        Returns:
+            List of synapse indices (flattened across all cell types) that are excitatory.
+        """
+        excitatory_indices = []
+        synapse_idx = 0
+        for cell_type_name in self.cell_types.names:
+            if cell_type_name in self.synapses:
+                synapse_config = self.synapses[cell_type_name]
+                for syn_name in synapse_config.names:
+                    if syn_name in EXCITATORY_SYNAPSE_TYPES:
+                        excitatory_indices.append(synapse_idx)
+                    synapse_idx += 1
+        return excitatory_indices
+
+    def get_inhibitory_synapse_indices(self) -> List[int]:
+        """Get indices of inhibitory synapses across all cell types.
+
+        Returns:
+            List of synapse indices (flattened across all cell types) that are inhibitory.
+        """
+        inhibitory_indices = []
+        synapse_idx = 0
+        for cell_type_name in self.cell_types.names:
+            if cell_type_name in self.synapses:
+                synapse_config = self.synapses[cell_type_name]
+                for syn_name in synapse_config.names:
+                    if syn_name in INHIBITORY_SYNAPSE_TYPES:
+                        inhibitory_indices.append(synapse_idx)
+                    synapse_idx += 1
+        return inhibitory_indices
 
 
 # =============================================================================

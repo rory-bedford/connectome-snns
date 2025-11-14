@@ -35,10 +35,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
                 - all_s: Spike trains of shape (batch_size, n_steps, n_neurons)
                 - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
-                - all_I: Synaptic input currents of shape (batch_size, n_steps, n_neurons, n_cell_types)
-                - all_I_FF: Feedforward synaptic input currents of shape (batch_size, n_steps, n_neurons, n_cell_types_FF)
-                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_cell_types) where dim 3 is [rise, decay]
-                - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_cell_types_FF) where dim 3 is [rise, decay]
+                - all_I: Synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types)
+                - all_I_FF: Feedforward synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types) where dim 3 is [rise, decay]
+                - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF) where dim 3 is [rise, decay]
         """
 
         # ===============

@@ -336,6 +336,7 @@ def main(output_dir, params_file):
         feedforward_g_bar_by_type=params.feedforward.get_g_bar_by_type(),
     )
 
+    # Compute total excitatory and inhibitory currents from recurrent and feedforward
     # Generate activity dashboard
     activity_fig = create_activity_dashboard(
         output_spikes=output_spikes,
@@ -346,6 +347,13 @@ def main(output_dir, params_file):
         voltages=output_voltages,
         neuron_types=cell_type_indices,
         neuron_params=params.recurrent.get_neuron_params_for_plotting(),
+        recurrent_currents=output_currents,
+        feedforward_currents=output_currents_FF,
+        recurrent_conductances=output_conductances,
+        feedforward_conductances=output_conductances_FF,
+        input_cell_type_names=params.feedforward.cell_types.names,
+        recurrent_synapse_names=params.recurrent.get_synapse_names(),
+        feedforward_synapse_names=params.feedforward.get_synapse_names(),
         window_size=50.0,
         n_neurons_plot=20,
         fraction=1.0,

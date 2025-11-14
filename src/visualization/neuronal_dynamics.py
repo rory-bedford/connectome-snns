@@ -5,6 +5,11 @@ from matplotlib.patches import Patch
 import numpy as np
 from numpy.typing import NDArray
 
+from src.network_simulators.conductance_based.parameter_loader import (
+    EXCITATORY_SYNAPSE_TYPES,
+    INHIBITORY_SYNAPSE_TYPES,
+)
+
 
 def _round_to_nice_limit(value: float) -> float:
     """Round a value up to a nice round number (power of 10 times 1, 2, or 5).
@@ -49,7 +54,7 @@ def plot_membrane_voltages(
     y_max: float = 0.0,
     y_tick_step: float = 50.0,
     figsize: tuple[float, float] = (12, 12),
-    ax: plt.Axes | None = None,
+    ax: plt.Axes | list[plt.Axes] | None = None,
 ) -> plt.Figure | None:
     """
     Visualize membrane voltage traces with spike markers.
@@ -67,9 +72,8 @@ def plot_membrane_voltages(
         y_max (float): Maximum y-axis value in mV. Defaults to 0.0.
         y_tick_step (float): Step size for y-axis ticks. Defaults to 50.0.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
-        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
-            Note: This function creates a multi-subplot figure internally, so ax parameter
-            is accepted but ignored to maintain API consistency.
+        ax (plt.Axes | list[plt.Axes] | None): Matplotlib axes to plot on.
+            Can be a single axis, list of axes (one per neuron), or None to create new figure.
 
     Returns:
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
@@ -78,20 +82,30 @@ def plot_membrane_voltages(
     n_steps = voltages.shape[1]
     n_steps_plot = int(n_steps * fraction)
 
-    y_ticks = np.arange(y_min, y_max + 1, y_tick_step)
-
-    # Multi-subplot function, ax parameter ignored for consistency
+    # Handle axes parameter
     if ax is None:
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
         return_fig = True
+    elif isinstance(ax, list):
+        # List of axes provided
+        if len(ax) != n_neurons_plot:
+            raise ValueError(f"Expected {n_neurons_plot} axes, got {len(ax)}")
+        axes = ax
+        fig = axes[0].get_figure()
+        return_fig = False
     else:
+        # Single axis provided - create our own figure
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
         return_fig = False
-    time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
+
+    # Time axis for the last n_steps_plot timesteps (aligned to end of simulation)
+    time_axis = (
+        np.arange(n_steps - n_steps_plot, n_steps) * delta_t * 1e-3
+    )  # Convert to seconds
 
     for neuron_id in range(n_neurons_plot):
-        voltage_trace = voltages[0, :n_steps_plot, neuron_id]
-        spike_times_neuron = np.where(spikes[0, :n_steps_plot, neuron_id])[0]
+        voltage_trace = voltages[0, -n_steps_plot:, neuron_id]
+        spike_times_neuron = np.where(spikes[0, -n_steps_plot:, neuron_id])[0]
 
         # Plot voltage trace
         axes[neuron_id].plot(time_axis, voltage_trace, linewidth=0.5, color="black")
@@ -101,7 +115,6 @@ def plot_membrane_voltages(
         params = neuron_params[cell_type_idx]
         threshold = params["threshold"]
         rest = params["rest"]
-        cell_name = params["name"]
 
         # Add threshold and rest lines
         axes[neuron_id].axhline(
@@ -123,34 +136,45 @@ def plot_membrane_voltages(
 
         # Mark spike times with vertical lines from threshold to zero
         if len(spike_times_neuron) > 0:
-            spike_times_s = spike_times_neuron * delta_t * 1e-3
-            for spike_t in spike_times_s:
-                axes[neuron_id].plot(
-                    [spike_t, spike_t],
-                    [threshold, 0],
-                    color="black",
-                    linewidth=0.5,
-                    alpha=0.7,
-                    zorder=5,
-                )
+            # Convert spike indices to absolute time (aligned to end of simulation)
+            spike_times_s = (
+                (n_steps - n_steps_plot + spike_times_neuron) * delta_t * 1e-3
+            )
+            # Vectorized plotting of spike markers
+            spike_x = np.repeat(spike_times_s, 2)
+            spike_y = np.tile([threshold, 0], len(spike_times_s))
+            axes[neuron_id].plot(
+                spike_x.reshape(-1, 2).T,
+                spike_y.reshape(-1, 2).T,
+                color="black",
+                linewidth=0.5,
+                alpha=0.7,
+                zorder=5,
+            )
 
-        # Create ylabel with cell type info
-        ylabel = f"Neuron {neuron_id} ({cell_name})\nVoltage (mV)"
-        axes[neuron_id].set_ylabel(ylabel, fontsize=9)
-        axes[neuron_id].set_xlim(0, time_axis[-1])  # Use actual data range
-        axes[neuron_id].set_ylim(y_min, y_max)
-        axes[neuron_id].set_yticks(y_ticks)
+        # Set ylabel
+        ylabel = "Membrane Potential (mV)"
+        axes[neuron_id].set_ylabel(ylabel, fontsize=10)
+        axes[neuron_id].tick_params(labelsize=9)
+        axes[neuron_id].set_ylim(-80, -20)
+        axes[neuron_id].set_yticks([-80, -70, -60, -50, -40, -30, -20])
         axes[neuron_id].grid(True, alpha=0.3)
 
         # Add legend to first subplot only
         if neuron_id == 0:
             axes[neuron_id].legend(loc="upper right", fontsize=7)
 
-    axes[-1].set_xlabel("Time (s)")
-    fig.suptitle(
-        f"Membrane Potential Traces (First {n_neurons_plot} Neurons)", fontsize=12
-    )
-    plt.tight_layout()
+    axes[-1].set_xlabel("Time (s)", fontsize=10)
+
+    # Set uniform tight xlim across all subplots with minimal extension for last tick
+    start_time_s = (n_steps - n_steps_plot) * delta_t * 1e-3
+    end_time_s = n_steps * delta_t * 1e-3
+    for ax in axes:
+        ax.set_xlim(start_time_s, end_time_s + 0.01)  # Add 0.01s for tick visibility
+        ax.margins(x=0)
+
+    if return_fig:
+        plt.tight_layout()
 
     return fig if return_fig else None
 
@@ -165,7 +189,7 @@ def plot_synaptic_currents(
     neuron_types: NDArray[np.int32] | None = None,
     neuron_params: dict | None = None,
     figsize: tuple[float, float] = (12, 12),
-    ax: plt.Axes | None = None,
+    ax: plt.Axes | list[plt.Axes] | None = None,
 ) -> plt.Figure | None:
     """
     Visualize excitatory and inhibitory synaptic currents.
@@ -180,9 +204,8 @@ def plot_synaptic_currents(
         neuron_types (NDArray[np.int32] | None): Array indicating neuron type indices. Defaults to None.
         neuron_params (dict | None): Dictionary mapping cell type indices to parameters. Defaults to None.
         figsize (tuple[float, float]): Figure size. Defaults to (12, 12).
-        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
-            Note: This function creates a multi-subplot figure internally, so ax parameter
-            is accepted but ignored to maintain API consistency.
+        ax (plt.Axes | list[plt.Axes] | None): Matplotlib axes to plot on. If None, creates new figure.
+            If list, should contain n_neurons_plot axes.
 
     Returns:
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
@@ -195,8 +218,8 @@ def plot_synaptic_currents(
     # Collect all current values to compute 98th percentile (excluding top 2% outliers)
     all_currents = []
     for neuron_id in range(n_neurons_plot):
-        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
-        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
+        I_exc_trace = I_exc[0, -n_steps_plot:, neuron_id]
+        I_inh_trace = I_inh[0, -n_steps_plot:, neuron_id]
         all_currents.extend(np.abs(I_exc_trace))
         all_currents.extend(np.abs(I_inh_trace))
 
@@ -205,19 +228,29 @@ def plot_synaptic_currents(
 
     y_lim = _round_to_nice_limit(max_current)
 
-    # Multi-subplot function, ax parameter ignored for consistency
-    if ax is None:
+    # Handle axes
+    if isinstance(ax, list):
+        if len(ax) != n_neurons_plot:
+            raise ValueError(f"Expected {n_neurons_plot} axes, got {len(ax)}")
+        axes = ax
+        fig = axes[0].get_figure()
+        return_fig = False
+    elif ax is None:
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
         return_fig = True
     else:
+        # Single axis provided - treat as legacy behavior
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
         return_fig = False
-    time_axis = np.arange(n_steps_plot) * delta_t * 1e-3  # Convert to seconds
+    # Time axis for the last n_steps_plot timesteps (aligned to end of simulation)
+    time_axis = (
+        np.arange(n_steps - n_steps_plot, n_steps) * delta_t * 1e-3
+    )  # Convert to seconds
 
     for neuron_id in range(n_neurons_plot):
         # Extract excitatory and inhibitory currents for this neuron
-        I_exc_trace = I_exc[0, :n_steps_plot, neuron_id]
-        I_inh_trace = I_inh[0, :n_steps_plot, neuron_id]
+        I_exc_trace = I_exc[0, -n_steps_plot:, neuron_id]
+        I_inh_trace = I_inh[0, -n_steps_plot:, neuron_id]
         I_total_trace = I_exc_trace + I_inh_trace
 
         # Compute mean total current over full simulation (not just plotted portion)
@@ -263,28 +296,25 @@ def plot_synaptic_currents(
             y=mean_total, color="black", linestyle="--", linewidth=0.8, alpha=0.5
         )
 
-        # Add mean total current as text annotation on the right
+        # Add mean total current as text annotation in top left corner
         axes[neuron_id].text(
-            1.04,
-            0.5,
+            0.02,
+            0.95,
             f"mean current = {mean_total:.2f} pA",
             transform=axes[neuron_id].transAxes,
-            fontsize=7,
-            va="center",
+            fontsize=8,
+            va="top",
             ha="left",
             color="black",
+            bbox=dict(
+                boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray", alpha=0.8
+            ),
         )
 
-        # Add ylabel with cell type info
-        cell_type_idx = neuron_types[neuron_id] if neuron_types is not None else None
-        if cell_type_idx is not None and neuron_params is not None:
-            cell_name = neuron_params[cell_type_idx]["name"]
-            ylabel = f"Neuron {neuron_id} ({cell_name})\nCurrent (pA)"
-        else:
-            ylabel = f"Neuron {neuron_id}\nCurrent (pA)"
-
-        axes[neuron_id].set_ylabel(ylabel, fontsize=9)
-        axes[neuron_id].set_xlim(0, time_axis[-1])  # Use actual data range
+        # Set ylabel
+        ylabel = "Input Current (pA)"
+        axes[neuron_id].set_ylabel(ylabel, fontsize=10)
+        axes[neuron_id].tick_params(labelsize=9)
         axes[neuron_id].set_ylim(-y_lim, y_lim)
         axes[neuron_id].grid(True, alpha=0.3)
 
@@ -292,11 +322,17 @@ def plot_synaptic_currents(
         if neuron_id == 0:
             axes[neuron_id].legend(loc="upper right", fontsize=7)
 
-    axes[-1].set_xlabel("Time (s)")
-    fig.suptitle(
-        f"Synaptic Current Inputs (First {n_neurons_plot} Neurons)", fontsize=12
-    )
-    plt.tight_layout()
+    axes[-1].set_xlabel("Time (s)", fontsize=10)
+
+    # Set uniform tight xlim across all subplots with minimal extension for last tick
+    start_time_s = (n_steps - n_steps_plot) * delta_t * 1e-3
+    end_time_s = n_steps * delta_t * 1e-3
+    for ax in axes:
+        ax.set_xlim(start_time_s, end_time_s + 0.01)  # Add 0.01s for tick visibility
+        ax.margins(x=0)
+
+    if return_fig:
+        plt.tight_layout()
 
     return fig if return_fig else None
 
@@ -359,48 +395,77 @@ def plot_spike_trains(
     if cell_type_indices is not None and cell_type_names is not None:
         n_cell_types = len(cell_type_names)
 
-        # Define colors: red, blue, then tab10 colormap for additional types
+        # Define colors: gray for feedforward (-1 index), then red, blue, then tab10 colormap
+        colors_map = {-1: "#808080"}  # Gray for feedforward neurons (index -1)
         base_colors = ["#FF0000", "#0000FF"]
-        if n_cell_types <= 2:
-            colors_map = base_colors[:n_cell_types]
+
+        # Subtract 1 from n_cell_types if first name is "Feedforward" (already accounted for in colors_map)
+        recurrent_start_idx = (
+            1 if (n_cell_types > 0 and cell_type_names[0] == "Feedforward") else 0
+        )
+        n_recurrent_types = n_cell_types - recurrent_start_idx
+
+        if n_recurrent_types <= 2:
+            recurrent_colors = base_colors[:n_recurrent_types]
         else:
             cmap = plt.cm.get_cmap("tab10")
-            additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-            colors_map = base_colors + additional_colors
+            additional_colors = [cmap(i) for i in range(n_recurrent_types - 2)]
+            recurrent_colors = base_colors + additional_colors
 
-        # Shuffle neuron indices
-        rng = np.random.RandomState(random_seed)
-        total_neurons = spikes.shape[2]
-        # Ensure we don't try to plot more neurons than exist
-        n_neurons_plot = min(n_neurons_plot, total_neurons)
-        shuffled_indices = rng.permutation(total_neurons)[:n_neurons_plot]
+        # Map recurrent cell type indices to colors (0, 1, 2, ... -> colors)
+        for i in range(n_recurrent_types):
+            colors_map[i] = recurrent_colors[i]
 
-        # Extract subset of spikes for selected neurons (respecting fraction)
+        # Shuffle or select neuron indices
+        if random_seed is not None:
+            rng = np.random.RandomState(random_seed)
+            total_neurons = spikes.shape[2]
+            # Ensure we don't try to plot more neurons than exist
+            n_neurons_plot = min(n_neurons_plot, total_neurons)
+            shuffled_indices = rng.permutation(total_neurons)[:n_neurons_plot]
+        else:
+            # No shuffling - use neurons as provided
+            total_neurons = spikes.shape[2]
+            n_neurons_plot = min(n_neurons_plot, total_neurons)
+            shuffled_indices = np.arange(n_neurons_plot)
+
+        # Extract subset of spikes for selected neurons (last n_steps_plot timesteps)
         # Use explicit indexing with np.take to ensure correct shape
-        spikes_subset = np.take(spikes[0, :n_steps_plot, :], shuffled_indices, axis=1)
+        spikes_subset = np.take(spikes[0, -n_steps_plot:, :], shuffled_indices, axis=1)
         cell_types_subset = cell_type_indices[shuffled_indices]
 
         # np.where returns (time_indices, neuron_indices) for shape (time, neurons)
         spike_times, neuron_ids = np.where(spikes_subset)
 
-        # Color spikes by cell type - neuron_ids are indices into the subset [0, n_neurons_plot)
+        # Vectorized color mapping using numpy indexing
         spike_colors = [colors_map[cell_types_subset[nid]] for nid in neuron_ids]
 
-        ax_to_use.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, c=spike_colors)
+        # Convert spike times to absolute time (aligned to end of simulation)
+        spike_times_abs = (n_steps - n_steps_plot + spike_times) * dt * 1e-3
+        ax_to_use.scatter(spike_times_abs, neuron_ids, s=1, c=spike_colors)
 
         # Create legend with cell type names
-        legend_elements = [
-            Patch(facecolor=colors_map[i], label=cell_type_names[i])
-            for i in range(n_cell_types)
-        ]
-        ax_to_use.legend(handles=legend_elements, loc="upper right")
+        legend_elements = []
+        for i in range(n_cell_types):
+            # Map cell type name index to actual color index
+            if i == 0 and cell_type_names[0] == "Feedforward":
+                color_idx = -1  # Feedforward uses -1
+            else:
+                color_idx = i - recurrent_start_idx  # Recurrent types
+            legend_elements.append(
+                Patch(
+                    facecolor=colors_map[color_idx],
+                    label=cell_type_names[i].capitalize(),
+                )
+            )
+        ax_to_use.legend(handles=legend_elements, loc="upper right", fontsize=9)
 
         ax_to_use.set_yticks([])  # Remove y-axis tick labels
         default_title = "Spike Trains (colored by cell type)"
-        ylabel = "Neuron (shuffled)"
+        ylabel = ""
     else:
-        # Single cell type case
-        spike_times, neuron_ids = np.where(spikes[0, :n_steps_plot, :n_neurons_plot])
+        # Single cell type case - show last n_steps_plot timesteps
+        spike_times, neuron_ids = np.where(spikes[0, -n_steps_plot:, :n_neurons_plot])
 
         # Determine color based on cell_type
         if cell_type is not None and cell_type.lower() == "mitral":
@@ -409,21 +474,26 @@ def plot_spike_trains(
             # For unknown cell types, use a default color
             color = "black"
 
-        ax_to_use.scatter(spike_times * dt * 1e-3, neuron_ids, s=1, color=color)
+        # Convert spike times to absolute time (aligned to end of simulation)
+        spike_times_abs = (n_steps - n_steps_plot + spike_times) * dt * 1e-3
+        ax_to_use.scatter(spike_times_abs, neuron_ids, s=1, color=color)
         ax_to_use.set_yticks(range(n_neurons_plot))
         default_title = (
             f"Sample {cell_type.title() if cell_type else ''} Spike Trains".strip()
         )
 
-    ax_to_use.set_xlabel("Time (s)")
-    ax_to_use.set_ylabel(ylabel)
-    ax_to_use.set_title(title if title is not None else default_title)
+    ax_to_use.set_xlabel("Time (s)", fontsize=10)
+    ax_to_use.set_ylabel(ylabel, fontsize=10)
+    ax_to_use.set_title(title if title is not None else default_title, fontsize=11)
+    ax_to_use.tick_params(labelsize=9)
     ax_to_use.set_ylim(-0.5, n_neurons_plot - 0.5)
 
-    # Set x-axis limit based on actual plotted duration
-    # n_steps_plot is already calculated in both branches above
-    actual_duration_s = n_steps_plot * dt * 1e-3
-    ax_to_use.set_xlim(0, actual_duration_s)
+    # Set tight xlim with minimal extension for last tick
+    start_time_s = (n_steps - n_steps_plot) * dt * 1e-3
+    end_time_s = n_steps * dt * 1e-3
+    ax_to_use.set_xlim(start_time_s, end_time_s + 0.01)  # Add 0.01s for tick visibility
+    ax_to_use.margins(x=0)
+    ax_to_use.margins(x=0)
     if return_fig:
         plt.tight_layout()
 
@@ -496,8 +566,8 @@ def plot_dp_network_spikes(
 
 
 def plot_synaptic_conductances(
-    output_conductances: NDArray[np.float32],
-    input_conductances: NDArray[np.float32],
+    recurrent_conductances: NDArray[np.float32],
+    feedforward_conductances: NDArray[np.float32],
     cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     input_cell_type_names: list[str],
@@ -506,15 +576,15 @@ def plot_synaptic_conductances(
     dt: float,
     neuron_id: int = 0,
     fraction: float = 1.0,
-    ax: plt.Axes | None = None,
+    ax: plt.Axes | list[plt.Axes] | None = None,
 ) -> plt.Figure | None:
-    """Plot synaptic conductances for a single neuron, with each synapse type on a separate subplot.
+    """Plot synaptic conductances for a single neuron, grouped into 3 subplots (E, I, Feedforward).
 
-    Shows both recurrent and feedforward conductances in separate subplots, one for each synapse type.
+    Plots individual synapse traces (AMPA, NMDA, GABA_A, GABA_B, etc.) grouped by type with unified legend.
 
     Args:
-        output_conductances (NDArray[np.float32]): Recurrent conductances with shape (batch, time, neurons, synapses).
-        input_conductances (NDArray[np.float32]): Feedforward conductances with shape (batch, time, neurons, synapses).
+        recurrent_conductances (NDArray[np.float32]): Recurrent conductances with shape (batch, time, neurons, synapses).
+        feedforward_conductances (NDArray[np.float32]): Feedforward conductances with shape (batch, time, neurons, synapses).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         cell_type_names (list[str]): Names of recurrent cell types.
         input_cell_type_names (list[str]): Names of input cell types.
@@ -523,61 +593,80 @@ def plot_synaptic_conductances(
         dt (float): Time step in milliseconds.
         neuron_id (int): Index of neuron to plot. Defaults to 0.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
-        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
-            Note: This function creates a multi-subplot figure internally, so ax parameter
-            is accepted but ignored to maintain API consistency.
+        ax (plt.Axes | list[plt.Axes] | None): Matplotlib axes to plot on. If None, creates new figure.
+            If list, should contain 3 axes (E, I, Feedforward).
 
     Returns:
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    # Build list of all synapse types (recurrent + feedforward)
-    all_synapse_labels = []
-
-    # Recurrent synapse types
-    for cell_type in cell_type_names:
-        synapse_names = recurrent_synapse_names[cell_type]
-        for syn_name in synapse_names:
-            all_synapse_labels.append(f"{cell_type} {syn_name}")
-
-    # Feedforward synapse types
-    ff_start_idx = len(all_synapse_labels)
-    for cell_type in input_cell_type_names:
-        synapse_names = feedforward_synapse_names[cell_type]
-        for syn_name in synapse_names:
-            all_synapse_labels.append(f"{cell_type} {syn_name}")
-
-    # Create time array
-    n_steps = output_conductances.shape[1]
+    # Create time array - use the maximum of recurrent and feedforward timesteps
+    n_steps_rec = recurrent_conductances.shape[1]
+    n_steps_ff = feedforward_conductances.shape[1]
+    n_steps = max(n_steps_rec, n_steps_ff)
     n_steps_plot = int(n_steps * fraction)
-    time_axis = np.arange(n_steps_plot) * dt * 1e-3  # Convert to seconds
 
-    # Color palette for different synapse types
-    cmap = plt.colormaps["tab10"]
-    colors = [cmap(i % 10) for i in range(len(all_synapse_labels))]
+    # Build synapse lists by category
+    # Conductance array is organized by PRESYNAPTIC cell type, not postsynaptic
+    # So we iterate through ALL cell types and their synapse types
+    exc_synapses = []  # (idx, name)
+    inh_synapses = []
 
-    # Get cell type for this neuron
-    cell_type_idx = cell_type_indices[neuron_id]
-    cell_name = cell_type_names[cell_type_idx]
+    synapse_idx = 0
+    for cell_name in cell_type_names:
+        synapse_names_list = recurrent_synapse_names[cell_name]
+        for syn_name in synapse_names_list:
+            if syn_name in EXCITATORY_SYNAPSE_TYPES:
+                exc_synapses.append((synapse_idx, syn_name))
+            elif syn_name in INHIBITORY_SYNAPSE_TYPES:
+                inh_synapses.append((synapse_idx, syn_name))
+            synapse_idx += 1
 
-    # Automatically compute nice round y-axis limit based on data
-    # Collect all conductance values to compute 98th percentile (excluding top 2% outliers)
+    # Feedforward synapses
+    ff_synapses = []
+    for input_idx, input_cell_name in enumerate(input_cell_type_names):
+        ff_syn_names = feedforward_synapse_names[input_cell_name]
+        # For feedforward, we need to track which synapse indices they are
+        for ff_syn_idx, ff_syn_name in enumerate(ff_syn_names):
+            # Calculate global ff index
+            global_ff_idx = (
+                sum(
+                    len(feedforward_synapse_names[input_cell_type_names[i]])
+                    for i in range(input_idx)
+                )
+                + ff_syn_idx
+            )
+            ff_synapses.append((global_ff_idx, f"{input_cell_name} {ff_syn_name}"))
+
+    # Calculate separate slicing for recurrent and feedforward to handle different lengths
+    # We want to plot the last n_steps_plot from the total n_steps timeline
+    rec_start_idx = max(0, n_steps_rec - n_steps_plot)
+    ff_start_idx = max(0, n_steps_ff - n_steps_plot)
+
+    # Create time axes for each - they should align to the same absolute time
+    time_axis_rec = (
+        np.arange(n_steps - (n_steps_rec - rec_start_idx), n_steps) * dt * 1e-3
+    )
+    time_axis_ff = np.arange(n_steps - (n_steps_ff - ff_start_idx), n_steps) * dt * 1e-3
+
+    # Collect all conductance traces to compute y-axis limit
     all_conductances = []
-    for syn_idx in range(output_conductances.shape[3]):
-        g_trace = output_conductances[0, :n_steps_plot, neuron_id, syn_idx]
-        all_conductances.extend(g_trace)
-    for syn_idx in range(input_conductances.shape[3]):
-        g_trace = input_conductances[0, :n_steps_plot, neuron_id, syn_idx]
-        all_conductances.extend(g_trace)
+    for syn_idx, _ in exc_synapses:
+        g_trace = recurrent_conductances[0, rec_start_idx:, neuron_id, syn_idx]
+        all_conductances.extend(g_trace.flatten())
+    for syn_idx, _ in inh_synapses:
+        g_trace = recurrent_conductances[0, rec_start_idx:, neuron_id, syn_idx]
+        all_conductances.extend(g_trace.flatten())
+    for syn_idx, _ in ff_synapses:
+        g_trace = feedforward_conductances[0, ff_start_idx:, neuron_id, syn_idx]
+        all_conductances.extend(g_trace.flatten())
 
-    # Use 98th percentile instead of max to avoid outliers
-    max_conductance = np.percentile(all_conductances, 98)
-
-    # Round to nice limit
-    if max_conductance <= 0:
+    # Compute y-axis limit
+    max_g = np.percentile(all_conductances, 98) if len(all_conductances) > 0 else 1.0
+    if max_g <= 0:
         y_lim = 1.0
     else:
-        magnitude = 10 ** np.floor(np.log10(max_conductance))
-        normalized = max_conductance / magnitude
+        magnitude = 10 ** np.floor(np.log10(max_g))
+        normalized = max_g / magnitude
         if normalized <= 1:
             nice_normalized = 1
         elif normalized <= 2:
@@ -588,62 +677,156 @@ def plot_synaptic_conductances(
             nice_normalized = 10
         y_lim = nice_normalized * magnitude
 
-    # Total number of synapse types
-    n_synapses = output_conductances.shape[3] + input_conductances.shape[3]
-
-    # Create figure with subplots for each synapse type - multi-subplot, ax ignored
-    if ax is None:
-        fig, axes = plt.subplots(
-            n_synapses, 1, figsize=(14, 2 * n_synapses), sharex=True, sharey=True
-        )
+    # Handle axes - expect 3 axes for E, I, FF
+    if isinstance(ax, list):
+        if len(ax) != 3:
+            raise ValueError(f"Expected 3 axes (E, I, FF), got {len(ax)}")
+        axes = ax
+        fig = axes[0].get_figure()
+        return_fig = False
+    elif ax is None:
+        fig, axes = plt.subplots(3, 1, figsize=(14, 6), sharex=True, sharey=True)
         return_fig = True
     else:
-        fig, axes = plt.subplots(
-            n_synapses, 1, figsize=(14, 2 * n_synapses), sharex=True, sharey=True
-        )
+        # Single axis provided - create 3 subplots
+        fig, axes = plt.subplots(3, 1, figsize=(14, 6), sharex=True, sharey=True)
         return_fig = False
-    if n_synapses == 1:
-        axes = [axes]
 
-    # Plot recurrent conductances
-    for syn_idx in range(output_conductances.shape[3]):
-        ax = axes[syn_idx]
-        g_trace = output_conductances[0, :n_steps_plot, neuron_id, syn_idx]
-        ax.plot(
-            time_axis,
+    # Create unified color mapping for synapse types (not cell types)
+    # Collect all unique synapse types present
+    all_synapse_types = set()
+    for _, syn_name in exc_synapses:
+        all_synapse_types.add(syn_name)
+    for _, syn_name in inh_synapses:
+        all_synapse_types.add(syn_name)
+    # For feedforward, extract just the synapse type (not cell type prefix)
+    for _, syn_label in ff_synapses:
+        syn_type = syn_label.split()[-1]  # Get last word (AMPA, NMDA, etc.)
+        all_synapse_types.add(syn_type)
+
+    # Assign consistent colors to synapse types using a more discriminable palette
+    synapse_types_list = sorted(all_synapse_types)
+    # Use Set1 colormap for better discrimination
+    cmap = plt.colormaps["Set1"]
+    synapse_color_map = {
+        syn_type: cmap(i % 9) for i, syn_type in enumerate(synapse_types_list)
+    }
+
+    # Track which synapse types we've added to legend (for unified legend)
+    legend_handles = {}
+
+    # Plot excitatory conductances
+    for syn_idx, syn_name in exc_synapses:
+        g_trace = recurrent_conductances[0, rec_start_idx:, neuron_id, syn_idx]
+        lines = axes[0].plot(
+            time_axis_rec,
             g_trace,
-            linewidth=1.0,
-            color=colors[syn_idx],
+            color=synapse_color_map[syn_name],
+            linewidth=1,
             alpha=0.8,
         )
-        ax.set_ylabel("Conductance (nS)", fontsize=9)
-        ax.set_ylim(0, y_lim)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(all_synapse_labels[syn_idx], fontsize=10, loc="left")
+        if syn_name not in legend_handles and len(lines) > 0:
+            legend_handles[syn_name] = lines[0]
+    axes[0].set_ylim(0, y_lim)
+    axes[0].tick_params(labelsize=9)
+    # Add label in top left
+    axes[0].text(
+        0.02,
+        0.98,
+        "Excitatory",
+        transform=axes[0].transAxes,
+        fontsize=9,
+        va="top",
+        ha="left",
+    )
+
+    # Plot inhibitory conductances
+    for syn_idx, syn_name in inh_synapses:
+        g_trace = recurrent_conductances[0, rec_start_idx:, neuron_id, syn_idx]
+        lines = axes[1].plot(
+            time_axis_rec,
+            g_trace,
+            color=synapse_color_map[syn_name],
+            linewidth=1,
+            alpha=0.8,
+        )
+        if syn_name not in legend_handles and len(lines) > 0:
+            legend_handles[syn_name] = lines[0]
+    axes[1].set_ylabel("Conductance (µS)", fontsize=10)
+    axes[1].set_ylim(0, y_lim)
+    axes[1].tick_params(labelsize=9)
+    # Add label in top left
+    axes[1].text(
+        0.02,
+        0.98,
+        "Inhibitory",
+        transform=axes[1].transAxes,
+        fontsize=9,
+        va="top",
+        ha="left",
+    )
 
     # Plot feedforward conductances
-    for syn_idx in range(input_conductances.shape[3]):
-        ax = axes[output_conductances.shape[3] + syn_idx]
-        g_trace = input_conductances[0, :n_steps_plot, neuron_id, syn_idx]
-        ax.plot(
-            time_axis,
+    for syn_idx, syn_label in ff_synapses:
+        syn_type = syn_label.split()[-1]  # Extract synapse type
+        g_trace = feedforward_conductances[0, ff_start_idx:, neuron_id, syn_idx]
+        lines = axes[2].plot(
+            time_axis_ff,
             g_trace,
-            linewidth=1.0,
-            color=colors[ff_start_idx + syn_idx],
+            color=synapse_color_map[syn_type],
+            linewidth=1,
             alpha=0.8,
         )
-        ax.set_ylabel("Conductance (nS)", fontsize=9)
-        ax.set_ylim(0, y_lim)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(
-            all_synapse_labels[ff_start_idx + syn_idx], fontsize=10, loc="left"
+        if syn_type not in legend_handles and len(lines) > 0:
+            legend_handles[syn_type] = lines[0]
+    axes[2].set_ylim(0, y_lim)
+    axes[2].tick_params(labelsize=9)
+    # Add label in top left
+    axes[2].text(
+        0.02,
+        0.98,
+        "Feedforward",
+        transform=axes[2].transAxes,
+        fontsize=9,
+        va="top",
+        ha="left",
+    )
+
+    # Add unified legend on top subplot (top right)
+    if legend_handles:
+        axes[0].legend(
+            legend_handles.values(),
+            legend_handles.keys(),
+            fontsize=9,
+            loc="upper right",
         )
 
-    axes[-1].set_xlabel("Time (s)")
-    axes[-1].set_xlim(0, time_axis[-1])  # Use actual data range
-    fig.suptitle(
-        f"Synaptic Conductances - Neuron {neuron_id} ({cell_name})", fontsize=14
+    # Set common x-axis properties
+    axes[-1].set_xlabel("Time (s)", fontsize=10)
+    # Use the max time from both rec and ff
+    max_time = max(
+        time_axis_rec[-1] if len(time_axis_rec) > 0 else 0,
+        time_axis_ff[-1] if len(time_axis_ff) > 0 else 0,
     )
-    plt.tight_layout()
+    min_time = min(
+        time_axis_rec[0] if len(time_axis_rec) > 0 else max_time,
+        time_axis_ff[0] if len(time_axis_ff) > 0 else max_time,
+    )
+
+    # Remove x margins so plots span full time range
+    # Hide tick labels for top two subplots
+    for i, ax in enumerate(axes):
+        ax.set_xlim(min_time, max_time)
+        ax.margins(x=0)
+        if i < len(axes) - 1:  # Not the last subplot
+            ax.set_xticklabels([])
+
+    # Set tight xlim with minimal extension for last tick
+    for ax in axes:
+        ax.set_xlim(min_time, max_time + 0.01)  # Add 0.01s for tick visibility
+        ax.margins(x=0)
+
+    if return_fig:
+        plt.tight_layout()
 
     return fig if return_fig else None
