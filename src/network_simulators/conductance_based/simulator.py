@@ -146,7 +146,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 self.scaling_factors,
                 self.scaling_factors_FF,
                 self.cell_type_indices,
-                self.cell_type_indices_FF,
+                self.g_scale,
             )
 
             # Store variables
@@ -184,10 +184,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         cell_type_masks_FF: list[torch.Tensor],
         cell_to_synapse_mask: torch.Tensor,
         cell_to_synapse_mask_FF: torch.Tensor,
-        scaling_factors: torch.Tensor | None,
-        scaling_factors_FF: torch.Tensor | None,
+        scaling_factors: torch.Tensor,
+        scaling_factors_FF: torch.Tensor,
         cell_type_indices: torch.Tensor,
-        cell_type_indices_FF: torch.Tensor,
+        g_scale: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Single timestep of conductance-based LIF network simulation.
 
@@ -214,10 +214,11 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             cell_type_masks_FF: Boolean masks for grouping inputs by cell type.
             cell_to_synapse_mask: Maps recurrent cell types to their synapse types.
             cell_to_synapse_mask_FF: Maps feedforward cell types to their synapse types.
-            scaling_factors: Recurrent scaling factors (n_cell_types, n_cell_types) or None.
-            scaling_factors_FF: Feedforward scaling factors (n_cell_types_FF, n_cell_types) or None.
+            scaling_factors: Recurrent scaling factors (n_cell_types, n_cell_types).
+            scaling_factors_FF: Feedforward scaling factors (n_cell_types_FF, n_cell_types).
             cell_type_indices: Maps each neuron to its cell type (n_neurons,).
-            cell_type_indices_FF: Maps each input to its cell type (n_inputs,).
+            g_scale: Conductance scaling factors (2, n_synapse_types_total) in nS.
+                Converts weight units to conductance units. First dimension is [rise, decay].
 
         Returns:
             tuple: (updated_v, updated_g, spikes, synaptic_currents) where:
@@ -239,44 +240,30 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             1 - s
         ) + U_reset * s.detach()
 
-        # Compute conductance updates
+        # Compute conductance updates with decay
         g *= alpha  # Decay with synapse time constant
 
         # Loop over cell types to update conductances, split by presynaptic cell type
         for k, cell_type_mask in enumerate(cell_type_masks):
-            # Recurrent synapses - only process if this cell type has synapses
             if cell_to_synapse_mask[k].any():
-                s_k = s[:, cell_type_mask]
-                W_k = weights[cell_type_mask, :]
-                # Apply scaling factors if they exist
-                if scaling_factors is not None:
-                    # For presynaptic cell type k, get scaling to each postsynaptic neuron
-                    neuron_scaling = scaling_factors[
-                        k, cell_type_indices
-                    ]  # Shape: (n_neurons,)
-                    W_k = (
-                        W_k * neuron_scaling[None, :]
-                    )  # Broadcast over presynaptic neurons
-                g[:, :, 0, cell_to_synapse_mask[k]] += torch.matmul(s_k, W_k)[
-                    :, :, None
-                ]
+                g[:, :, :, cell_to_synapse_mask[k]] += (
+                    torch.matmul(
+                        s[:, cell_type_mask],
+                        weights[cell_type_mask, :]
+                        * scaling_factors[k, cell_type_indices][None, :],
+                    )[:, :, None, None]
+                    * g_scale[None, None, :, cell_to_synapse_mask[k]]
+                )
 
         for k, cell_type_mask_FF in enumerate(cell_type_masks_FF):
-            # Feedforward synapses - only process if this cell type has synapses
             if cell_to_synapse_mask_FF[k].any():
-                input_k = input_spikes_t[:, cell_type_mask_FF].float()
-                W_k_FF = weights_FF[cell_type_mask_FF, :]
-                # Apply scaling factors if they exist
-                if scaling_factors_FF is not None:
-                    # For feedforward cell type k, get scaling to each postsynaptic neuron
-                    neuron_scaling_FF = scaling_factors_FF[
-                        k, cell_type_indices
-                    ]  # Shape: (n_neurons,)
-                    W_k_FF = (
-                        W_k_FF * neuron_scaling_FF[None, :]
-                    )  # Broadcast over presynaptic inputs
-                g[:, :, 0, cell_to_synapse_mask_FF[k]] += torch.matmul(input_k, W_k_FF)[
-                    :, :, None
-                ]
+                g[:, :, :, cell_to_synapse_mask_FF[k]] += (
+                    torch.matmul(
+                        input_spikes_t[:, cell_type_mask_FF].float(),
+                        weights_FF[cell_type_mask_FF, :]
+                        * scaling_factors_FF[k, cell_type_indices][None, :],
+                    )[:, :, None, None]
+                    * g_scale[None, None, :, cell_to_synapse_mask_FF[k]]
+                )
 
         return v, g, s, I

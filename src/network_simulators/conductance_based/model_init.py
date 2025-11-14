@@ -172,23 +172,28 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # ===========================================================
 
         # Register scaling factors (trainable if optimising scaling_factors)
-        if scaling_factors is not None:
-            self._register_parameter_or_buffer(
-                "scaling_factors",
-                scaling_factors,
-                trainable=(self.optimisable == "scaling_factors"),
+        # Initialize to ones if not provided
+        if scaling_factors is None:
+            scaling_factors = np.ones(
+                (self.n_cell_types, self.n_cell_types), dtype=np.float32
             )
-        else:
-            self.register_buffer("scaling_factors", None)
 
-        if scaling_factors_FF is not None:
-            self._register_parameter_or_buffer(
-                "scaling_factors_FF",
-                scaling_factors_FF,
-                trainable=(self.optimisable == "scaling_factors"),
+        self._register_parameter_or_buffer(
+            "scaling_factors",
+            scaling_factors,
+            trainable=(self.optimisable == "scaling_factors"),
+        )
+
+        if scaling_factors_FF is None:
+            scaling_factors_FF = np.ones(
+                (self.n_cell_types_FF, self.n_cell_types), dtype=np.float32
             )
-        else:
-            self.register_buffer("scaling_factors_FF", None)
+
+        self._register_parameter_or_buffer(
+            "scaling_factors_FF",
+            scaling_factors_FF,
+            trainable=(self.optimisable == "scaling_factors"),
+        )
 
         # ======================================================================
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
