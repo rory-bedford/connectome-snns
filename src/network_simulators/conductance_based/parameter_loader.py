@@ -42,19 +42,22 @@ class TrainingConfig(BaseModel):
     batch_size: int
 
 
-class Targets(BaseModel):
-    """Target values."""
+class ActivityTargetConfig(BaseModel):
+    """Target values for a single cell type."""
 
-    firing_rates: float
-    cvs: float
+    firing_rate: float
+
+
+class Targets(BaseModel):
+    """Target values for all cell types."""
+
+    firing_rate: Dict[str, float]
 
 
 class Hyperparameters(BaseModel):
     """Optimization hyperparameters."""
 
     surrgrad_scale: float
-    cv_high_loss: float
-    loss_ratio: float
     learning_rate: float
 
 
@@ -469,5 +472,25 @@ class HomeostaticPlasticityParams(BaseModel):
                 f"Number of chunks ({num_chunks}) must be a multiple of checkpoint_interval "
                 f"({self.training.checkpoint_interval}). Either adjust duration or checkpoint_interval."
             )
+
+        return self
+
+    @model_validator(mode="after")
+    def validate_target_cell_types(self) -> "HomeostaticPlasticityParams":
+        """Validate that target keys match recurrent cell types."""
+        recurrent_cell_types = set(self.recurrent.cell_types.names)
+        target_cell_types = set(self.targets.firing_rate.keys())
+
+        if target_cell_types != recurrent_cell_types:
+            missing_in_targets = recurrent_cell_types - target_cell_types
+            extra_in_targets = target_cell_types - recurrent_cell_types
+
+            error_msg = "Target cell types must match recurrent cell types."
+            if missing_in_targets:
+                error_msg += f"\n  Missing in targets: {missing_in_targets}"
+            if extra_in_targets:
+                error_msg += f"\n  Extra in targets: {extra_in_targets}"
+
+            raise ValueError(error_msg)
 
         return self

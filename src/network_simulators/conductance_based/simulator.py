@@ -111,7 +111,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Spike train storage (batch_size, n_steps, n_neurons)
         all_s = torch.empty(
             (batch_size, n_steps, self.n_neurons),
-            dtype=torch.bool,
+            dtype=torch.float32,
             device=self.device,
         )
 
@@ -209,7 +209,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 )
 
             # Store variables
-            all_s[:, t, :] = s.bool()
+            all_s[:, t, :] = s
             all_v[:, t, :] = v
             all_I[:, t, :, :] = I
             all_g[:, t, :, :, :] = g

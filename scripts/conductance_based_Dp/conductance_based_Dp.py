@@ -261,7 +261,7 @@ def main(output_dir, params_file):
 
             # Move to CPU and accumulate results
             if device == "cuda":
-                all_output_spikes.append(output_spikes.cpu())
+                all_output_spikes.append(output_spikes.bool().cpu())
                 all_output_voltages.append(output_voltages.cpu())
                 all_output_currents.append(output_currents.cpu())
                 all_output_currents_FF.append(output_currents_FF.cpu())
@@ -269,7 +269,7 @@ def main(output_dir, params_file):
                 all_output_conductances_FF.append(output_conductances_FF.cpu())
                 all_input_spikes.append(input_spikes_chunk.cpu())
             else:
-                all_output_spikes.append(output_spikes)
+                all_output_spikes.append(output_spikes.bool())
                 all_output_voltages.append(output_voltages)
                 all_output_currents.append(output_currents)
                 all_output_currents_FF.append(output_currents_FF)

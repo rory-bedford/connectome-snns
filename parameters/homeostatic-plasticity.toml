@@ -28,8 +28,8 @@ batch_size = 10                        # Number of batches to run in parallel fo
 # ====================
 
 [targets]
-firing_rates = 0.5                     # Hz - Target firing rate for all neuron types
-cvs = 1.0                              # Target correlation coefficient for all neuron types
+firing_rate.excitatory= 0.5           # Hz - Target firing rate for excitatory neurons
+firing_rate.inhibitory= 2.0           # Hz - Target firing rate for inhibitory neurons
 
 # ===============
 # HYPERPARAMETERS
@@ -37,8 +37,6 @@ cvs = 1.0                              # Target correlation coefficient for all 
 
 [hyperparameters]
 surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
-cv_high_loss = 10.0                    # Penalty in CV loss for spiketrains with fewer than two spikes
-loss_ratio = 0.5                       # Ratio of firing rate to CV losses
 learning_rate = 5e-4                   # Learning rate for ADAM optimiser
 
 # ==========================

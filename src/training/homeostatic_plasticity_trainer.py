@@ -84,7 +84,6 @@ class HomeostaticPlasticityTrainer:
 
         # Training state
         self.initial_states = {"v": None, "g": None, "g_FF": None}
-        self.loss_accumulators = []
         self.plot_accumulators = self._init_plot_accumulators()
 
         # Loss history for running averages (detached from computation graph)
@@ -152,14 +151,14 @@ class HomeostaticPlasticityTrainer:
             # Forward pass
             chunk_outputs = self._forward_pass()
 
-            # Update states for next chunk
+            # Compute losses and backward pass (do this BEFORE detaching anything)
+            losses = self._compute_losses(chunk_outputs)
+
+            # Update states for next chunk (now safe to detach)
             self._update_initial_states(chunk_outputs)
 
-            # Accumulate data
+            # Accumulate detached data for plotting
             self._accumulate_data(chunk_outputs, epoch)
-
-            # Compute losses and backward pass
-            losses = self._compute_losses()
 
             # Add detached losses to history for running averages
             detached_losses = {name: value for name, value in losses.items()}
@@ -191,7 +190,7 @@ class HomeostaticPlasticityTrainer:
             self.pbar.close()
 
         # Flush async logger to ensure all data is written
-        if hasattr(self.metrics_logger, 'close'):
+        if hasattr(self.metrics_logger, "close"):
             self.metrics_logger.close()
 
         # Close async plotter to ensure all plots are completed
@@ -212,9 +211,7 @@ class HomeostaticPlasticityTrainer:
             enabled=self.training.mixed_precision and self.device == "cuda",
         ):
             outputs = self.model.forward(
-                n_steps=self.simulation.chunk_size,
-                dt=self.simulation.dt,
-                inputs=input_spikes,
+                input_spikes=input_spikes,
                 initial_v=self.initial_states["v"],
                 initial_g=self.initial_states["g"],
                 initial_g_FF=self.initial_states["g_FF"],
@@ -241,10 +238,7 @@ class HomeostaticPlasticityTrainer:
     def _accumulate_data(
         self, chunk_outputs: Dict[str, torch.Tensor], epoch: int
     ) -> None:
-        """Accumulate data for loss computation and plotting."""
-        # Always accumulate spikes for loss computation
-        self.loss_accumulators.append(chunk_outputs["spikes"])
-
+        """Accumulate detached data for plotting only."""
         # Accumulate for plotting only when approaching checkpoint
         if self._should_store_for_plot(epoch):
             for key in self.plot_accumulators.keys():
@@ -252,18 +246,23 @@ class HomeostaticPlasticityTrainer:
                     tensor = chunk_outputs["input_spikes"]
                 else:
                     tensor = chunk_outputs[key]
-                
+
+                # Convert spikes to bool for storage efficiency
+                if key == "spikes":
+                    tensor = tensor.bool()
+
                 if self.device == "cuda":
                     numpy_array = tensor.detach().cpu().pin_memory().numpy()
                 else:
                     numpy_array = tensor.detach().numpy()
-                
+
                 self.plot_accumulators[key].append(numpy_array)
 
-    def _compute_losses(self) -> Dict[str, float]:
-        """Compute losses and perform backward pass."""
-        # Concatenate accumulated spikes
-        full_spikes = torch.cat(self.loss_accumulators, dim=1)
+    def _compute_losses(
+        self, chunk_outputs: Dict[str, torch.Tensor]
+    ) -> Dict[str, float]:
+        """Compute losses and perform backward pass for a single chunk."""
+        spikes = chunk_outputs["spikes"]
 
         # Compute losses with mixed precision
         with autocast(
@@ -273,7 +272,7 @@ class HomeostaticPlasticityTrainer:
             # Compute individual losses
             individual_losses = {}
             for loss_name, loss_fn in self.loss_functions.items():
-                individual_losses[loss_name] = loss_fn(full_spikes)
+                individual_losses[loss_name] = loss_fn(spikes)
 
             # Compute weighted total loss for optimization
             total_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
@@ -284,20 +283,19 @@ class HomeostaticPlasticityTrainer:
             # Scale by number of loss computations per update
             total_loss = total_loss / self.training.chunks_per_update
 
-        # Backward pass with weighted total loss
+        # Backward pass with weighted total loss (accumulates gradients)
         self.scaler.scale(total_loss).backward()
 
-        # Convert to numpy and cleanup
+        # Convert to detached scalars for logging
         losses = {"total": total_loss.detach().cpu().item()}
         # Add individual loss values for logging
         for loss_name, loss_value in individual_losses.items():
             losses[loss_name] = loss_value.detach().cpu().item()
 
         # Cleanup
-        del total_loss, full_spikes
+        del total_loss
         for loss_value in individual_losses.values():
             del loss_value
-        self.loss_accumulators.clear()
 
         return losses
 
@@ -325,7 +323,7 @@ class HomeostaticPlasticityTrainer:
         csv_data = {}
         for loss_name, loss_value in losses.items():
             csv_data[f"{loss_name}_loss"] = loss_value
-        
+
         # Add stats without modification
         csv_data.update(stats)
 
@@ -338,10 +336,10 @@ class HomeostaticPlasticityTrainer:
                 return tensor.detach().cpu().pin_memory().numpy()
             else:
                 return tensor.detach().cpu().numpy()
-        
+
         recurrent_weights_np = copy_tensor_optimized(self.model.weights)
         feedforward_weights_np = copy_tensor_optimized(self.model.weights_FF)
-        
+
         self.metrics_logger.save_weights(
             epoch=epoch + 1,
             recurrent_weights=recurrent_weights_np,
@@ -368,14 +366,12 @@ class HomeostaticPlasticityTrainer:
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
         """Save initial checkpoint before training begins."""
         # Create initial losses with infinity values for all configured loss functions
-        initial_losses = {
-            name: float('inf') for name in self.loss_functions.keys()
-        }
-        initial_losses['total'] = float('inf')
+        initial_losses = {name: float("inf") for name in self.loss_functions.keys()}
+        initial_losses["total"] = float("inf")
 
         # Ensure we have at least the total loss if no loss functions are configured
         if not initial_losses or len(initial_losses) == 1:
-            initial_losses = {'total': float('inf')}
+            initial_losses = {"total": float("inf")}
 
         # Save checkpoint with initial state
         # Use empty arrays for initial states since network hasn't run yet
@@ -389,7 +385,7 @@ class HomeostaticPlasticityTrainer:
             initial_g=np.array([]),  # Empty array for initial checkpoint
             initial_g_FF=np.array([]),  # Empty array for initial checkpoint
             input_spikes=np.array([]),  # Empty array for initial checkpoint
-            best_loss=float('inf'),
+            best_loss=float("inf"),
             **initial_losses,
         )
 
@@ -397,7 +393,9 @@ class HomeostaticPlasticityTrainer:
         if self.wandb_logger:
             import wandb
 
-            wandb_losses = {f"loss/{name}": value for name, value in initial_losses.items()}
+            wandb_losses = {
+                f"loss/{name}": value for name, value in initial_losses.items()
+            }
             wandb.log(wandb_losses, step=0)
 
         print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
@@ -569,11 +567,15 @@ class HomeostaticPlasticityTrainer:
                     postfix[display_name] = f"{loss_value:.4f}"
 
             # Add weight update indicator
-            chunks_since_update = (self.current_epoch + 1) % self.training.chunks_per_update
+            chunks_since_update = (
+                self.current_epoch + 1
+            ) % self.training.chunks_per_update
             if chunks_since_update == 0:
                 postfix["Status"] = "Updated"
             else:
-                postfix["Status"] = f"{chunks_since_update}/{self.training.chunks_per_update}"
+                postfix["Status"] = (
+                    f"{chunks_since_update}/{self.training.chunks_per_update}"
+                )
 
             self.pbar.set_postfix(postfix)
 
@@ -602,18 +604,18 @@ class HomeostaticPlasticityTrainer:
         """Compute running average of losses over the last log_interval epochs."""
         if not self.loss_history:
             return {}
-        
+
         # Get all loss names from the history
         all_loss_names = set()
         for loss_dict in self.loss_history:
             all_loss_names.update(loss_dict.keys())
-        
+
         # Compute average for each loss
         avg_losses = {}
         for loss_name in all_loss_names:
             values = [loss_dict.get(loss_name, 0.0) for loss_dict in self.loss_history]
             avg_losses[loss_name] = sum(values) / len(values)
-        
+
         return avg_losses
 
     def _print_checkpoint_info(self, losses: Dict[str, float]) -> None:
