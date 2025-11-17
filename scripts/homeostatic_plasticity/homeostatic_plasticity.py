@@ -362,10 +362,10 @@ def main(
             cell_cvs = cv_per_neuron[mask]
             valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
             stats[f"cv/{cell_type_name}/mean"] = (
-                float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+                float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
             stats[f"cv/{cell_type_name}/std"] = (
-                float(np.std(valid_cvs)) if len(valid_cvs) > 0 else 0.0
+                float(np.std(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
 
             # Fraction active

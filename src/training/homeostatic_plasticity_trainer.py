@@ -90,6 +90,10 @@ class HomeostaticPlasticityTrainer:
         # maxlen automatically handles rolling window
         self.loss_history = deque(maxlen=self.training.log_interval)
 
+        # Spike accumulator for computing statistics over log_interval chunks
+        # This ensures CV and other stats are computed on longer recordings
+        self.spike_accumulator = deque(maxlen=self.training.log_interval)
+
         # Track training state
         self.current_epoch = 0
         self.best_loss = float("inf")
@@ -164,14 +168,23 @@ class HomeostaticPlasticityTrainer:
             detached_losses = {name: value for name, value in losses.items()}
             self.loss_history.append(detached_losses)
 
+            # Accumulate spikes for statistics computation (only batch 0, as boolean for memory efficiency)
+            self.spike_accumulator.append(
+                chunk_outputs["spikes"][0:1, ...].detach().cpu().numpy().astype(bool)
+            )
+
             # Update weights if needed
             if self._should_update_weights(epoch):
                 self._update_weights()
 
-            # Log metrics (using running average of losses)
+            # Log metrics (using running average of losses and accumulated spikes)
             if self._should_log(epoch):
                 avg_losses = self._compute_average_losses()
-                self._log_metrics(avg_losses, chunk_outputs["spikes"], epoch)
+                # Concatenate accumulated spikes along time axis (axis=1)
+                accumulated_spikes = np.concatenate(
+                    list(self.spike_accumulator), axis=1
+                )
+                self._log_metrics(avg_losses, accumulated_spikes, epoch)
 
             # Checkpoint and plot
             if self._should_checkpoint(epoch) and output_dir:
@@ -314,13 +327,19 @@ class HomeostaticPlasticityTrainer:
             torch.cuda.empty_cache()
 
     def _log_metrics(
-        self, losses: Dict[str, float], spikes: torch.Tensor, epoch: int
+        self, losses: Dict[str, float], spikes: np.ndarray, epoch: int
     ) -> None:
-        """Log metrics to CSV and wandb."""
+        """Log metrics to CSV and wandb.
+
+        Args:
+            losses: Dictionary of loss values
+            spikes: Accumulated spike data as numpy array (already on CPU)
+            epoch: Current epoch number
+        """
         # Compute statistics if function provided
         stats = {}
         if self.stats_computer:
-            stats = self.stats_computer(spikes.detach().cpu().numpy())
+            stats = self.stats_computer(spikes)
 
         # Prepare CSV data with _loss suffix for loss names
         csv_data = {}
