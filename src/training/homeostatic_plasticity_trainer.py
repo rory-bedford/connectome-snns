@@ -127,13 +127,13 @@ class HomeostaticPlasticityTrainer:
         # Initialize gradient accumulation
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Initialize async plotter if plot generator is provided and we have output_dir
+        # Initialize async plotter if conditions are met
         if self.plot_generator and output_dir and self.async_plotter is None:
             self.async_plotter = AsyncPlotter(
                 plot_generator=self.plot_generator,
                 output_dir=output_dir,
                 wandb_logger=self.wandb_logger,
-                max_queue_size=3,
+                max_queue_size=1,
             )
 
         # Save initial checkpoint at epoch 0 if starting from beginning
@@ -445,16 +445,18 @@ class HomeostaticPlasticityTrainer:
                 else:
                     return tensor.detach().cpu().numpy()
 
-            # Convert plot_data (which is already numpy from _concatenate_plot_data)
-            # and weights from GPU tensors to numpy arrays
-            numpy_weights = copy_tensor_optimized(self.model.weights)
-            numpy_weights_ff = copy_tensor_optimized(self.model.weights_FF)
+            # Take only first batch (index 0) to reduce data size, keeping batch dimension
+            plot_data = {key: arr[0:1, ...] for key, arr in plot_data.items()}
+
+            # Add weights
+            plot_data["weights"] = copy_tensor_optimized(self.model.weights)
+            plot_data["feedforward_weights"] = copy_tensor_optimized(
+                self.model.weights_FF
+            )
 
             success = self.async_plotter.submit_plot(
                 plot_data=plot_data,
                 epoch=epoch,
-                weights=numpy_weights,
-                weights_ff=numpy_weights_ff,
             )
             if success:
                 print("  ✓ Plot job submitted for async processing")
