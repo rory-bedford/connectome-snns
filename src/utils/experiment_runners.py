@@ -20,10 +20,10 @@ def get_repo_root():
 def resolve_relative_to_repo(path_str):
     """
     Resolve a path relative to the repository root if it's not absolute.
-    
+
     Args:
         path_str: String path that may be relative or absolute
-        
+
     Returns:
         Path object resolved to absolute path
     """
@@ -69,7 +69,11 @@ def run_experiment(config_path=None, skip_git_check=False):
                 "params_file": tracker.params_file,
             }
             if tracker.wandb_config and tracker.wandb_config.get("enabled", False):
-                kwargs["wandb_config"] = tracker.wandb_config
+                # Remove 'enabled' key before passing to script
+                wandb_config = {
+                    k: v for k, v in tracker.wandb_config.items() if k != "enabled"
+                }
+                kwargs["wandb_config"] = wandb_config
 
             module.main(**kwargs)
         else:
