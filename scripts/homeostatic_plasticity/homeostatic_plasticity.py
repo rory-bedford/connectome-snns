@@ -240,9 +240,9 @@ def main(
     # Initialize async logger for non-blocking metric logging
     metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
 
-    # Setup wandb if enabled
+    # Setup wandb if config provided (enabled flag already filtered by experiment_runners)
     wandb_run = None
-    if wandb_config and wandb_config.get("enabled", False):
+    if wandb_config:
         # Build wandb config from network parameters
         wandb_config_dict = {
             **params.model_dump(),  # Convert all params to dict
