@@ -249,8 +249,10 @@ def main(
             **wandb_config,
         }
 
+        print("\n" + "=" * 60)
         wandb_run = wandb.init(**wandb_init_kwargs)
         wandb.watch(model, log="all", log_freq=training.log_interval)
+        print("=" * 60 + "\n")
 
     # ===================
     # Setup Training Loop
@@ -339,7 +341,10 @@ def main(
         cv_values = compute_spike_train_cv(
             spikes, dt=params.simulation.dt
         )  # Shape: (batch, neurons)
-        cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
+
+        # Suppress warning for neurons with no spikes (expected early in training)
+        with np.errstate(invalid="ignore"):
+            cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
 
         # Compute statistics by cell type
         stats = {}
