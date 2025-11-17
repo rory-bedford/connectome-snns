@@ -422,10 +422,19 @@ def main(
 
     # Print training configuration
     print(f"Starting training from chunk {trainer.current_epoch}...")
-    print(f"Total chunks: {simulation.num_chunks}")
+    print(
+        f"Chunk size: {simulation.chunk_size} timesteps ({simulation.chunk_duration_s:.1f}s)"
+    )
+    print(
+        f"Total chunks: {simulation.num_chunks} ({simulation.total_duration_s:.1f}s total)"
+    )
     print(f"Batch size: {training.batch_size}")
-    print(f"Log interval: {training.log_interval} chunks")
-    print(f"Checkpoint interval: {training.checkpoint_interval} chunks")
+    print(
+        f"Log interval: {training.log_interval} chunks ({params.log_interval_s:.1f}s)"
+    )
+    print(
+        f"Checkpoint interval: {training.checkpoint_interval} chunks ({params.checkpoint_interval_s:.1f}s)"
+    )
 
     # Run training with the trainer
     best_loss = trainer.train(output_dir=output_dir)

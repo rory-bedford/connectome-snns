@@ -251,6 +251,9 @@ class HomeostaticPlasticityTrainer:
                 if key == "spikes":
                     tensor = tensor.bool()
 
+                # Only store batch 0 to reduce memory usage 100x
+                tensor = tensor[0:1, ...]
+
                 if self.device == "cuda":
                     numpy_array = tensor.detach().cpu().pin_memory().numpy()
                 else:

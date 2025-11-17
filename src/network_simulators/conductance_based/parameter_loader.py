@@ -30,6 +30,16 @@ class SimulationConfig(BaseModel):
         """Total number of chunks"""
         return int(self.duration / (self.chunk_size * self.dt))
 
+    @property
+    def chunk_duration_s(self) -> float:
+        """Duration of a single chunk in seconds."""
+        return self.chunk_size * self.dt / 1000.0
+
+    @property
+    def total_duration_s(self) -> float:
+        """Total simulation duration in seconds."""
+        return self.num_chunks * self.chunk_duration_s
+
 
 class TrainingConfig(BaseModel):
     """Training parameters."""
@@ -459,6 +469,16 @@ class HomeostaticPlasticityParams(BaseModel):
     hyperparameters: Hyperparameters
     recurrent: RecurrentConfig
     feedforward: FeedforwardConfig
+
+    @property
+    def log_interval_s(self) -> float:
+        """Duration of log interval in seconds."""
+        return self.training.log_interval * self.simulation.chunk_duration_s
+
+    @property
+    def checkpoint_interval_s(self) -> float:
+        """Duration of checkpoint interval in seconds."""
+        return self.training.checkpoint_interval * self.simulation.chunk_duration_s
 
     @model_validator(mode="after")
     def validate_checkpoint_alignment(self) -> "HomeostaticPlasticityParams":
