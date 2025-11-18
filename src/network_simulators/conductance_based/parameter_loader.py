@@ -62,6 +62,17 @@ class Targets(BaseModel):
     """Target values for all cell types."""
 
     firing_rate: Dict[str, float]
+    alpha: Dict[str, float]
+    threshold_ratio: Dict[str, float]
+
+
+class LossWeights(BaseModel):
+    """Loss function weights."""
+
+    firing_rate: float
+    cv: float
+    silent_penalty: float
+    membrane_variance: float
 
 
 class Hyperparameters(BaseModel):
@@ -69,6 +80,7 @@ class Hyperparameters(BaseModel):
 
     surrgrad_scale: float
     learning_rate: float
+    loss_weight: LossWeights
 
 
 class CellTypesConfig(BaseModel):
@@ -499,18 +511,29 @@ class HomeostaticPlasticityParams(BaseModel):
     def validate_target_cell_types(self) -> "HomeostaticPlasticityParams":
         """Validate that target keys match recurrent cell types."""
         recurrent_cell_types = set(self.recurrent.cell_types.names)
-        target_cell_types = set(self.targets.firing_rate.keys())
 
-        if target_cell_types != recurrent_cell_types:
-            missing_in_targets = recurrent_cell_types - target_cell_types
-            extra_in_targets = target_cell_types - recurrent_cell_types
+        # Check all target dictionaries
+        target_dicts = {
+            "firing_rate": set(self.targets.firing_rate.keys()),
+            "alpha": set(self.targets.alpha.keys()),
+            "threshold_ratio": set(self.targets.threshold_ratio.keys()),
+        }
 
-            error_msg = "Target cell types must match recurrent cell types."
-            if missing_in_targets:
-                error_msg += f"\n  Missing in targets: {missing_in_targets}"
-            if extra_in_targets:
-                error_msg += f"\n  Extra in targets: {extra_in_targets}"
+        for target_name, target_cell_types in target_dicts.items():
+            if target_cell_types != recurrent_cell_types:
+                missing_in_targets = recurrent_cell_types - target_cell_types
+                extra_in_targets = target_cell_types - recurrent_cell_types
 
-            raise ValueError(error_msg)
+                error_msg = f"Target '{target_name}' cell types must match recurrent cell types."
+                if missing_in_targets:
+                    error_msg += (
+                        f"\n  Missing in targets.{target_name}: {missing_in_targets}"
+                    )
+                if extra_in_targets:
+                    error_msg += (
+                        f"\n  Extra in targets.{target_name}: {extra_in_targets}"
+                    )
+
+                raise ValueError(error_msg)
 
         return self

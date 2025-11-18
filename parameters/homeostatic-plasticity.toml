@@ -28,8 +28,12 @@ batch_size = 10                        # Number of batches to run in parallel fo
 # ====================
 
 [targets]
-firing_rate.excitatory= 0.5           # Hz - Target firing rate for excitatory neurons
-firing_rate.inhibitory= 2.0           # Hz - Target firing rate for inhibitory neurons
+firing_rate.excitatory = 0.5           # Hz - Target firing rate for excitatory neurons
+firing_rate.inhibitory = 2.0           # Hz - Target firing rate for inhibitory neurons
+alpha.excitatory = 10.0                # S - Penalty parameter for nearly silent excitatory neurons
+alpha.inhibitory = 2.0                 # S - Penalty parameter for nearly silent inhibitroy neurons
+threshold_ratio.excitatory = 0.25      # Target ratio of std vs threshold for excitatory neurons
+threshold_ratio.inhibitory = 0.45      # Target ratio of std vs threshold for inhibitory neurons
 
 # ===============
 # HYPERPARAMETERS
@@ -38,6 +42,10 @@ firing_rate.inhibitory= 2.0           # Hz - Target firing rate for inhibitory n
 [hyperparameters]
 surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
 learning_rate = 5e-4                   # Learning rate for ADAM optimiser
+loss_weight.firing_rate = 1.0          # Weight for firing rate loss
+loss_weight.cv = 0.3                   # Weight for CV loss
+loss_weight.silent_penalty = 0.3       # Weight for silent neuron penalty
+loss_weight.membrane_variance = 0.3    # Weight for membrane variance loss
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY

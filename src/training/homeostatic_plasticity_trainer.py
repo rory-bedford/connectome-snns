@@ -288,7 +288,18 @@ class HomeostaticPlasticityTrainer:
             # Compute individual losses
             individual_losses = {}
             for loss_name, loss_fn in self.loss_functions.items():
-                individual_losses[loss_name] = loss_fn(spikes)
+                # Build inputs based on loss function's required_inputs metadata
+                inputs = {}
+                if hasattr(loss_fn, "required_inputs"):
+                    for req_input in loss_fn.required_inputs:
+                        if req_input == "output_spikes":
+                            inputs["output_spikes"] = spikes
+                        elif req_input == "voltages":
+                            inputs["voltages"] = chunk_outputs["voltages"]
+                        elif req_input == "dt":
+                            inputs["dt"] = self.simulation.dt
+
+                individual_losses[loss_name] = loss_fn(**inputs)
 
             # Compute weighted total loss for optimization
             total_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
@@ -470,15 +481,15 @@ class HomeostaticPlasticityTrainer:
             # Take only first batch (index 0) to reduce data size, keeping batch dimension
             plot_data = {key: arr[0:1, ...] for key, arr in plot_data.items()}
 
-            # Add weights
-            plot_data["weights"] = copy_tensor_optimized(self.model.weights)
-            plot_data["feedforward_weights"] = copy_tensor_optimized(
-                self.model.weights_FF
-            )
+            # Get weights as separate parameters
+            weights = copy_tensor_optimized(self.model.weights)
+            weights_ff = copy_tensor_optimized(self.model.weights_FF)
 
             success = self.async_plotter.submit_plot(
                 plot_data=plot_data,
                 epoch=epoch,
+                weights=weights,
+                weights_ff=weights_ff,
             )
             if success:
                 print("  ✓ Plot job submitted for async processing")

@@ -199,7 +199,9 @@ def compute_cv_by_cell_type(
     )  # Shape: (batch_size, n_neurons)
 
     # Average CV across batches for each neuron
-    cv_per_neuron = np.nanmean(cv_values, axis=0)  # Shape: (n_neurons,)
+    # Suppress warning for all-NaN slices (expected when neurons have no spikes)
+    with np.errstate(invalid="ignore"):
+        cv_per_neuron = np.nanmean(cv_values, axis=0)  # Shape: (n_neurons,)
 
     # Get unique cell types
     unique_cell_types = np.unique(cell_type_indices)

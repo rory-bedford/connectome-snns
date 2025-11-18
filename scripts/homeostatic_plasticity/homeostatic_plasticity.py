@@ -29,7 +29,12 @@ import torch
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from tqdm import tqdm
-from optimisation.loss_functions import FiringRateLoss
+from optimisation.loss_functions import (
+    FiringRateLoss,
+    CVLoss,
+    SilentNeuronPenalty,
+    SubthresholdVarianceLoss,
+)
 from optimisation.utils import load_checkpoint, AsyncLogger
 from network_simulators.conductance_based.parameter_loader import (
     HomeostaticPlasticityParams,
@@ -188,9 +193,10 @@ def main(
 
     # Create firing rates array for input neurons
     input_firing_rates = np.zeros(feedforward.topology.num_neurons)
-    for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
-        mask = input_source_indices == ct_idx
-        input_firing_rates[mask] = feedforward.activity[ct_name].firing_rate
+    for cell_type_name in feedforward.cell_types.names:
+        cell_type_idx = feedforward.cell_types.names.index(cell_type_name)
+        mask = input_source_indices == cell_type_idx
+        input_firing_rates[mask] = feedforward.activity[cell_type_name].firing_rate
 
     # Initialize Poisson spike generator dataset
     spike_dataset = PoissonSpikeDataset(
@@ -208,20 +214,44 @@ def main(
         num_workers=0,  # Keep 0 for GPU generation
     )
 
-    # Define loss functions - create target tensor with cell-type-specific targets
+    # =====================
+    # Define Loss Functions
+    # =====================
+
+    # Initialize all target tensors
     target_rate_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
-    for cell_type_name, target_firing_rate in targets.firing_rate.items():
+    target_cv_tensor = torch.ones(recurrent.topology.num_neurons, device=device)
+    alpha_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+    v_threshold_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+    threshold_ratio_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+
+    # Populate all tensors in a single loop over cell types
+    for cell_type_name in recurrent.cell_types.names:
         cell_type_idx = recurrent.cell_types.names.index(cell_type_name)
         mask = cell_type_indices == cell_type_idx
-        target_rate_tensor[mask] = target_firing_rate
 
+        # Set cell-type-specific values
+        target_rate_tensor[mask] = targets.firing_rate[cell_type_name]
+        alpha_tensor[mask] = targets.alpha[cell_type_name]
+        threshold_ratio_tensor[mask] = targets.threshold_ratio[cell_type_name]
+        v_threshold_tensor[mask] = recurrent.physiology[cell_type_name].theta
+
+    # Initialize loss functions
     firing_rate_loss_fn = FiringRateLoss(
         target_rate=target_rate_tensor, dt=simulation.dt
     )
+    cv_loss_fn = CVLoss(target_cv=target_cv_tensor)
+    silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=simulation.dt)
+    membrane_variance_loss_fn = SubthresholdVarianceLoss(
+        v_threshold=v_threshold_tensor, target_ratio=threshold_ratio_tensor
+    )
 
-    # Define loss weights for optimization
+    # Define loss weights from config
     loss_weights = {
-        "firing_rate": 1.0,
+        "firing_rate": hyperparameters.loss_weight.firing_rate,
+        "cv": hyperparameters.loss_weight.cv,
+        "silent_penalty": hyperparameters.loss_weight.silent_penalty,
+        "membrane_variance": hyperparameters.loss_weight.membrane_variance,
     }
 
     # =============
@@ -251,12 +281,12 @@ def main(
 
         print("\n" + "=" * 60)
         wandb_run = wandb.init(**wandb_init_kwargs)
-        wandb.watch(model, log="all", log_freq=training.log_interval)
+        wandb.watch(model, log="parameters", log_freq=training.log_interval)
         print("=" * 60 + "\n")
 
-    # ===================
-    # Setup Training Loop
-    # ===================
+    # ================================================
+    # Create Functions for Plotting and Tracking Stats
+    # ================================================
 
     # Pre-compute static data for plotting functions
 
@@ -375,6 +405,10 @@ def main(
 
         return stats
 
+    # ===================
+    # Setup Training Loop
+    # ===================
+
     # Initialize progress bar for training loop
     pbar = tqdm(
         range(simulation.num_chunks),
@@ -389,7 +423,12 @@ def main(
         optimizer=optimiser,
         scaler=scaler,
         spike_dataloader=spike_dataloader,
-        loss_functions={"firing_rate": firing_rate_loss_fn},
+        loss_functions={
+            "firing_rate": firing_rate_loss_fn,
+            "cv": cv_loss_fn,
+            "silent_penalty": silent_penalty_fn,
+            "membrane_variance": membrane_variance_loss_fn,
+        },
         loss_weights=loss_weights,
         params=params,
         device=device,
