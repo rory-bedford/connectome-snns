@@ -32,10 +32,10 @@ def get_repo_root():
 def resolve_relative_to_repo(path_str):
     """
     Resolve a path relative to the repository root if it's not absolute.
-    
+
     Args:
         path_str: String path that may be relative or absolute
-        
+
     Returns:
         Path object resolved to absolute path
     """
@@ -75,6 +75,7 @@ class ExperimentTracker:
         self.initial_metadata = None
         self.params_file = None
         self.wandb_config = None
+        self.input_dir = None  # Will be populated if data section exists
 
     def __enter__(self):
         """Context manager entry - start tracking."""
@@ -179,6 +180,93 @@ class ExperimentTracker:
         if "wandb" in self.config:
             return self.config["wandb"]
         return None
+
+    def _setup_input_data(self, output_dir):
+        """
+        Setup input data directory based on config.
+
+        Creates output_dir/inputs/ with either symlinks or copies of source data,
+        depending on strategy specified in config.
+
+        Args:
+            output_dir: Path to experiment output directory
+
+        Returns:
+            Path to inputs directory, or None if no data inputs specified
+        """
+        if "data" not in self.config:
+            return None
+
+        data_config = self.config["data"]
+
+        # Get input entries
+        input_entries = data_config.get("inputs", [])
+        if not input_entries:
+            # No inputs specified - this is fine, just return None
+            return None
+
+        # Create inputs directory in output folder
+        inputs_dir = output_dir / "inputs"
+        inputs_dir.mkdir(parents=True, exist_ok=True)
+
+        print("\nSetting up input data...")
+
+        # Process each input entry
+        for i, entry in enumerate(input_entries):
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"Input entry {i} must be a dict with 'path' and 'strategy' keys"
+                )
+
+            source_path_str = entry.get("path")
+            if not source_path_str:
+                raise ValueError(f"Input entry {i} missing 'path' key")
+
+            strategy = entry.get("strategy")
+            if not strategy:
+                raise ValueError(
+                    f"Input entry {i} missing 'strategy' key. Must be 'symlink' or 'copy'."
+                )
+
+            # Validate strategy
+            if strategy not in ["symlink", "copy"]:
+                raise ValueError(
+                    f"Invalid strategy '{strategy}' for {source_path_str}. Must be 'symlink' or 'copy'."
+                )
+
+            source_path = resolve_relative_to_repo(source_path_str)
+
+            # Check if source exists
+            if not source_path.exists():
+                raise FileNotFoundError(f"Input data not found: {source_path}")
+
+            # Determine destination name
+            dest_path = inputs_dir / source_path.name
+
+            # Handle files vs directories
+            if source_path.is_file():
+                if strategy == "symlink":
+                    dest_path.symlink_to(source_path.absolute())
+                    print(f"  ✓ Linked: {source_path.name}")
+                else:  # copy
+                    shutil.copy2(source_path, dest_path)
+                    print(f"  ✓ Copied: {source_path.name}")
+            elif source_path.is_dir():
+                if strategy == "symlink":
+                    dest_path.symlink_to(
+                        source_path.absolute(), target_is_directory=True
+                    )
+                    print(f"  ✓ Linked: {source_path.name}/")
+                else:  # copy
+                    shutil.copytree(source_path, dest_path)
+                    print(f"  ✓ Copied: {source_path.name}/")
+            else:
+                raise ValueError(
+                    f"Input path is neither file nor directory: {source_path}"
+                )
+
+        print(f"✓ Input data ready: {inputs_dir}")
+        return inputs_dir
 
     def _create_initial_metadata(self):
         """Create initial metadata at experiment start."""
@@ -425,6 +513,9 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         shutil.copy2(params_path, dest_params)
         print(f"✓ Copied parameters file to: {dest_params}")
 
+        # Setup input data if specified in config
+        self.input_dir = self._setup_input_data(output_dir)
+
         # Copy and modify experiment.toml to output folder
         dest_toml = output_dir / "experiment.toml"
         modified_config = self.config.copy()
@@ -434,7 +525,12 @@ You will most likeley be prompted to enter a new output directory to avoid overw
         )
         modified_config["output_dir"] = str(output_dir.resolve())
         # Keep log_file absolute as-is (resolve relative paths to repo root)
-        modified_config["log_file"] = str(resolve_relative_to_repo(self.config["log_file"]))
+        modified_config["log_file"] = str(
+            resolve_relative_to_repo(self.config["log_file"])
+        )
+        # If data section exists, update inputs to point to local inputs folder
+        if "data" in modified_config and self.input_dir:
+            modified_config["data"]["inputs"] = [str(self.input_dir.resolve())]
         # Keep script relative to repo root
         with open(dest_toml, "w") as f:
             toml.dump(modified_config, f)

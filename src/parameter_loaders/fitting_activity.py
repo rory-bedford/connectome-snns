@@ -1,29 +1,34 @@
-"""Parameter loaders for conductance-based network models.
+"""Parameter loader for teacher-student fitting activity training.
 
-Pydantic models that directly validate TOML configuration files.
+For training networks to match target activity patterns without fixed connectivity.
 """
 
-import numpy as np
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import Dict, List
+from pydantic import BaseModel, model_validator
+from .base_configs import (
+    TrainingConfig,
+    Hyperparameters,
+    CellTypesConfig,
+    PhysiologyConfig,
+    SynapseConfig,
+    EXCITATORY_SYNAPSE_TYPES,
+    INHIBITORY_SYNAPSE_TYPES,
+)
 
 
 # =============================================================================
-# SIMPLE CONFIG MODELS (match TOML structure exactly)
+# FITTING-ACTIVITY-SPECIFIC CONFIGS
 # =============================================================================
 
-# Hardcoding synapse types for simplicity
-EXCITATORY_SYNAPSE_TYPES = ["AMPA", "NMDA"]
-INHIBITORY_SYNAPSE_TYPES = ["GABA_A", "GABA_B"]
 
-
-class SimulationConfig(BaseModel):
-    """Simulation parameters."""
+class FittingActivitySimulationConfig(BaseModel):
+    """Simulation parameters for fitting activity."""
 
     dt: float
     duration: float
     seed: int
     chunk_size: int
+    batch_size: int
 
     @property
     def num_chunks(self) -> int:
@@ -41,186 +46,10 @@ class SimulationConfig(BaseModel):
         return self.num_chunks * self.chunk_duration_s
 
 
-class TrainingConfig(BaseModel):
-    """Training parameters."""
-
-    chunks_per_update: int
-    log_interval: int
-    checkpoint_interval: int
-    mixed_precision: bool
-    plot_size: int
-    batch_size: int
-
-
-class ActivityTargetConfig(BaseModel):
-    """Target values for a single cell type."""
-
-    firing_rate: float
-
-
-class Targets(BaseModel):
-    """Target values for all cell types."""
-
-    firing_rate: Dict[str, float]
-    alpha: Dict[str, float]
-    threshold_ratio: Dict[str, float]
-
-
-class LossWeights(BaseModel):
-    """Loss function weights."""
-
-    firing_rate: float
-    cv: float
-    silent_penalty: float
-    membrane_variance: float
-
-
-class Hyperparameters(BaseModel):
-    """Optimization hyperparameters."""
-
-    surrgrad_scale: float
-    learning_rate: float
-    loss_weight: LossWeights
-
-
-class CellTypesConfig(BaseModel):
-    """Cell types."""
-
-    names: List[str]
-    proportion_list: List[float] = Field(alias="proportion")
-
-    @property
-    def proportion(self) -> np.ndarray:
-        """Cell type proportions as numpy array."""
-        return np.array(self.proportion_list)
-
-    class Config:
-        populate_by_name = True
-
-
-class TopologyConfig(BaseModel):
-    """Network topology."""
-
-    num_neurons: int
-    num_assemblies: Optional[int] = None
-    neurons_per_assembly: Optional[int] = None
-    conn_within_list: Optional[List[List[float]]] = Field(
-        default=None, alias="conn_within"
-    )
-    conn_between_list: Optional[List[List[float]]] = Field(
-        default=None, alias="conn_between"
-    )
-    conn_inputs_list: Optional[List[List[float]]] = Field(
-        default=None, alias="conn_inputs"
-    )
-
-    @property
-    def conn_within(self) -> Optional[np.ndarray]:
-        """Within-assembly connectivity as numpy array."""
-        return (
-            np.array(self.conn_within_list)
-            if self.conn_within_list is not None
-            else None
-        )
-
-    @property
-    def conn_between(self) -> Optional[np.ndarray]:
-        """Between-assembly connectivity as numpy array."""
-        return (
-            np.array(self.conn_between_list)
-            if self.conn_between_list is not None
-            else None
-        )
-
-    @property
-    def conn_inputs(self) -> Optional[np.ndarray]:
-        """Input connectivity as numpy array."""
-        return (
-            np.array(self.conn_inputs_list)
-            if self.conn_inputs_list is not None
-            else None
-        )
-
-    class Config:
-        populate_by_name = True
-
-
-class WeightsConfig(BaseModel):
-    """Weight parameters."""
-
-    w_mu_list: List[List[float]] = Field(alias="w_mu")
-    w_sigma_list: List[List[float]] = Field(alias="w_sigma")
-
-    @property
-    def w_mu(self) -> np.ndarray:
-        """Mean weights as numpy array."""
-        return np.array(self.w_mu_list)
-
-    @property
-    def w_sigma(self) -> np.ndarray:
-        """Weight standard deviations as numpy array."""
-        return np.array(self.w_sigma_list)
-
-    class Config:
-        populate_by_name = True
-
-
-class PhysiologyConfig(BaseModel):
-    """Neuronal physiology."""
-
-    tau_mem: float
-    theta: float
-    U_reset: float
-    E_L: float
-    g_L: float
-    tau_ref: float
-
-
-class SynapseConfig(BaseModel):
-    """Synapse parameters."""
-
-    names: List[str]
-    tau_rise_list: List[float] = Field(alias="tau_rise")
-    tau_decay_list: List[float] = Field(alias="tau_decay")
-    E_syn_list: List[float] = Field(alias="E_syn")
-    g_bar_list: List[float] = Field(alias="g_bar")
-
-    @property
-    def tau_rise(self) -> np.ndarray:
-        """Rise time constants as numpy array."""
-        return np.array(self.tau_rise_list)
-
-    @property
-    def tau_decay(self) -> np.ndarray:
-        """Decay time constants as numpy array."""
-        return np.array(self.tau_decay_list)
-
-    @property
-    def E_syn(self) -> np.ndarray:
-        """Reversal potentials as numpy array."""
-        return np.array(self.E_syn_list)
-
-    @property
-    def g_bar(self) -> np.ndarray:
-        """Maximal conductances as numpy array."""
-        return np.array(self.g_bar_list)
-
-    class Config:
-        populate_by_name = True
-
-
-class ActivityConfig(BaseModel):
-    """Input activity."""
-
-    firing_rate: float
-
-
-class RecurrentConfig(BaseModel):
-    """Recurrent layer (matches [recurrent] section in TOML)."""
+class FittingActivityRecurrentConfig(BaseModel):
+    """Recurrent layer config for fitting activity (no topology/weights)."""
 
     cell_types: CellTypesConfig
-    topology: TopologyConfig
-    weights: WeightsConfig
     physiology: Dict[str, PhysiologyConfig]
     synapses: Dict[str, SynapseConfig]
 
@@ -349,21 +178,11 @@ class RecurrentConfig(BaseModel):
         return inhibitory_indices
 
 
-class FeedforwardConfig(BaseModel):
-    """Feedforward layer (matches [feedforward] section in TOML)."""
+class FittingActivityFeedforwardConfig(BaseModel):
+    """Feedforward layer config for fitting activity (no topology/weights/activity)."""
 
     cell_types: CellTypesConfig
-    topology: TopologyConfig
-    weights: WeightsConfig
-    activity: Dict[str, ActivityConfig]
     synapses: Dict[str, SynapseConfig]
-
-    @property
-    def firing_rates(self) -> np.ndarray:
-        """Firing rates as numpy array."""
-        return np.array(
-            [self.activity[name].firing_rate for name in self.cell_types.names]
-        )
 
     def get_cell_params(self) -> List[Dict[str, int | str]]:
         """Convert cell types to list of cell parameter dicts.
@@ -460,27 +279,18 @@ class FeedforwardConfig(BaseModel):
 
 
 # =============================================================================
-# TOP-LEVEL MODELS
+# TOP-LEVEL MODEL
 # =============================================================================
 
 
-class ConductanceBasedParams(BaseModel):
-    """Conductance-based simulation (no training)."""
+class FittingActivityParams(BaseModel):
+    """Teacher-student training for fitting activity."""
 
-    simulation: SimulationConfig
-    recurrent: RecurrentConfig
-    feedforward: FeedforwardConfig
-
-
-class HomeostaticPlasticityParams(BaseModel):
-    """Homeostatic plasticity training."""
-
-    simulation: SimulationConfig
+    simulation: FittingActivitySimulationConfig
     training: TrainingConfig
-    targets: Targets
     hyperparameters: Hyperparameters
-    recurrent: RecurrentConfig
-    feedforward: FeedforwardConfig
+    recurrent: FittingActivityRecurrentConfig
+    feedforward: FittingActivityFeedforwardConfig
 
     @property
     def log_interval_s(self) -> float:
@@ -493,7 +303,7 @@ class HomeostaticPlasticityParams(BaseModel):
         return self.training.checkpoint_interval * self.simulation.chunk_duration_s
 
     @model_validator(mode="after")
-    def validate_checkpoint_alignment(self) -> "HomeostaticPlasticityParams":
+    def validate_checkpoint_alignment(self) -> "FittingActivityParams":
         """Validate that simulation duration aligns with checkpoint interval."""
         num_chunks = int(
             self.simulation.duration / (self.simulation.chunk_size * self.simulation.dt)
@@ -504,36 +314,5 @@ class HomeostaticPlasticityParams(BaseModel):
                 f"Number of chunks ({num_chunks}) must be a multiple of checkpoint_interval "
                 f"({self.training.checkpoint_interval}). Either adjust duration or checkpoint_interval."
             )
-
-        return self
-
-    @model_validator(mode="after")
-    def validate_target_cell_types(self) -> "HomeostaticPlasticityParams":
-        """Validate that target keys match recurrent cell types."""
-        recurrent_cell_types = set(self.recurrent.cell_types.names)
-
-        # Check all target dictionaries
-        target_dicts = {
-            "firing_rate": set(self.targets.firing_rate.keys()),
-            "alpha": set(self.targets.alpha.keys()),
-            "threshold_ratio": set(self.targets.threshold_ratio.keys()),
-        }
-
-        for target_name, target_cell_types in target_dicts.items():
-            if target_cell_types != recurrent_cell_types:
-                missing_in_targets = recurrent_cell_types - target_cell_types
-                extra_in_targets = target_cell_types - recurrent_cell_types
-
-                error_msg = f"Target '{target_name}' cell types must match recurrent cell types."
-                if missing_in_targets:
-                    error_msg += (
-                        f"\n  Missing in targets.{target_name}: {missing_in_targets}"
-                    )
-                if extra_in_targets:
-                    error_msg += (
-                        f"\n  Extra in targets.{target_name}: {extra_in_targets}"
-                    )
-
-                raise ValueError(error_msg)
 
         return self

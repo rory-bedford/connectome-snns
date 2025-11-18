@@ -10,6 +10,23 @@ parameters_file = "parameters/Dp_default.toml"
 log_file = "logs/Dp_simulator_log.jsonl"
 description = "Simulating Dp example"
 
+# ===================
+# DATA CONFIGURATION
+# ===================
+# Add input data files/directories as needed by uncommenting and adding [[data.inputs]] entries.
+# Each entry needs a path and strategy ("symlink" or "copy").
+
+[data]
+# Uncomment and add entries below as needed:
+
+# [[data.inputs]]
+# path = "/path/to/connectome_data.npz"
+# strategy = "symlink"
+#
+# [[data.inputs]]
+# path = "data/stimuli/"
+# strategy = "copy"
+
 # ============
 # WANDB CONFIG
 # ============

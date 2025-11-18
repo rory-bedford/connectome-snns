@@ -37,9 +37,7 @@ from optimisation.loss_functions import (
     SubthresholdVarianceLoss,
 )
 from optimisation.utils import load_checkpoint, AsyncLogger
-from network_simulators.conductance_based.parameter_loader import (
-    HomeostaticPlasticityParams,
-)
+from parameter_loaders import HomeostaticPlasticityParams
 from training import HomeostaticPlasticityTrainer
 import toml
 import wandb
@@ -420,36 +418,20 @@ def main(
         initial_state_dir = output_dir / "initial_state"
         initial_state_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save initial weights as numpy arrays
-        print("Saving initial weights...")
-        np.save(
-            initial_state_dir / "recurrent_weights.npy",
-            model.weights.detach().cpu().numpy(),
+        # Save initial network structure as single npz file
+        print("Saving initial network structure...")
+        np.savez(
+            initial_state_dir / "network_structure.npz",
+            recurrent_weights=model.weights.detach().cpu().numpy(),
+            feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+            recurrent_connectivity=connectivity_graph,
+            feedforward_connectivity=feedforward_connectivity_graph,
+            cell_type_indices=cell_type_indices,
+            feedforward_cell_type_indices=input_source_indices,
         )
-        np.save(
-            initial_state_dir / "feedforward_weights.npy",
-            model.weights_FF.detach().cpu().numpy(),
+        print(
+            f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
         )
-
-        # Save cell type indices and connectivity
-        print("Saving cell type indices and connectivity...")
-        np.save(
-            initial_state_dir / "cell_type_indices.npy",
-            cell_type_indices,
-        )
-        np.save(
-            initial_state_dir / "feedforward_cell_type_indices.npy",
-            input_source_indices,
-        )
-        np.save(
-            initial_state_dir / "recurrent_connectivity.npy",
-            connectivity_graph,
-        )
-        np.save(
-            initial_state_dir / "feedforward_connectivity.npy",
-            feedforward_connectivity_graph,
-        )
-        print(f"✓ Initial state saved to {initial_state_dir}")
 
         # Run 10s inference on single batch (batch_size=1)
         print("\nRunning 10s inference with initial weights...")
@@ -622,6 +604,122 @@ def main(
     print(f"Best loss achieved: {best_loss:.6f}")
     print("=" * 60)
 
+    # ===================================
+    # Save Final State and Run Inference
+    # ===================================
+
+    print("\n" + "=" * 60)
+    print("SAVING FINAL STATE AND RUNNING INFERENCE")
+    print("=" * 60)
+
+    # Create final_state directory
+    final_state_dir = output_dir / "final_state"
+    final_state_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save final network structure as single npz file
+    print("Saving final network structure...")
+    np.savez(
+        final_state_dir / "network_structure.npz",
+        recurrent_weights=model.weights.detach().cpu().numpy(),
+        feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+        recurrent_connectivity=connectivity_graph,
+        feedforward_connectivity=feedforward_connectivity_graph,
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=input_source_indices,
+    )
+    print(
+        f"✓ Final network structure saved to {final_state_dir / 'network_structure.npz'}"
+    )
+
+    # Run 10s inference on single batch (batch_size=1)
+    print("\nRunning 10s inference with final weights...")
+    inference_duration_ms = 10000.0  # 10 seconds
+    inference_timesteps = int(inference_duration_ms / simulation.dt)
+
+    # Create a new dataset for 10s inference with batch_size=1
+    final_inference_dataset = PoissonSpikeDataset(
+        firing_rates=input_firing_rates,
+        chunk_size=inference_timesteps,  # Single chunk of 10s
+        dt=simulation.dt,
+        device=device,
+    )
+    final_inference_dataloader = DataLoader(
+        final_inference_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    final_inference_input_spikes = next(iter(final_inference_dataloader))
+
+    # Run inference
+    with torch.inference_mode():
+        (
+            final_inf_spikes,
+            final_inf_voltages,
+            final_inf_currents,
+            final_inf_currents_FF,
+            final_inf_conductances,
+            final_inf_conductances_FF,
+        ) = model.forward(
+            input_spikes=final_inference_input_spikes,
+            initial_v=None,
+            initial_g=None,
+            initial_g_FF=None,
+        )
+
+    print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
+
+    # Generate plots for final state
+    if plot_generator:
+        print("Generating final state plots...")
+        figures_dir = final_state_dir / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        # Convert to numpy and take only first batch
+        plot_data = {
+            "spikes": final_inf_spikes[0:1, ...].detach().cpu().numpy(),
+            "voltages": final_inf_voltages[0:1, ...].detach().cpu().numpy(),
+            "conductances": final_inf_conductances[0:1, ...].detach().cpu().numpy(),
+            "conductances_FF": final_inf_conductances_FF[0:1, ...]
+            .detach()
+            .cpu()
+            .numpy(),
+            "currents": final_inf_currents[0:1, ...].detach().cpu().numpy(),
+            "currents_FF": final_inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+            "input_spikes": final_inference_input_spikes[0:1, ...]
+            .detach()
+            .cpu()
+            .numpy(),
+            "weights": model.weights.detach().cpu().numpy(),
+            "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+        }
+
+        # Generate plots
+        figures = plot_generator(**plot_data)
+
+        # Save plots to disk
+        for plot_name, fig in figures.items():
+            fig_path = figures_dir / f"{plot_name}.png"
+            fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+
+        print(f"✓ Final state plots saved to {figures_dir}")
+
+    # Clean up inference data
+    del (
+        final_inference_input_spikes,
+        final_inf_spikes,
+        final_inf_voltages,
+        final_inf_currents,
+        final_inf_currents_FF,
+        final_inf_conductances,
+        final_inf_conductances_FF,
+    )
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    print("=" * 60 + "\n")
+
     # Close async logger and flush all remaining data
     print("Flushing metrics to disk...")
     metrics_logger.close()
@@ -633,3 +731,5 @@ def main(
     print(f"\n✓ Checkpoints: {output_dir / 'checkpoints'}")
     print(f"✓ Figures: {output_dir / 'figures'}")
     print(f"✓ Metrics: {metrics_logger.log_dir / 'training_metrics.csv'}")
+    print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
+    print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")

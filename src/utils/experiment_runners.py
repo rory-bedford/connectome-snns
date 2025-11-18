@@ -63,8 +63,9 @@ def run_experiment(config_path=None, skip_git_check=False):
         # Execute the script's main() function
         spec.loader.exec_module(module)
         if hasattr(module, "main"):
-            # Pass output_dir and params_file, and wandb_config only if enabled
+            # Pass input_dir, output_dir and params_file, and wandb_config only if enabled
             kwargs = {
+                "input_dir": tracker.input_dir,
                 "output_dir": tracker.output_dir,
                 "params_file": tracker.params_file,
             }

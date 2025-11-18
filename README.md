@@ -44,18 +44,51 @@ Special care is taken to make all our simulations fully reproducible. In particu
 
 To use these features, you need to write and run your python scripts as follows:
 
-* Make sure your script has a `main(output_dir, params_file)` function that accepts two arguments:
+* Make sure your script has a `main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None)` function that accepts these arguments:
+  - `input_dir`: Path to the directory containing input data files (may be `None` if no data specified)
   - `output_dir`: Path to the directory where your experiment outputs should be saved
   - `params_file`: Path to the file containing your experiment parameters
+  - `wandb_config` (optional): Dictionary with Weights & Biases configuration if enabled
+  - `resume_from` (optional): Path to checkpoint file for resuming training
 * Please only use these paths for loading and saving data in order for our tracking to function properly
-* `experiment.toml` in the repository root is a template you can use to configure your experiments
-* We recommend you make a `workspace/` folder which will be gitignored, and copy this template in there alongside any parameter files you wish to modify on the fly
+* `workspace/experiment.toml` is a template you can use to configure your experiments
+* We recommend you make a `workspace/` folder which will be gitignored (already done), and copy this template in there alongside any parameter files you wish to modify on the fly
 * Make sure the repository has all changes committed (files in `workspace/` are automatically ignored)
 * You can then run your script using `./run` or `uv run python run_experiment.py`
 
 Note the experiment running scripts can be passed a filepath to your `experiment.toml` file as input, and will use the editable version under `workspace/experiment.toml` by default.
 
-With this system, we can perform full provenance tracking of our experiments and easily rerun them even years later.
+#### Input Data Management
+
+The reproducibility system supports managing input data files alongside your experiments:
+
+* Add a `[data]` section to your `experiment.toml` to specify input data files
+* Each input requires a `path` and `strategy` (`symlink` or `copy`)
+* The system creates an `inputs/` directory in your output folder with the specified files
+* Example configuration:
+
+```toml
+[data]
+
+[[data.inputs]]
+path = "/path/to/connectome_data.npz"
+strategy = "symlink"  # Fast, saves space
+
+[[data.inputs]]
+path = "/path/to/stimuli/"
+strategy = "copy"  # Self-contained
+```
+
+* In your script, check if `input_dir` is not `None` and load data from there:
+
+```python
+def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None):
+    if input_dir:
+        data = np.load(input_dir / "connectome_data.npz")
+    # ... rest of your code
+```
+
+With this system, we can perform full provenance tracking of our experiments (including input data) and easily rerun them even years later.
 
 For examples of usage please see `scripts/`.
 

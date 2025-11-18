@@ -28,10 +28,11 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import current_based_Dp_plots
 
 
-def main(output_dir, params_file):
+def main(input_dir, output_dir, params_file):
     """Main execution function for Dp network simulation.
 
     Args:
+        input_dir (Path, optional): Directory containing input data files (may be None)
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
     """

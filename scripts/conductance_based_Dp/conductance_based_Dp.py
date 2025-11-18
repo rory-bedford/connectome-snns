@@ -24,9 +24,7 @@ from inputs.dataloaders import PoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 import matplotlib.pyplot as plt
-from network_simulators.conductance_based.parameter_loader import (
-    ConductanceBasedParams,
-)
+from parameter_loaders import ConductanceBasedParams
 import toml
 import pandas as pd
 from analysis.firing_statistics import (
@@ -42,10 +40,11 @@ from visualization.dashboards import (
 )
 
 
-def main(output_dir, params_file):
+def main(input_dir, output_dir, params_file):
     """Main execution function for Dp network simulation.
 
     Args:
+        input_dir (Path, optional): Directory containing input data files (may be None)
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
     """
