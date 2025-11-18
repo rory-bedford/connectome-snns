@@ -51,15 +51,25 @@ def save_checkpoint(
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(exist_ok=True)
 
+    # Convert numpy arrays to torch tensors for safe loading with weights_only=True
+    def to_tensor(arr):
+        """Convert numpy array to torch tensor, handling empty arrays."""
+        if isinstance(arr, np.ndarray):
+            if arr.size == 0:
+                # Return empty tensor with original dtype
+                return torch.empty(0, dtype=torch.float32)
+            return torch.from_numpy(arr)
+        return arr
+
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimiser_state_dict": optimiser.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
-        "initial_v": initial_v,
-        "initial_g": initial_g,
-        "initial_g_FF": initial_g_FF,
-        "input_spikes": input_spikes,
+        "initial_v": to_tensor(initial_v),
+        "initial_g": to_tensor(initial_g),
+        "initial_g_FF": to_tensor(initial_g_FF),
+        "input_spikes": to_tensor(input_spikes),
         "best_loss": best_loss,
         "rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
@@ -124,7 +134,7 @@ def load_checkpoint(
             - best_loss (float): Best loss achieved so far
     """
     print(f"Loading checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     optimiser.load_state_dict(checkpoint["optimiser_state_dict"])
@@ -135,52 +145,32 @@ def load_checkpoint(
 
     epoch = checkpoint["epoch"]
 
-    # Convert numpy arrays to tensors if needed, then move to device
-    if checkpoint["initial_v"] is not None:
-        initial_v = checkpoint["initial_v"]
-        if isinstance(initial_v, np.ndarray):
-            initial_v = torch.from_numpy(initial_v).to(device)
-        else:
-            initial_v = initial_v.to(device)
-    else:
-        initial_v = None
+    # All data should now be tensors, just move to device
+    # Handle None or empty tensors gracefully
+    def process_tensor(tensor, target_device):
+        """Process tensor, handling None and empty cases."""
+        if tensor is None:
+            return None
+        if isinstance(tensor, torch.Tensor):
+            # Check if empty tensor
+            if tensor.numel() == 0:
+                return None
+            return tensor.to(target_device)
+        # Backward compatibility: convert numpy if present
+        if isinstance(tensor, np.ndarray):
+            if tensor.size == 0:
+                return None
+            return torch.from_numpy(tensor).to(target_device)
+        return None
 
-    if checkpoint["initial_g"] is not None:
-        initial_g = checkpoint["initial_g"]
-        if isinstance(initial_g, np.ndarray):
-            initial_g = torch.from_numpy(initial_g).to(device)
-        else:
-            initial_g = initial_g.to(device)
-    else:
-        initial_g = None
-
-    if checkpoint["initial_g_FF"] is not None:
-        initial_g_FF = checkpoint["initial_g_FF"]
-        if isinstance(initial_g_FF, np.ndarray):
-            initial_g_FF = torch.from_numpy(initial_g_FF).to(device)
-        else:
-            initial_g_FF = initial_g_FF.to(device)
-    else:
-        initial_g_FF = None
+    initial_v = process_tensor(checkpoint["initial_v"], device)
+    initial_g = process_tensor(checkpoint["initial_g"], device)
+    initial_g_FF = process_tensor(checkpoint["initial_g_FF"], device)
 
     best_loss = checkpoint.get("best_loss", float("inf"))
 
-    # Restore random states (convert from numpy if needed)
-    rng_state = checkpoint["rng_state"]
-    if isinstance(rng_state, np.ndarray):
-        # Convert numpy array to ByteTensor
-        rng_state = torch.ByteTensor(rng_state.tobytes())
-    elif not isinstance(rng_state, torch.Tensor):
-        # If it's some other type, try to convert
-        rng_state = torch.ByteTensor(rng_state)
-
-    # Ensure it's a ByteTensor (uint8) on CPU
-    if rng_state.dtype != torch.uint8:
-        rng_state = rng_state.to(torch.uint8)
-    if rng_state.device.type != "cpu":
-        rng_state = rng_state.cpu()
-
-    torch.set_rng_state(rng_state)
+    # Restore random states
+    torch.set_rng_state(checkpoint["rng_state"])
     np.random.set_state(checkpoint["numpy_rng_state"])
 
     print(f"  ✓ Resumed from epoch {epoch}, best loss: {best_loss:.6f}")

@@ -42,10 +42,10 @@ threshold_ratio.inhibitory = 0.45      # Target ratio of std vs threshold for in
 [hyperparameters]
 surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
 learning_rate = 5e-4                   # Learning rate for ADAM optimiser
-loss_weight.firing_rate = 1.0          # Weight for firing rate loss
-loss_weight.cv = 0.3                   # Weight for CV loss
-loss_weight.silent_penalty = 0.3       # Weight for silent neuron penalty
-loss_weight.membrane_variance = 0.3    # Weight for membrane variance loss
+loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
+loss_weight.cv = 0.5                   # Weight for CV loss (typical unweighted: ~0.01-0.1)
+loss_weight.silent_penalty = 1.0       # Weight for silent neuron penalty (typical unweighted: ~0.01-0.1)
+loss_weight.membrane_variance = 10.0   # Weight for membrane variance loss (typical unweighted: ~0.01-0.1)
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY

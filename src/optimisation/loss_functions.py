@@ -78,7 +78,7 @@ class VanRossumLoss(nn.Module):
 class CVLoss(nn.Module):
     required_inputs = ["output_spikes"]
 
-    def __init__(self, target_cv: torch.Tensor, penalty_value: float = 10.0):
+    def __init__(self, target_cv: torch.Tensor):
         """
         Coefficient of Variation (CV) loss for spike trains.
 
@@ -86,13 +86,13 @@ class CVLoss(nn.Module):
         on the trial-averaged spike train. CV = std(ISI) / mean(ISI) where ISI = inter-spike intervals.
         This treats all batches as trials of the same neuron.
 
+        Neurons with insufficient spikes (<3) are ignored in the loss computation.
+
         Args:
             target_cv (torch.Tensor): Target CV values for each neuron (n_neurons,).
-            penalty_value (float): Penalty value for neurons with insufficient spikes. Default: 10.0.
         """
         super(CVLoss, self).__init__()
         self.register_buffer("target_cv", target_cv)
-        self.penalty_value = penalty_value
 
     def forward(self, output_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -102,7 +102,7 @@ class CVLoss(nn.Module):
             output_spikes (torch.Tensor): Output spike trains (batch, time, n_neurons).
 
         Returns:
-            torch.Tensor: Mean L2 loss between actual and target CVs.
+            torch.Tensor: Mean L2 loss between actual and target CVs (ignoring neurons with <3 spikes).
         """
         batch, time, n_neurons = output_spikes.shape
 
@@ -119,8 +119,8 @@ class CVLoss(nn.Module):
             spike_times = torch.where(neuron_spikes > 0)[0].float()
 
             if len(spike_times) < 3:
-                # Need at least 3 spikes (2 ISIs) to compute meaningful CV, use high penalty value
-                cvs_tensor[n] = self.penalty_value
+                # Need at least 3 spikes (2 ISIs) to compute meaningful CV, set to NaN
+                cvs_tensor[n] = float("nan")
             else:
                 # Compute inter-spike intervals
                 isi = torch.diff(spike_times)
@@ -132,10 +132,13 @@ class CVLoss(nn.Module):
                 if mean_isi > 0:
                     cvs_tensor[n] = std_isi / mean_isi
                 else:
-                    cvs_tensor[n] = self.penalty_value
+                    cvs_tensor[n] = float("nan")
 
-        # Compute L2 loss against target
-        loss = F.mse_loss(cvs_tensor, self.target_cv)
+        # Compute squared errors
+        squared_errors = (cvs_tensor - self.target_cv) ** 2
+
+        # Use nanmean to ignore NaN values (silent neurons)
+        loss = torch.nanmean(squared_errors)
 
         return loss
 

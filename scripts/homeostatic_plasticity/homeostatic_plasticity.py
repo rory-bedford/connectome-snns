@@ -437,17 +437,20 @@ def main(
         inference_duration_ms = 10000.0  # 10 seconds
         inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-        # Generate input spikes for 10s with batch_size=1
-        inference_input_spikes = next(
-            iter(spike_dataloader)
-        )  # Get batch from dataloader
-        # Take only first sample from batch
-        inference_input_spikes = inference_input_spikes[0:1, :, :]
-        # Repeat to get 10s worth of data
-        num_repeats = int(np.ceil(inference_timesteps / simulation.chunk_size))
-        inference_input_spikes = inference_input_spikes.repeat(1, num_repeats, 1)[
-            :, :inference_timesteps, :
-        ]
+        # Create a new dataset for 10s inference with batch_size=1
+        inference_dataset = PoissonSpikeDataset(
+            firing_rates=input_firing_rates,
+            chunk_size=inference_timesteps,  # Single chunk of 10s
+            dt=simulation.dt,
+            device=device,
+        )
+        inference_dataloader = DataLoader(
+            inference_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+        )
+        inference_input_spikes = next(iter(inference_dataloader))
 
         # Run inference
         with torch.inference_mode():
