@@ -453,7 +453,8 @@ def main(
         )
         inference_input_spikes = next(iter(inference_dataloader))
 
-        # Run inference
+        # Run inference with tqdm progress bar
+        model.use_tqdm = True
         with torch.inference_mode():
             (
                 inf_spikes,
@@ -468,6 +469,7 @@ def main(
                 initial_g=None,
                 initial_g_FF=None,
             )
+        model.use_tqdm = False
 
         print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
 
@@ -651,7 +653,8 @@ def main(
     )
     final_inference_input_spikes = next(iter(final_inference_dataloader))
 
-    # Run inference
+    # Run inference with tqdm progress bar
+    model.use_tqdm = True
     with torch.inference_mode():
         (
             final_inf_spikes,
@@ -666,6 +669,7 @@ def main(
             initial_g=None,
             initial_g_FF=None,
         )
+    model.use_tqdm = False
 
     print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
 
