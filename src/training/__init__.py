@@ -1,5 +1,5 @@
 """Training utilities for conductance-based SNN models."""
 
-from .homeostatic_plasticity_trainer import HomeostaticPlasticityTrainer
+from .homeostatic_plasticity_trainer import SNNTrainer
 
-__all__ = ["HomeostaticPlasticityTrainer"]
+__all__ = ["SNNTrainer"]

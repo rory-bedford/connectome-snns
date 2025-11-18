@@ -1,8 +1,8 @@
 """
-Lightweight PyTorch trainer for homeostatic plasticity in conductance-based SNN models.
+Lightweight PyTorch trainer for training conductance-based SNN models.
 
-This trainer handles just the core training loop logic for homeostatic plasticity
-experiments, assuming all components (model, optimizer, dataloaders, loss functions,
+This trainer handles the core training loop logic for SNN experiments,
+assuming all components (model, optimizer, dataloaders, loss functions,
 loggers, etc.) are already initialized.
 """
 
@@ -17,9 +17,9 @@ from matplotlib import pyplot as plt
 from optimisation.utils import save_checkpoint, AsyncPlotter
 
 
-class HomeostaticPlasticityTrainer:
+class SNNTrainer:
     """
-    Lightweight trainer for homeostatic plasticity training loops.
+    General-purpose trainer for spiking neural network training loops.
 
     All components (model, optimizer, dataloaders, loss functions, loggers)
     should be initialized beforehand and passed to this trainer.
@@ -304,6 +304,11 @@ class HomeostaticPlasticityTrainer:
                             inputs["voltages"] = chunk_outputs["voltages"]
                         elif req_input == "dt":
                             inputs["dt"] = self.simulation.dt
+                else:
+                    # For losses without metadata (e.g., VanRossumLoss),
+                    # assume they take output_spikes as the first argument
+                    # Target spikes should already be bound in the loss function
+                    inputs["output_spikes"] = spikes
 
                 individual_losses[loss_name] = loss_fn(**inputs)
 

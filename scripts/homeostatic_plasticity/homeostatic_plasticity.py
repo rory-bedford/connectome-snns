@@ -38,7 +38,7 @@ from optimisation.loss_functions import (
 )
 from optimisation.utils import load_checkpoint, AsyncLogger
 from parameter_loaders import HomeostaticPlasticityParams
-from training import HomeostaticPlasticityTrainer
+from training import SNNTrainer
 import toml
 import wandb
 from visualization.dashboards import (
@@ -531,7 +531,7 @@ def main(
     )
 
     # Create trainer with all initialized components
-    trainer = HomeostaticPlasticityTrainer(
+    trainer = SNNTrainer(
         model=model,
         optimizer=optimiser,
         scaler=scaler,
