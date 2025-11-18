@@ -50,6 +50,7 @@ from visualization.dashboards import (
 
 
 def main(
+    input_dir,
     output_dir,
     params_file,
     wandb_config=None,
@@ -58,6 +59,7 @@ def main(
     """Main execution function for Dp network homeostatic training.
 
     Args:
+        input_dir (Path, optional): Directory containing input data files (may be None)
         output_dir (Path): Directory where output files will be saved
         params_file (Path): Path to the file containing network parameters
         wandb_config (dict, optional): W&B configuration from experiment.toml
@@ -428,7 +430,26 @@ def main(
             initial_state_dir / "feedforward_weights.npy",
             model.weights_FF.detach().cpu().numpy(),
         )
-        print(f"✓ Initial weights saved to {initial_state_dir}")
+
+        # Save cell type indices and connectivity
+        print("Saving cell type indices and connectivity...")
+        np.save(
+            initial_state_dir / "cell_type_indices.npy",
+            cell_type_indices,
+        )
+        np.save(
+            initial_state_dir / "feedforward_cell_type_indices.npy",
+            input_source_indices,
+        )
+        np.save(
+            initial_state_dir / "recurrent_connectivity.npy",
+            connectivity_graph,
+        )
+        np.save(
+            initial_state_dir / "feedforward_connectivity.npy",
+            feedforward_connectivity_graph,
+        )
+        print(f"✓ Initial state saved to {initial_state_dir}")
 
         # Run 10s inference on single batch (batch_size=1)
         print("\nRunning 10s inference with initial weights...")

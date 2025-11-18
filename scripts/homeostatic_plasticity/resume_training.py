@@ -79,13 +79,16 @@ def resume_training(output_dir, disable_wandb=False):
     print(f"Plots will be saved to: {resumed_output_dir}")
     print()
 
+    # Check if inputs directory exists in output_dir
+    input_dir = output_dir / "inputs" if (output_dir / "inputs").exists() else None
+
     # Resume training with new output directory for plots
     main(
+        input_dir=input_dir,
         output_dir=output_dir,
         params_file=params_file,
         wandb_config=wandb_config,
         resume_from=checkpoint_path,
-        resumed_output_dir=resumed_output_dir,
     )
 
 
