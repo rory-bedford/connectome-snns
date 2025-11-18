@@ -54,7 +54,6 @@ def main(
     params_file,
     wandb_config=None,
     resume_from=None,
-    resumed_output_dir=None,
 ):
     """Main execution function for Dp network homeostatic training.
 
@@ -63,7 +62,6 @@ def main(
         params_file (Path): Path to the file containing network parameters
         wandb_config (dict, optional): W&B configuration from experiment.toml
         resume_from (Path, optional): Path to checkpoint to resume from
-        resumed_output_dir (Path, optional): Separate directory for plots when resuming training
     """
 
     # ======================================
