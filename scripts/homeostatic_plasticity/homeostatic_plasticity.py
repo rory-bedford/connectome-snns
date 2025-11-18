@@ -432,13 +432,17 @@ def main(
         )
         print(f"✓ Initial weights saved to {initial_state_dir}")
 
-        # Run 10s inference on single batch
+        # Run 10s inference on single batch (batch_size=1)
         print("\nRunning 10s inference with initial weights...")
         inference_duration_ms = 10000.0  # 10 seconds
         inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-        # Generate input spikes for 10s
-        inference_input_spikes = next(iter(spike_dataloader))  # Single batch
+        # Generate input spikes for 10s with batch_size=1
+        inference_input_spikes = next(
+            iter(spike_dataloader)
+        )  # Get batch from dataloader
+        # Take only first sample from batch
+        inference_input_spikes = inference_input_spikes[0:1, :, :]
         # Repeat to get 10s worth of data
         num_repeats = int(np.ceil(inference_timesteps / simulation.chunk_size))
         inference_input_spikes = inference_input_spikes.repeat(1, num_repeats, 1)[
