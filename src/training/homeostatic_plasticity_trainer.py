@@ -38,6 +38,8 @@ class HomeostaticPlasticityTrainer:
         progress_bar (Optional[Any]): Initialized tqdm progress bar (optional)
         plot_generator (Optional[Callable]): Optional function for generating plots
         stats_computer (Optional[Callable]): Optional function for computing network stats
+        connectome_mask (Optional[torch.Tensor]): Binary mask for recurrent connectivity constraints
+        feedforward_mask (Optional[torch.Tensor]): Binary mask for feedforward connectivity constraints
     """
 
     def __init__(
@@ -55,6 +57,8 @@ class HomeostaticPlasticityTrainer:
         progress_bar: Optional[Any] = None,
         plot_generator: Optional[Callable] = None,
         stats_computer: Optional[Callable] = None,
+        connectome_mask: Optional[torch.Tensor] = None,
+        feedforward_mask: Optional[torch.Tensor] = None,
     ):
         """Initialize the trainer with pre-configured components."""
         self.model = model
@@ -70,6 +74,8 @@ class HomeostaticPlasticityTrainer:
         self.pbar = progress_bar
         self.plot_generator = plot_generator
         self.stats_computer = stats_computer
+        self.connectome_mask = connectome_mask
+        self.feedforward_mask = feedforward_mask
 
         # Extract commonly used parameters
         self.simulation = params.simulation
@@ -327,8 +333,21 @@ class HomeostaticPlasticityTrainer:
         return losses
 
     def _update_weights(self) -> None:
-        """Update model weights."""
+        """Update model weights with optional connectome-constrained optimization."""
         self.scaler.unscale_(self.optimizer)
+
+        # Apply connectome masks to gradients before optimizer step
+        with torch.no_grad():
+            # Mask recurrent weight gradients
+            if self.connectome_mask is not None and hasattr(self.model, "weights"):
+                if self.model.weights.grad is not None:
+                    self.model.weights.grad *= self.connectome_mask
+
+            # Mask feedforward weight gradients
+            if self.feedforward_mask is not None and hasattr(self.model, "weights_FF"):
+                if self.model.weights_FF.grad is not None:
+                    self.model.weights_FF.grad *= self.feedforward_mask
+
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.scaler.step(self.optimizer)
         self.scaler.update()

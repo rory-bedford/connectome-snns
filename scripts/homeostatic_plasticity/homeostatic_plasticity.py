@@ -547,6 +547,12 @@ def main(
         progress_bar=pbar,
         plot_generator=plot_generator,
         stats_computer=stats_computer,
+        connectome_mask=torch.from_numpy(connectivity_graph.astype(np.float32)).to(
+            device
+        ),
+        feedforward_mask=torch.from_numpy(
+            feedforward_connectivity_graph.astype(np.float32)
+        ).to(device),
     )
 
     # Handle checkpoint resuming
