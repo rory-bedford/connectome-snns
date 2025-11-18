@@ -205,9 +205,9 @@ def main(output_dir, params_file):
     print("STARTING CHUNKED NETWORK SIMULATION")
     print("=" * len("STARTING CHUNKED NETWORK SIMULATION"))
 
-    # =================
+    # ==============================
     # Run Chunked Network Simulation
-    # =================
+    # ==============================
 
     print(f"Running simulation in {simulation.num_chunks} chunks...")
 

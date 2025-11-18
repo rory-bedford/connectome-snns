@@ -29,6 +29,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from optimisation.loss_functions import (
     FiringRateLoss,
     CVLoss,
@@ -404,6 +405,108 @@ def main(
             )
 
         return stats
+
+    # ===================================
+    # Save Initial State and Run Inference
+    # ===================================
+
+    # Only save initial state and run inference if starting from scratch
+    if resume_from is None:
+        print("\n" + "=" * 60)
+        print("SAVING INITIAL STATE AND RUNNING INFERENCE")
+        print("=" * 60)
+
+        # Create initial_state directory
+        initial_state_dir = output_dir / "initial_state"
+        initial_state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save initial weights as numpy arrays
+        print("Saving initial weights...")
+        np.save(
+            initial_state_dir / "recurrent_weights.npy",
+            model.weights.detach().cpu().numpy(),
+        )
+        np.save(
+            initial_state_dir / "feedforward_weights.npy",
+            model.weights_FF.detach().cpu().numpy(),
+        )
+        print(f"✓ Initial weights saved to {initial_state_dir}")
+
+        # Run 10s inference on single batch
+        print("\nRunning 10s inference with initial weights...")
+        inference_duration_ms = 10000.0  # 10 seconds
+        inference_timesteps = int(inference_duration_ms / simulation.dt)
+
+        # Generate input spikes for 10s
+        inference_input_spikes = next(iter(spike_dataloader))  # Single batch
+        # Repeat to get 10s worth of data
+        num_repeats = int(np.ceil(inference_timesteps / simulation.chunk_size))
+        inference_input_spikes = inference_input_spikes.repeat(1, num_repeats, 1)[
+            :, :inference_timesteps, :
+        ]
+
+        # Run inference
+        with torch.inference_mode():
+            (
+                inf_spikes,
+                inf_voltages,
+                inf_currents,
+                inf_currents_FF,
+                inf_conductances,
+                inf_conductances_FF,
+            ) = model.forward(
+                input_spikes=inference_input_spikes,
+                initial_v=None,
+                initial_g=None,
+                initial_g_FF=None,
+            )
+
+        print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
+
+        # Generate plots for initial state
+        if plot_generator:
+            print("Generating initial state plots...")
+            figures_dir = initial_state_dir / "figures"
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to numpy and take only first batch
+            plot_data = {
+                "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
+                "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
+                "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
+                "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
+                "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
+                "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+                "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+                "weights": model.weights.detach().cpu().numpy(),
+                "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+            }
+
+            # Generate plots
+            figures = plot_generator(**plot_data)
+
+            # Save plots to disk
+            for plot_name, fig in figures.items():
+                fig_path = figures_dir / f"{plot_name}.png"
+                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+                plt.close(fig)
+
+            print(f"✓ Initial state plots saved to {figures_dir}")
+
+        # Clean up inference data
+        del (
+            inference_input_spikes,
+            inf_spikes,
+            inf_voltages,
+            inf_currents,
+            inf_currents_FF,
+            inf_conductances,
+            inf_conductances_FF,
+        )
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+        print("=" * 60 + "\n")
 
     # ===================
     # Setup Training Loop
