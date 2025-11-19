@@ -6,18 +6,13 @@ to be used as teacher activity for fitting recurrent networks.
 """
 
 import numpy as np
-from inputs.dataloaders import PoissonSpikeDataset
+from inputs.dataloaders import PoissonOdourDataset, collate_pattern_batches
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
 from parameter_loaders import TeacherActivityParams
 import toml
-from analysis import compute_network_statistics
-from visualization.dashboards import (
-    create_connectivity_dashboard,
-    create_activity_dashboard,
-)
+from tqdm import tqdm
 
 
 def main(input_dir, output_dir, params_file):
@@ -76,43 +71,45 @@ def main(input_dir, output_dir, params_file):
     # Create Feedforward Inputs
     # =========================
 
-    # Calculate simulation parameters
-    print(
-        f"Simulation: {simulation.duration:.1f} ms in {simulation.num_chunks} chunks of {simulation.chunk_size:.1f} ms each (batch_size={simulation.batch_size})"
-    )
-    print(
-        f"Timestep: {simulation.dt:.2f} ms ({int(simulation.chunk_size / simulation.dt)} steps per chunk)"
-    )
+    # Define input patterns
+    n_patterns = 10  # Number of distinct input patterns
+    batch_size = 10  # Number of repeats/trials per pattern
 
-    # Create firing rates array for input neurons
-    input_firing_rates = np.zeros(feedforward_weights.shape[0])
-    for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
-        mask = input_source_indices == ct_idx
-        input_firing_rates[mask] = feedforward.activity[ct_name].firing_rate
+    # Create firing rates array for input patterns: (n_patterns, n_input_neurons)
+    input_firing_rates = np.zeros((n_patterns, feedforward_weights.shape[0]))
 
-    # Create Poisson spike generator dataset
-    spike_dataset = PoissonSpikeDataset(
+    # Generate different patterns with varying firing rates
+    for pattern_idx in range(n_patterns):
+        for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
+            mask = input_source_indices == ct_idx
+            base_rate = feedforward.activity[ct_name].firing_rate
+            # Vary rates across patterns (0.5x to 1.5x base rate)
+            modulation = 0.5 + (pattern_idx / max(1, n_patterns - 1)) * 1.0
+            input_firing_rates[pattern_idx, mask] = base_rate * modulation
+
+    # Create Poisson odour dataset for multiple patterns
+    # Dataset cycles through patterns indefinitely
+    spike_dataset = PoissonOdourDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
         device=device,
     )
 
-    # Create DataLoader with batch_size from parameters
+    # DataLoader: batch_size * n_patterns items fetched per iteration
+    # Result shape: (batch_size, n_patterns, n_steps, n_neurons)
+    # batch_size = number of repeats/trials, n_patterns = number of different patterns
     spike_dataloader = DataLoader(
         spike_dataset,
-        batch_size=simulation.batch_size,
+        batch_size=batch_size * n_patterns,  # Fetch batch_size repeats of all patterns
         shuffle=False,
+        collate_fn=collate_pattern_batches,
         num_workers=0,  # Keep 0 for GPU generation
     )
 
     # ======================
     # Initialize LIF Network
     # ======================
-
-    print(
-        f"Initializing conductance-based LIF network with {len(recurrent.get_cell_params())} cell types and {len(recurrent.get_synapse_params())} synapse types..."
-    )
 
     # Initialize conductance-based LIF network model
     model = ConductanceLIFNetwork(
@@ -127,7 +124,7 @@ def main(input_dir, output_dir, params_file):
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         optimisable=None,  # No optimization for inference
-        use_tqdm=True,  # Enable model's internal progress bar for each chunk
+        use_tqdm=False,  # Disable model's internal progress bar
     )
 
     # Move model to device for GPU acceleration
@@ -146,19 +143,23 @@ def main(input_dir, output_dir, params_file):
     # Run Chunked Network Simulation
     # ==============================
 
-    print(f"Running simulation in {simulation.num_chunks} chunks...")
+    print(f"Running simulation with {n_patterns} patterns × {batch_size} repeats")
+    print(f"Processing {simulation.num_chunks} chunks...")
+    print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
+    print(
+        f"DataLoader returns (batch_size={batch_size}, n_patterns={n_patterns}, time, neurons) per chunk"
+    )
 
-    # Initialize lists to accumulate results across chunks
+    # Initialize storage with explicit batch/pattern dimensions
+    # Shape: (batch_size, n_patterns, time, neurons)
+    n_neurons = len(cell_type_indices)
+    n_input_neurons = feedforward_weights.shape[0]
+
+    # Storage for chunks
     all_output_spikes = []
-    all_output_voltages = []
-    all_output_currents = []
-    all_output_currents_FF = []
-    all_output_currents_leak = []
-    all_output_conductances = []
-    all_output_conductances_FF = []
     all_input_spikes = []
 
-    # Initialize state variables (will be passed between chunks)
+    # Initialize state variables: (batch_size, n_patterns, ...)
     initial_v = None
     initial_g = None
     initial_g_FF = None
@@ -166,73 +167,61 @@ def main(input_dir, output_dir, params_file):
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
         dataloader_iter = iter(spike_dataloader)
-        for chunk_idx in range(simulation.num_chunks):
-            print(f"Processing chunk {chunk_idx + 1}/{simulation.num_chunks}...")
 
-            # Get next chunk from dataloader
-            input_spikes_chunk = next(dataloader_iter)
+        for chunk_idx in tqdm(range(simulation.num_chunks), desc="Processing chunks"):
+            # Get next chunk: (batch_size, n_patterns, n_steps, n_input_neurons)
+            input_spikes_chunk, pattern_indices = next(dataloader_iter)
+
+            # Flatten batch and pattern dimensions for SNN forward pass
+            # From (batch_size, n_patterns, n_steps, n_input_neurons) to (batch_size*n_patterns, n_steps, n_input_neurons)
+            input_spikes_flat = input_spikes_chunk.reshape(
+                batch_size * n_patterns, -1, n_input_neurons
+            )
 
             # Run one chunk of simulation
             (
-                output_spikes,
-                output_voltages,
-                output_currents,
-                output_currents_FF,
-                output_currents_leak,
-                output_conductances,
-                output_conductances_FF,
+                output_spikes_chunk_flat,
+                output_voltages_chunk_flat,
+                output_currents_chunk_flat,
+                output_currents_FF_chunk_flat,
+                output_currents_leak_chunk_flat,
+                output_conductances_chunk_flat,
+                output_conductances_FF_chunk_flat,
             ) = model.forward(
-                input_spikes=input_spikes_chunk,
+                input_spikes=input_spikes_flat,
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
             )
 
-            # Store final states for next chunk (average across batch dimension)
-            initial_v = output_voltages[:, -1, :].clone()  # Last timestep voltages
-            initial_g = output_conductances[
-                :, -1, :, :
-            ].clone()  # Last timestep conductances
-            initial_g_FF = output_conductances_FF[
-                :, -1, :, :
-            ].clone()  # Last timestep FF conductances
+            # Unflatten outputs back to (batch_size, n_patterns, ...)
+            n_steps_out = output_spikes_chunk_flat.shape[1]
+            output_spikes_chunk = output_spikes_chunk_flat.reshape(
+                batch_size, n_patterns, n_steps_out, n_neurons
+            )
+
+            # Store final states for next chunk: (batch_size*n_patterns, neurons) or (batch_size*n_patterns, neurons, syn_types)
+            initial_v = output_voltages_chunk_flat[:, -1, :].clone()
+            initial_g = output_conductances_chunk_flat[:, -1, :, :].clone()
+            initial_g_FF = output_conductances_FF_chunk_flat[:, -1, :, :].clone()
 
             # Move to CPU and accumulate results
-            # Store all batches for spikes, but only first batch for voltages/currents/conductances
             if device == "cuda":
-                all_output_spikes.append(output_spikes.bool().cpu())
+                all_output_spikes.append(output_spikes_chunk.bool().cpu())
                 all_input_spikes.append(input_spikes_chunk.cpu())
-                # Only store first batch for detailed data
-                all_output_voltages.append(output_voltages[0:1, ...].cpu())
-                all_output_currents.append(output_currents[0:1, ...].cpu())
-                all_output_currents_FF.append(output_currents_FF[0:1, ...].cpu())
-                all_output_currents_leak.append(output_currents_leak[0:1, ...].cpu())
-                all_output_conductances.append(output_conductances[0:1, ...].cpu())
-                all_output_conductances_FF.append(
-                    output_conductances_FF[0:1, ...].cpu()
-                )
             else:
-                all_output_spikes.append(output_spikes.bool())
+                all_output_spikes.append(output_spikes_chunk.bool())
                 all_input_spikes.append(input_spikes_chunk)
-                # Only store first batch for detailed data
-                all_output_voltages.append(output_voltages[0:1, ...])
-                all_output_currents.append(output_currents[0:1, ...])
-                all_output_currents_FF.append(output_currents_FF[0:1, ...])
-                all_output_currents_leak.append(output_currents_leak[0:1, ...])
-                all_output_conductances.append(output_conductances[0:1, ...])
-                all_output_conductances_FF.append(output_conductances_FF[0:1, ...])
 
-    # Concatenate all batches along time dimension (dim=1) and convert to numpy
-    output_spikes = torch.cat(all_output_spikes, dim=1).numpy()
-    output_voltages = torch.cat(all_output_voltages, dim=1).numpy()
-    output_currents = torch.cat(all_output_currents, dim=1).numpy()
-    output_currents_FF = torch.cat(all_output_currents_FF, dim=1).numpy()
-    output_currents_leak = torch.cat(all_output_currents_leak, dim=1).numpy()
-    output_conductances = torch.cat(all_output_conductances, dim=1).numpy()
-    output_conductances_FF = torch.cat(all_output_conductances_FF, dim=1).numpy()
-    input_spikes = torch.cat(all_input_spikes, dim=1).numpy()
+    # Concatenate chunks along time dimension: (batch_size, n_patterns, time, neurons)
+    output_spikes = torch.cat(all_output_spikes, dim=2).numpy()
+    input_spikes = torch.cat(all_input_spikes, dim=2).numpy()
 
-    print("✓ Network simulation completed!")
+    print("\n✓ Network simulation completed!")
+    print(f"Final output shape: {output_spikes.shape}")
+    print(
+        f"  (batch_size={output_spikes.shape[0]}, n_patterns={output_spikes.shape[1]}, time={output_spikes.shape[2]}, neurons={output_spikes.shape[3]})"
+    )
 
     # =====================================
     # Save Output Data for Further Analysis
@@ -243,11 +232,15 @@ def main(input_dir, output_dir, params_file):
     results_dir = output_dir / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save spike trains (the main output for analysis)
+    # Save spike trains and patterns
+    # input_spikes: (batch_size, n_patterns, time, n_input_neurons)
+    # output_spikes: (batch_size, n_patterns, time, neurons)
+    # input_firing_rates: (n_patterns, n_input_neurons) - defines the patterns
     np.savez_compressed(
         results_dir / "spike_data.npz",
-        output_spikes=output_spikes.astype(np.bool_),
         input_spikes=input_spikes.astype(np.bool_),
+        output_spikes=output_spikes.astype(np.bool_),
+        input_firing_rates=input_firing_rates,
     )
 
     print(f"✓ Saved data to {results_dir}")
@@ -257,83 +250,6 @@ def main(input_dir, output_dir, params_file):
         del model
         torch.cuda.empty_cache()
         print("✓ Freed GPU memory")
-
-    # =====================================
-    # Generate All Plots and Visualizations
-    # =====================================
-
-    print("Generating dashboards...")
-
-    # Generate connectivity dashboard
-    connectivity_fig = create_connectivity_dashboard(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_source_indices,
-        cell_type_names=params.recurrent.cell_types.names,
-        input_cell_type_names=params.feedforward.cell_types.names,
-        recurrent_g_bar_by_type=params.recurrent.get_g_bar_by_type(),
-        feedforward_g_bar_by_type=params.feedforward.get_g_bar_by_type(),
-    )
-
-    # Compute total excitatory and inhibitory currents from recurrent and feedforward
-    # Generate activity dashboard
-    activity_fig = create_activity_dashboard(
-        output_spikes=output_spikes[0:1, ...],
-        input_spikes=input_spikes[0:1, ...],
-        cell_type_indices=cell_type_indices,
-        cell_type_names=params.recurrent.cell_types.names,
-        dt=params.simulation.dt,
-        voltages=output_voltages,
-        neuron_types=cell_type_indices,
-        neuron_params=params.recurrent.get_neuron_params_for_plotting(),
-        recurrent_currents=output_currents,
-        feedforward_currents=output_currents_FF,
-        leak_currents=output_currents_leak,
-        recurrent_conductances=output_conductances,
-        feedforward_conductances=output_conductances_FF,
-        input_cell_type_names=params.feedforward.cell_types.names,
-        recurrent_synapse_names=params.recurrent.get_synapse_names(),
-        feedforward_synapse_names=params.feedforward.get_synapse_names(),
-        window_size=50.0,
-        n_neurons_plot=20,
-        fraction=1.0,
-        random_seed=42,
-    )
-
-    # Save the two dashboards
-    figures_dir = output_dir / "figures"
-    figures_dir.mkdir(parents=True, exist_ok=True)
-
-    connectivity_fig.savefig(
-        figures_dir / "connectivity_dashboard.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(connectivity_fig)
-
-    activity_fig.savefig(
-        figures_dir / "activity_dashboard.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(activity_fig)
-
-    print(f"✓ Saved dashboard plots to {figures_dir}")
-
-    # ============================================
-    # Compute and Save Combined Statistics to CSV
-    # ============================================
-
-    print("Computing network statistics...")
-    stats_df = compute_network_statistics(
-        output_spikes=output_spikes,
-        output_voltages=output_voltages,
-        cell_type_indices=cell_type_indices,
-        cell_type_names=params.recurrent.cell_types.names,
-        duration=params.simulation.duration,
-        dt=params.simulation.dt,
-    )
-
-    stats_csv_path = output_dir / "network_statistics.csv"
-    stats_df.to_csv(stats_csv_path, index=False)
-    print(f"✓ Saved network statistics to {stats_csv_path}")
 
     # ========
     # Clean Up
