@@ -315,7 +315,6 @@ def main(
         """Generate connectivity and activity dashboards."""
         # Generate connectivity dashboard
         connectivity_fig = create_connectivity_dashboard(
-            connectivity_graph=connectivity_graph,
             weights=weights,
             feedforward_weights=feedforward_weights,
             cell_type_indices=cell_type_indices,

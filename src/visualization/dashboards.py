@@ -37,7 +37,6 @@ from visualization.neuronal_dynamics import (
 
 
 def create_connectivity_dashboard(
-    connectivity_graph: NDArray[np.float32],
     weights: NDArray[np.float32],
     feedforward_weights: NDArray[np.float32],
     cell_type_indices: NDArray[np.int32],
@@ -54,7 +53,6 @@ def create_connectivity_dashboard(
     """Create a comprehensive connectivity dashboard with all connectivity plots.
 
     Args:
-        connectivity_graph (NDArray[np.float32]): Binary connectivity matrix (N x N).
         weights (NDArray[np.float32]): Weight matrix (N x N).
         feedforward_weights (NDArray[np.float32]): Feedforward weight matrix (M x N).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for recurrent neurons.

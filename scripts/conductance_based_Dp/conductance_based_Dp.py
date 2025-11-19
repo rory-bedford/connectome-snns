@@ -26,14 +26,7 @@ import torch
 import matplotlib.pyplot as plt
 from parameter_loaders import ConductanceBasedParams
 import toml
-import pandas as pd
-from analysis.firing_statistics import (
-    compute_firing_rate_by_cell_type,
-    compute_cv_by_cell_type,
-)
-from analysis.voltage_statistics import (
-    compute_membrane_potential_by_cell_type,
-)
+from analysis import compute_network_statistics
 from visualization.dashboards import (
     create_connectivity_dashboard,
     create_activity_dashboard,
@@ -323,7 +316,6 @@ def main(input_dir, output_dir, params_file):
 
     # Generate connectivity dashboard
     connectivity_fig = create_connectivity_dashboard(
-        connectivity_graph=connectivity_graph,
         weights=weights,
         feedforward_weights=feedforward_weights,
         cell_type_indices=cell_type_indices,
@@ -376,81 +368,22 @@ def main(input_dir, output_dir, params_file):
     print(f"✓ Saved dashboard plots to {figures_dir}")
 
     # ============================================
-    # Compute and Save Statistics to CSVs
+    # Compute and Save Combined Statistics to CSV
     # ============================================
 
-    # Create analysis directory if it doesn't exist
-    analysis_dir = output_dir / "analysis"
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Computing statistics and saving to {analysis_dir}...")
-
-    # Compute firing rate statistics
-    firing_rate_stats = compute_firing_rate_by_cell_type(
-        spike_trains=output_spikes,
+    print("Computing network statistics...")
+    stats_df = compute_network_statistics(
+        output_spikes=output_spikes,
+        output_voltages=output_voltages,
         cell_type_indices=cell_type_indices,
+        cell_type_names=params.recurrent.cell_types.names,
         duration=params.simulation.duration,
-    )
-
-    # Convert to DataFrame and save
-    firing_rate_df = pd.DataFrame(
-        [
-            {
-                "cell_type": cell_type_idx,
-                "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                **stats,
-            }
-            for cell_type_idx, stats in firing_rate_stats.items()
-        ]
-    )
-    firing_rate_csv_path = analysis_dir / "firing_rate_statistics.csv"
-    firing_rate_df.to_csv(firing_rate_csv_path, index=False)
-    print(f"  Saved firing rate statistics to {firing_rate_csv_path}")
-
-    # Compute CV statistics
-    cv_stats = compute_cv_by_cell_type(
-        spike_trains=output_spikes,
-        cell_type_indices=cell_type_indices,
         dt=params.simulation.dt,
     )
 
-    # Convert to DataFrame and save
-    cv_df = pd.DataFrame(
-        [
-            {
-                "cell_type": cell_type_idx,
-                "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                **stats,
-            }
-            for cell_type_idx, stats in cv_stats.items()
-        ]
-    )
-    cv_csv_path = analysis_dir / "cv_statistics.csv"
-    cv_df.to_csv(cv_csv_path, index=False)
-    print(f"  Saved CV statistics to {cv_csv_path}")
-
-    # Compute membrane potential statistics
-    voltage_stats = compute_membrane_potential_by_cell_type(
-        voltages=output_voltages,
-        cell_type_indices=cell_type_indices,
-    )
-
-    # Convert to DataFrame and save
-    voltage_df = pd.DataFrame(
-        [
-            {
-                "cell_type": cell_type_idx,
-                "cell_type_name": params.recurrent.cell_types.names[cell_type_idx],
-                **stats,
-            }
-            for cell_type_idx, stats in voltage_stats.items()
-        ]
-    )
-    voltage_csv_path = analysis_dir / "voltage_statistics.csv"
-    voltage_df.to_csv(voltage_csv_path, index=False)
-    print(f"  Saved voltage statistics to {voltage_csv_path}")
-
-    print("All statistics saved successfully!")
+    stats_csv_path = output_dir / "network_statistics.csv"
+    stats_df.to_csv(stats_csv_path, index=False)
+    print(f"✓ Saved network statistics to {stats_csv_path}")
 
     # ========
     # Clean Up
@@ -461,5 +394,5 @@ def main(input_dir, output_dir, params_file):
     print("=" * len("SIMULATION COMPLETE!"))
     print(f"✓ Results saved to {output_dir / 'results'}")
     print(f"✓ Figures saved to {output_dir / 'figures'}")
-    print(f"✓ Analysis saved to {output_dir / 'analysis'}")
+    print(f"✓ Statistics saved to {output_dir / 'network_statistics.csv'}")
     print("=" * len("SIMULATION COMPLETE!"))
