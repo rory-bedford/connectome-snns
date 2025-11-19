@@ -208,7 +208,7 @@ def main(
     # Create DataLoader with batch_size from parameters
     spike_dataloader = DataLoader(
         spike_dataset,
-        batch_size=params.training.batch_size,
+        batch_size=params.simulation.batch_size,
         shuffle=False,
         num_workers=0,  # Keep 0 for GPU generation
     )
@@ -586,7 +586,7 @@ def main(
     print(
         f"Total chunks: {simulation.num_chunks} ({simulation.total_duration_s:.1f}s total)"
     )
-    print(f"Batch size: {training.batch_size}")
+    print(f"Batch size: {simulation.batch_size}")
     print(
         f"Log interval: {training.log_interval} chunks ({params.log_interval_s:.1f}s)"
     )
