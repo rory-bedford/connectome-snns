@@ -3,11 +3,13 @@
 For training networks to match target activity patterns without fixed connectivity.
 """
 
-from pydantic import BaseModel, model_validator
+from typing import Dict
+from pydantic import BaseModel
 from .base_configs import (
     SimulationConfig,
     TrainingConfig,
     Hyperparameters,
+    ActivityConfig,
     BaseRecurrentLayerConfig,
     BaseFeedforwardLayerConfig,
 )
@@ -27,60 +29,39 @@ class FittingActivityRecurrentConfig(BaseRecurrentLayerConfig):
 
 
 class FittingActivityFeedforwardConfig(BaseFeedforwardLayerConfig):
-    """Feedforward layer config for fitting activity (no topology/weights/activity)."""
+    """Feedforward layer config for fitting activity (includes activity but no topology/weights)."""
 
+    activity: Dict[str, ActivityConfig]
     # cell_types, synapses inherited from BaseFeedforwardLayerConfig
     # All methods inherited from BaseFeedforwardLayerConfig
-    pass
 
 
 # =============================================================================
-# TOP-LEVEL MODEL
+# TOP-LEVEL MODELS
 # =============================================================================
 
 
-class FittingActivityParams(BaseModel):
-    """Teacher-student training for fitting activity.
+class TeacherActivityParams(BaseModel):
+    """Parameters for generating teacher activity from a trained network.
 
-    Supports both teacher generation (without training/hyperparameters) and
-    student training (with training/hyperparameters).
+    Loads pre-trained network structure and generates activity for use as training target.
+    Does not include training or optimization parameters.
     """
 
     simulation: SimulationConfig
-    training: TrainingConfig | None = None
-    hyperparameters: Hyperparameters | None = None
     recurrent: FittingActivityRecurrentConfig
     feedforward: FittingActivityFeedforwardConfig
 
-    @property
-    def log_interval_s(self) -> float | None:
-        """Duration of log interval in seconds (None if training not configured)."""
-        if self.training is None:
-            return None
-        return self.training.log_interval * self.simulation.chunk_duration_s
 
-    @property
-    def checkpoint_interval_s(self) -> float | None:
-        """Duration of checkpoint interval in seconds (None if training not configured)."""
-        if self.training is None:
-            return None
-        return self.training.checkpoint_interval * self.simulation.chunk_duration_s
+class StudentTrainingParams(BaseModel):
+    """Parameters for training student network to match teacher activity.
 
-    @model_validator(mode="after")
-    def validate_checkpoint_alignment(self) -> "FittingActivityParams":
-        """Validate that simulation duration aligns with checkpoint interval (only for training)."""
-        # Skip validation if no training configuration
-        if self.training is None:
-            return self
+    Includes training configuration and hyperparameters for optimizing network
+    to reproduce target activity patterns.
+    """
 
-        num_chunks = int(
-            self.simulation.duration / (self.simulation.chunk_size * self.simulation.dt)
-        )
-
-        if num_chunks % self.training.checkpoint_interval != 0:
-            raise ValueError(
-                f"Number of chunks ({num_chunks}) must be a multiple of checkpoint_interval "
-                f"({self.training.checkpoint_interval}). Either adjust duration or checkpoint_interval."
-            )
-
-        return self
+    simulation: SimulationConfig
+    training: TrainingConfig
+    hyperparameters: Hyperparameters
+    recurrent: FittingActivityRecurrentConfig
+    feedforward: FittingActivityFeedforwardConfig

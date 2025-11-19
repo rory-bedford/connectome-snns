@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 def plot_assembly_graph(
     connectivity_graph: NDArray[np.float32],
     cell_type_indices: NDArray[np.int32],
-    num_assemblies: int,
+    num_assemblies: int | None = None,
     plot_num_assemblies: int = 2,
     heatmap_inches: float = 8.0,
     ax: plt.Axes | None = None,
@@ -23,8 +23,9 @@ def plot_assembly_graph(
     Args:
         connectivity_graph (NDArray[np.float32]): Binary connectivity matrix (N x N).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
-        num_assemblies (int): Total number of assemblies in the network.
-        plot_num_assemblies (int): Number of assemblies to display. Defaults to 2.
+        num_assemblies (int | None): Total number of assemblies in the network.
+            If None, shows 10% of the matrix. Defaults to None.
+        plot_num_assemblies (int): Number of assemblies to display (ignored if num_assemblies is None). Defaults to 2.
         heatmap_inches (float): Size of the heatmap in inches. Defaults to 8.0.
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
@@ -32,8 +33,13 @@ def plot_assembly_graph(
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     num_neurons = connectivity_graph.shape[0]
-    neurons_per_assembly = num_neurons // num_assemblies
-    plot_size_neurons = neurons_per_assembly * plot_num_assemblies
+
+    if num_assemblies is None:
+        # Show 10% of the matrix
+        plot_size_neurons = int(num_neurons * 0.1)
+    else:
+        neurons_per_assembly = num_neurons // num_assemblies
+        plot_size_neurons = neurons_per_assembly * plot_num_assemblies
 
     # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
     cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
@@ -62,9 +68,13 @@ def plot_assembly_graph(
     cbar = plt.colorbar(im, ax=ax, ticks=[-1, 0, 1])
     cbar.ax.set_yticklabels(["Inhibitory (-1)", "No connection (0)", "Excitatory (+1)"])
 
-    ax.set_title(
-        f"Assembly Graph Structure (showing {plot_num_assemblies}/{num_assemblies} assemblies)"
-    )
+    # Create title based on whether we're showing assemblies or a percentage
+    if num_assemblies is None:
+        title = f"Assembly Graph Structure (showing {plot_size_neurons}/{num_neurons} cells)"
+    else:
+        title = f"Assembly Graph Structure (showing {plot_num_assemblies}/{num_assemblies} assemblies)"
+
+    ax.set_title(title)
     ax.set_xticks([])
     ax.set_yticks([])
 
@@ -74,7 +84,7 @@ def plot_assembly_graph(
 def plot_weighted_connectivity(
     weights: NDArray[np.float32],
     cell_type_indices: NDArray[np.int32],
-    num_assemblies: int,
+    num_assemblies: int | None = None,
     plot_num_assemblies: int = 2,
     heatmap_inches: float = 8.0,
     ax: plt.Axes | None = None,
@@ -84,8 +94,9 @@ def plot_weighted_connectivity(
     Args:
         weights (NDArray[np.float32]): Weight matrix (N x N).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
-        num_assemblies (int): Total number of assemblies in the network.
-        plot_num_assemblies (int): Number of assemblies to display. Defaults to 2.
+        num_assemblies (int | None): Total number of assemblies in the network.
+            If None, shows 10% of the matrix. Defaults to None.
+        plot_num_assemblies (int): Number of assemblies to display (ignored if num_assemblies is None). Defaults to 2.
         heatmap_inches (float): Size of the heatmap in inches. Defaults to 8.0.
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
@@ -93,8 +104,13 @@ def plot_weighted_connectivity(
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     num_neurons = weights.shape[0]
-    neurons_per_assembly = num_neurons // num_assemblies
-    plot_size_neurons = neurons_per_assembly * plot_num_assemblies
+
+    if num_assemblies is None:
+        # Show 10% of the matrix
+        plot_size_neurons = int(num_neurons * 0.1)
+    else:
+        neurons_per_assembly = num_neurons // num_assemblies
+        plot_size_neurons = neurons_per_assembly * plot_num_assemblies
 
     # Apply signs based on source cell type: 0=excitatory (+1), 1=inhibitory (-1)
     cell_type_signs = np.where(cell_type_indices == 0, 1, -1)
@@ -123,9 +139,13 @@ def plot_weighted_connectivity(
     cbar = plt.colorbar(im, ax=ax, ticks=[-1, -0.5, 0, 0.5, 1])
     cbar.ax.set_yticklabels(["-1", "-0.5", "0", "+0.5", "+1"])
 
-    ax.set_title(
-        f"Weighted Connectivity Matrix (showing {plot_num_assemblies}/{num_assemblies} assemblies)"
-    )
+    # Create title based on whether we're showing assemblies or a percentage
+    if num_assemblies is None:
+        title = f"Weighted Connectivity Matrix (showing {plot_size_neurons}/{num_neurons} cells)"
+    else:
+        title = f"Weighted Connectivity Matrix (showing {plot_num_assemblies}/{num_assemblies} assemblies)"
+
+    ax.set_title(title)
     ax.set_xlabel("Postsynaptic Dp Cells")
     ax.set_ylabel("Presynaptic Dp Cells")
     ax.set_xticks([])

@@ -23,7 +23,7 @@ import toml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from scripts.fitting_activity.fitting_activity import main
+from scripts.fitting_activity.train_student import main
 
 
 def resume_training(output_dir, disable_wandb=False):

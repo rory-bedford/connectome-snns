@@ -10,6 +10,7 @@ from .base_configs import (
     LossWeights,
     Hyperparameters,
     Targets,
+    SimpleCellTypesConfig,
     CellTypesConfig,
     TopologyConfig,
     WeightsConfig,
@@ -29,8 +30,8 @@ from .conductance_based import (
 from .homeostatic_plasticity import HomeostaticPlasticityParams
 
 from .fitting_activity import (
-    FittingActivityParams,
-    FittingActivitySimulationConfig,
+    TeacherActivityParams,
+    StudentTrainingParams,
     FittingActivityRecurrentConfig,
     FittingActivityFeedforwardConfig,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "LossWeights",
     "Hyperparameters",
     "Targets",
+    "SimpleCellTypesConfig",
     "CellTypesConfig",
     "TopologyConfig",
     "WeightsConfig",
@@ -57,8 +59,8 @@ __all__ = [
     # Homeostatic plasticity
     "HomeostaticPlasticityParams",
     # Fitting activity
-    "FittingActivityParams",
-    "FittingActivitySimulationConfig",
+    "TeacherActivityParams",
+    "StudentTrainingParams",
     "FittingActivityRecurrentConfig",
     "FittingActivityFeedforwardConfig",
 ]

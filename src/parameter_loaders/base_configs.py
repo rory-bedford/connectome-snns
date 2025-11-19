@@ -92,10 +92,15 @@ class Targets(BaseModel):
 # =============================================================================
 
 
-class CellTypesConfig(BaseModel):
-    """Cell types."""
+class SimpleCellTypesConfig(BaseModel):
+    """Cell types without proportions (for pre-defined networks)."""
 
     names: List[str]
+
+
+class CellTypesConfig(SimpleCellTypesConfig):
+    """Cell types with proportions (for generating networks)."""
+
     proportion_list: List[float] = Field(alias="proportion")
 
     @property
@@ -237,7 +242,7 @@ class ActivityConfig(BaseModel):
 class BaseRecurrentLayerConfig(BaseModel):
     """Base configuration for recurrent layers with shared helper methods."""
 
-    cell_types: CellTypesConfig
+    cell_types: CellTypesConfig | SimpleCellTypesConfig
     physiology: Dict[str, PhysiologyConfig]
     synapses: Dict[str, SynapseConfig]
 
@@ -369,7 +374,7 @@ class BaseRecurrentLayerConfig(BaseModel):
 class BaseFeedforwardLayerConfig(BaseModel):
     """Base configuration for feedforward layers with shared helper methods."""
 
-    cell_types: CellTypesConfig
+    cell_types: CellTypesConfig | SimpleCellTypesConfig
     synapses: Dict[str, SynapseConfig]
 
     def get_cell_params(self) -> List[Dict[str, int | str]]:
