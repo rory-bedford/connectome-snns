@@ -368,39 +368,39 @@ def create_activity_dashboard(
                     inh_syn_indices.append(synapse_idx)
                 synapse_idx += 1
 
-        # Check which excitatory neurons meet our criteria
-        # Vectorized checks for all excitatory neurons
-        # Check if neurons have spiked in the time window
-        has_spiked = (
-            output_spikes[0, -n_steps_plot:, exc_neuron_indices].sum(axis=0) > 0
-        )
+        candidates = []
+        for neuron_idx in exc_neuron_indices:
+            # Check if neuron has spiked in the time window
+            has_spiked = output_spikes[0, -n_steps_plot:, neuron_idx].sum() > 0
 
-        # Check if neurons have received excitatory recurrent input
-        has_exc_input = np.zeros(len(exc_neuron_indices), dtype=bool)
-        if exc_syn_indices:
-            exc_conductance_sums = recurrent_g_total_for_selection[
-                0, -n_steps_plot:, :, :
-            ][:, exc_neuron_indices, :][:, :, exc_syn_indices].sum(axis=(0, 2))
-            has_exc_input = exc_conductance_sums > 0
+            # Check if neuron has received excitatory recurrent input
+            has_exc_input = False
+            if exc_syn_indices:
+                exc_conductance_sum = recurrent_g_total_for_selection[
+                    0, -n_steps_plot:, neuron_idx, exc_syn_indices
+                ].sum()
+                has_exc_input = exc_conductance_sum > 0
 
-        # Check if neurons have received inhibitory input
-        has_inh_input = np.zeros(len(exc_neuron_indices), dtype=bool)
-        if inh_syn_indices:
-            inh_conductance_sums = recurrent_g_total_for_selection[
-                0, -n_steps_plot:, :, :
-            ][:, exc_neuron_indices, :][:, :, inh_syn_indices].sum(axis=(0, 2))
-            has_inh_input = inh_conductance_sums > 0
+            # Check if neuron has received inhibitory input
+            has_inh_input = False
+            if inh_syn_indices:
+                inh_conductance_sum = recurrent_g_total_for_selection[
+                    0, -n_steps_plot:, neuron_idx, inh_syn_indices
+                ].sum()
+                has_inh_input = inh_conductance_sum > 0
 
-        # Find candidates that meet all criteria
-        candidate_mask = has_spiked & has_exc_input & has_inh_input
-        candidates = exc_neuron_indices[candidate_mask]
+            if has_spiked and has_exc_input and has_inh_input:
+                candidates.append(neuron_idx)
 
         # Rank candidates by firing rate and choose median
         if len(candidates) > 0:
-            # Compute firing rates for all candidates (vectorized)
-            spike_counts = output_spikes[0, :, candidates].sum(axis=0)
-            duration_s = output_spikes.shape[1] * dt * 1e-3  # Convert ms to s
-            candidate_rates = spike_counts / duration_s
+            # Compute firing rates for candidates
+            candidate_rates = []
+            for neuron_idx in candidates:
+                spike_count = output_spikes[0, :, neuron_idx].sum()
+                duration_s = output_spikes.shape[1] * dt * 1e-3  # Convert ms to s
+                firing_rate = spike_count / duration_s
+                candidate_rates.append(firing_rate)
 
             # Sort candidates by firing rate and select median
             sorted_indices = np.argsort(candidate_rates)
