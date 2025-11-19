@@ -153,6 +153,7 @@ def main(input_dir, output_dir, params_file):
     all_output_voltages = []
     all_output_currents = []
     all_output_currents_FF = []
+    all_output_currents_leak = []
     all_output_conductances = []
     all_output_conductances_FF = []
     all_input_spikes = []
@@ -177,6 +178,7 @@ def main(input_dir, output_dir, params_file):
                 output_voltages,
                 output_currents,
                 output_currents_FF,
+                output_currents_leak,
                 output_conductances,
                 output_conductances_FF,
             ) = model.forward(
@@ -204,6 +206,7 @@ def main(input_dir, output_dir, params_file):
                 all_output_voltages.append(output_voltages[0:1, ...].cpu())
                 all_output_currents.append(output_currents[0:1, ...].cpu())
                 all_output_currents_FF.append(output_currents_FF[0:1, ...].cpu())
+                all_output_currents_leak.append(output_currents_leak[0:1, ...].cpu())
                 all_output_conductances.append(output_conductances[0:1, ...].cpu())
                 all_output_conductances_FF.append(
                     output_conductances_FF[0:1, ...].cpu()
@@ -215,6 +218,7 @@ def main(input_dir, output_dir, params_file):
                 all_output_voltages.append(output_voltages[0:1, ...])
                 all_output_currents.append(output_currents[0:1, ...])
                 all_output_currents_FF.append(output_currents_FF[0:1, ...])
+                all_output_currents_leak.append(output_currents_leak[0:1, ...])
                 all_output_conductances.append(output_conductances[0:1, ...])
                 all_output_conductances_FF.append(output_conductances_FF[0:1, ...])
 
@@ -223,6 +227,7 @@ def main(input_dir, output_dir, params_file):
     output_voltages = torch.cat(all_output_voltages, dim=1).numpy()
     output_currents = torch.cat(all_output_currents, dim=1).numpy()
     output_currents_FF = torch.cat(all_output_currents_FF, dim=1).numpy()
+    output_currents_leak = torch.cat(all_output_currents_leak, dim=1).numpy()
     output_conductances = torch.cat(all_output_conductances, dim=1).numpy()
     output_conductances_FF = torch.cat(all_output_conductances_FF, dim=1).numpy()
     input_spikes = torch.cat(all_input_spikes, dim=1).numpy()
@@ -243,8 +248,6 @@ def main(input_dir, output_dir, params_file):
         results_dir / "spike_data.npz",
         output_spikes=output_spikes.astype(np.bool_),
         input_spikes=input_spikes.astype(np.bool_),
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_source_indices,
     )
 
     print(f"✓ Saved data to {results_dir}")
@@ -286,6 +289,7 @@ def main(input_dir, output_dir, params_file):
         neuron_params=params.recurrent.get_neuron_params_for_plotting(),
         recurrent_currents=output_currents,
         feedforward_currents=output_currents_FF,
+        leak_currents=output_currents_leak,
         recurrent_conductances=output_conductances,
         feedforward_conductances=output_conductances_FF,
         input_cell_type_names=params.feedforward.cell_types.names,

@@ -182,6 +182,7 @@ def plot_membrane_voltages(
 def plot_synaptic_currents(
     I_exc: NDArray[np.float32],
     I_inh: NDArray[np.float32],
+    I_tot: NDArray[np.float32],
     delta_t: float,
     n_neurons_plot: int = 10,
     fraction: float = 1.0,
@@ -197,6 +198,7 @@ def plot_synaptic_currents(
     Args:
         I_exc (NDArray[np.float32]): Excitatory current array with shape (batch, time, neurons).
         I_inh (NDArray[np.float32]): Inhibitory current array with shape (batch, time, neurons).
+        I_tot (NDArray[np.float32]): Total current array with shape (batch, time, neurons).
         delta_t (float): Time step in milliseconds.
         n_neurons_plot (int): Number of neurons to plot. Defaults to 10.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
@@ -251,22 +253,21 @@ def plot_synaptic_currents(
         # Extract excitatory and inhibitory currents for this neuron
         I_exc_trace = I_exc[0, -n_steps_plot:, neuron_id]
         I_inh_trace = I_inh[0, -n_steps_plot:, neuron_id]
-        I_total_trace = I_exc_trace + I_inh_trace
+        I_tot_trace = I_tot[0, -n_steps_plot:, neuron_id]
 
         # Compute mean total current over full simulation (not just plotted portion)
-        I_total_full = I_exc[0, :, neuron_id] + I_inh[0, :, neuron_id]
+        I_total_full = I_tot[0, :, neuron_id]
         mean_total = I_total_full.mean()
 
-        # Plot total current in grey (optional)
-        if show_total:
-            axes[neuron_id].plot(
-                time_axis,
-                I_total_trace,
-                linewidth=0.8,
-                color="gray",
-                alpha=0.7,
-                label="Total",
-            )
+        # Plot total current in grey
+        axes[neuron_id].plot(
+            time_axis,
+            I_tot_trace,
+            linewidth=0.8,
+            color="gray",
+            alpha=0.7,
+            label="Total",
+        )
 
         # Plot excitatory and inhibitory currents
         axes[neuron_id].plot(
@@ -283,17 +284,12 @@ def plot_synaptic_currents(
             linewidth=0.8,
             color="#0000FF",
             alpha=0.7,
-            label="Inhibitory",
+            label="Inhibitory + Leak",
         )
 
         # Add zero line
         axes[neuron_id].axhline(
             y=0, color="black", linestyle="-", linewidth=1.0, alpha=0.3
-        )
-
-        # Add horizontal line at mean total current
-        axes[neuron_id].axhline(
-            y=mean_total, color="black", linestyle="--", linewidth=0.8, alpha=0.5
         )
 
         # Add mean total current as text annotation in top left corner

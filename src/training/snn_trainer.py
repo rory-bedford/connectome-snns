@@ -111,6 +111,7 @@ class SNNTrainer:
             "voltages": [],
             "currents": [],
             "currents_FF": [],
+            "currents_leak": [],
             "conductances": [],
             "conductances_FF": [],
             "input_spikes": [],
@@ -241,8 +242,9 @@ class SNNTrainer:
             "voltages": outputs[1],
             "currents": outputs[2],
             "currents_FF": outputs[3],
-            "conductances": outputs[4],
-            "conductances_FF": outputs[5],
+            "currents_leak": outputs[4],
+            "conductances": outputs[5],
+            "conductances_FF": outputs[6],
             "input_spikes": input_spikes,
         }
 
@@ -550,6 +552,7 @@ class SNNTrainer:
             conductances_FF=plot_data["conductances_FF"],
             currents=plot_data["currents"],
             currents_FF=plot_data["currents_FF"],
+            currents_leak=plot_data["currents_leak"],
             input_spikes=plot_data["input_spikes"],
             weights=self.model.weights.detach().cpu().numpy(),
             feedforward_weights=self.model.weights_FF.detach().cpu().numpy(),
@@ -597,6 +600,7 @@ class SNNTrainer:
             "voltages",
             "currents",
             "currents_FF",
+            "currents_leak",
             "conductances",
             "conductances_FF",
         ]:

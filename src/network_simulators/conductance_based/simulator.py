@@ -38,6 +38,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
                 - all_I: Synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types)
                 - all_I_FF: Feedforward synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+                - all_I_leak: Leak currents of shape (batch_size, n_steps, n_neurons)
                 - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types) where dim 3 is [rise, decay]
                 - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF) where dim 3 is [rise, decay]
         """
@@ -102,7 +103,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 batch_size,
                 n_steps,
                 self.n_neurons,
-                self.n_synapse_types + self.n_synapse_types_FF,
+                self.n_synapse_types + self.n_synapse_types_FF + 1,
             ),
             dtype=torch.float32,
             device=self.device,
@@ -136,7 +137,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         for t in iterator:
             # Call the appropriate _step method based on optimization mode
             if self.optimisable is None:
-                v, g, s, I = self._step_inference(
+                v, g, s, I, I_leak = self._step_inference(
                     v,
                     g,
                     input_spikes[:, t, :],
@@ -157,7 +158,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     cached_ff,
                 )
             elif self.optimisable == "weights":
-                v, g, s, I = self._step_optimize_weights(
+                v, g, s, I, I_leak = self._step_optimize_weights(
                     v,
                     g,
                     input_spikes[:, t, :],
@@ -182,7 +183,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     cached_ff,
                 )
             elif self.optimisable == "scaling_factors":
-                v, g, s, I = self._step_optimize_scaling_factors(
+                v, g, s, I, I_leak = self._step_optimize_scaling_factors(
                     v,
                     g,
                     input_spikes[:, t, :],
@@ -211,14 +212,21 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             # Store variables
             all_s[:, t, :] = s
             all_v[:, t, :] = v
-            all_I[:, t, :, :] = I
+            all_I[:, t, :, :-1] = I
+            all_I[:, t, :, -1] = I_leak
             all_g[:, t, :, :, :] = g
 
         return (
             all_s,
             all_v,
             all_I[:, :, :, : self.n_synapse_types],
-            all_I[:, :, :, self.n_synapse_types :],
+            all_I[
+                :,
+                :,
+                :,
+                self.n_synapse_types : self.n_synapse_types + self.n_synapse_types_FF,
+            ],
+            all_I[:, :, :, -1],
             all_g[:, :, :, :, : self.n_synapse_types],
             all_g[:, :, :, :, self.n_synapse_types :],
         )
@@ -243,7 +251,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         masks_ff: List[torch.Tensor],
         syn_masks_ff: List[torch.Tensor],
         weights_ff: List[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Optimized _step for inference mode (optimisable=None).
 
         Uses fully precomputed weights * scaling_factors * g_scale.
@@ -254,11 +262,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         # Compute currents
         I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+        I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
-            1 - s
-        ) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -276,7 +283,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weights
             )
 
-        return v, g, s, I
+        return v, g, s, I, I_leak
 
     @staticmethod
     def _step_optimize_weights(
@@ -302,7 +309,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         syn_masks_ff: List[torch.Tensor],
         indices_ff: List[int],
         cached_weights_ff: List[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Optimized _step for training weights (optimisable="weights").
 
         Uses precomputed scaling_factors * g_scale.
@@ -313,11 +320,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         # Compute currents
         I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+        I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
-            1 - s
-        ) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -341,7 +347,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weighted
             )
 
-        return v, g, s, I
+        return v, g, s, I, I_leak
 
     @staticmethod
     def _step_optimize_scaling_factors(
@@ -368,7 +374,7 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         syn_masks_ff: List[torch.Tensor],
         indices_ff: List[int],
         cached_weights_ff: List[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Optimized _step for training scaling factors (optimisable="scaling_factors").
 
         Uses precomputed weights * g_scale.
@@ -379,11 +385,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
 
         # Compute currents
         I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+        I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (E_L + (v - E_L) * beta - I.sum(dim=2) * dt / C_m) * (
-            1 - s
-        ) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -409,4 +414,4 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), scaled
             )
 
-        return v, g, s, I
+        return v, g, s, I, I_leak

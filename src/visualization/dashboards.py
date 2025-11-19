@@ -171,6 +171,7 @@ def create_activity_dashboard(
     neuron_params: dict,
     recurrent_currents: NDArray[np.float32],
     feedforward_currents: NDArray[np.float32],
+    leak_currents: NDArray[np.float32],
     recurrent_conductances: NDArray[np.float32],
     feedforward_conductances: NDArray[np.float32],
     input_cell_type_names: list[str],
@@ -194,6 +195,7 @@ def create_activity_dashboard(
         neuron_params (dict): Dictionary mapping cell type indices to parameters.
         recurrent_currents (NDArray[np.float32]): Recurrent currents with shape (batch, time, neurons, synapses).
         feedforward_currents (NDArray[np.float32]): Feedforward currents with shape (batch, time, neurons, synapses).
+        leak_currents (NDArray[np.float32]): Leak currents with shape (batch, time, neurons).
         recurrent_conductances (NDArray[np.float32]): Recurrent conductances with shape (batch, time, neurons, synapses).
         feedforward_conductances (NDArray[np.float32]): Feedforward conductances with shape (batch, time, neurons, synapses).
         input_cell_type_names (list[str]): Names of input cell types.
@@ -246,7 +248,10 @@ def create_activity_dashboard(
 
     I_inh_recurrent = recurrent_currents[:, :, :, inh_indices_recurrent].sum(axis=-1)
     I_inh_ff = feedforward_currents[:, :, :, inh_indices_ff].sum(axis=-1)
-    I_inh = -(I_inh_recurrent + I_inh_ff)  # Negate to flip sign for plotting
+    # Combine inhibitory and leak currents (both hyperpolarizing), then negate for plotting
+    I_inh = -(
+        I_inh_recurrent + I_inh_ff + leak_currents
+    )  # Negate to flip sign for plotting
 
     # Create figure with 2 columns: Activity (left) and Spiking Statistics (right)
     # Same size as connectivity dashboard (24x16), first column 2x width of second
@@ -364,33 +369,43 @@ def create_activity_dashboard(
                 synapse_idx += 1
 
         # Check which excitatory neurons meet our criteria
-        candidates = []
-        for neuron_idx in exc_neuron_indices:
-            # Check if neuron has spiked in the time window
-            has_spiked = output_spikes[0, -n_steps_plot:, neuron_idx].sum() > 0
+        # Vectorized checks for all excitatory neurons
+        # Check if neurons have spiked in the time window
+        has_spiked = (
+            output_spikes[0, -n_steps_plot:, exc_neuron_indices].sum(axis=0) > 0
+        )
 
-            # Check if neuron has received excitatory recurrent input
-            has_exc_input = False
-            if exc_syn_indices:
-                exc_conductance_sum = recurrent_g_total_for_selection[
-                    0, -n_steps_plot:, neuron_idx, exc_syn_indices
-                ].sum()
-                has_exc_input = exc_conductance_sum > 0
+        # Check if neurons have received excitatory recurrent input
+        has_exc_input = np.zeros(len(exc_neuron_indices), dtype=bool)
+        if exc_syn_indices:
+            exc_conductance_sums = recurrent_g_total_for_selection[
+                0, -n_steps_plot:, :, :
+            ][:, exc_neuron_indices, :][:, :, exc_syn_indices].sum(axis=(0, 2))
+            has_exc_input = exc_conductance_sums > 0
 
-            # Check if neuron has received inhibitory input
-            has_inh_input = False
-            if inh_syn_indices:
-                inh_conductance_sum = recurrent_g_total_for_selection[
-                    0, -n_steps_plot:, neuron_idx, inh_syn_indices
-                ].sum()
-                has_inh_input = inh_conductance_sum > 0
+        # Check if neurons have received inhibitory input
+        has_inh_input = np.zeros(len(exc_neuron_indices), dtype=bool)
+        if inh_syn_indices:
+            inh_conductance_sums = recurrent_g_total_for_selection[
+                0, -n_steps_plot:, :, :
+            ][:, exc_neuron_indices, :][:, :, inh_syn_indices].sum(axis=(0, 2))
+            has_inh_input = inh_conductance_sums > 0
 
-            if has_spiked and has_exc_input and has_inh_input:
-                candidates.append(neuron_idx)
+        # Find candidates that meet all criteria
+        candidate_mask = has_spiked & has_exc_input & has_inh_input
+        candidates = exc_neuron_indices[candidate_mask]
 
-        # Use first candidate, or fall back to any excitatory neuron
+        # Rank candidates by firing rate and choose median
         if len(candidates) > 0:
-            selected_neuron = candidates[0]
+            # Compute firing rates for all candidates (vectorized)
+            spike_counts = output_spikes[0, :, candidates].sum(axis=0)
+            duration_s = output_spikes.shape[1] * dt * 1e-3  # Convert ms to s
+            candidate_rates = spike_counts / duration_s
+
+            # Sort candidates by firing rate and select median
+            sorted_indices = np.argsort(candidate_rates)
+            median_idx = sorted_indices[len(sorted_indices) // 2]
+            selected_neuron = candidates[median_idx]
         else:
             selected_neuron = exc_neuron_indices[0]
     else:
@@ -451,13 +466,15 @@ def create_activity_dashboard(
     # Subset currents for the selected neuron
     # Show only 10% of the time range for detailed view
     I_exc_subset = I_exc[:, :, [selected_neuron]]
-    I_inh_subset = I_inh[:, :, [selected_neuron]]
+    I_inh_subset = I_inh[:, :, [selected_neuron]]  # Already includes leak current
+    I_tot = I_exc_subset + I_inh_subset
     neuron_types_subset_current = neuron_types[[selected_neuron]]
 
     ax_currents = fig.add_subplot(gs_activity[4, 0])
     plot_synaptic_currents(
         I_exc=I_exc_subset,
         I_inh=I_inh_subset,
+        I_tot=I_tot,
         delta_t=dt,
         n_neurons_plot=1,
         fraction=0.1,

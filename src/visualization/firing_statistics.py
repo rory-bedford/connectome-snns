@@ -585,7 +585,7 @@ def plot_psth(
     ax_to_use.tick_params(labelsize=9)
 
     if title is None:
-        title = "PSTH"
+        title = "Population Activity"
     ax_to_use.set_title(title, fontsize=11)
 
     # Set xlim to span full time range with no margins

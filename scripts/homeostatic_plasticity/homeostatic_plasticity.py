@@ -308,6 +308,7 @@ def main(
         conductances_FF,
         currents,
         currents_FF,
+        currents_leak,
         input_spikes,
         weights,
         feedforward_weights,
@@ -338,6 +339,7 @@ def main(
             neuron_params=neuron_params,
             recurrent_currents=currents,
             feedforward_currents=currents_FF,
+            leak_currents=currents_leak,
             recurrent_conductances=conductances,
             feedforward_conductances=conductances_FF,
             input_cell_type_names=params.feedforward.cell_types.names,
@@ -460,6 +462,7 @@ def main(
                 inf_voltages,
                 inf_currents,
                 inf_currents_FF,
+                inf_currents_leak,
                 inf_conductances,
                 inf_conductances_FF,
             ) = model.forward(
@@ -486,6 +489,7 @@ def main(
                 "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
                 "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
                 "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+                "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
                 "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
                 "weights": model.weights.detach().cpu().numpy(),
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
@@ -509,6 +513,7 @@ def main(
             inf_voltages,
             inf_currents,
             inf_currents_FF,
+            inf_currents_leak,
             inf_conductances,
             inf_conductances_FF,
         )
@@ -660,6 +665,7 @@ def main(
             final_inf_voltages,
             final_inf_currents,
             final_inf_currents_FF,
+            final_inf_currents_leak,
             final_inf_conductances,
             final_inf_conductances_FF,
         ) = model.forward(
@@ -689,6 +695,7 @@ def main(
             .numpy(),
             "currents": final_inf_currents[0:1, ...].detach().cpu().numpy(),
             "currents_FF": final_inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+            "currents_leak": final_inf_currents_leak[0:1, ...].detach().cpu().numpy(),
             "input_spikes": final_inference_input_spikes[0:1, ...]
             .detach()
             .cpu()
@@ -715,6 +722,7 @@ def main(
         final_inf_voltages,
         final_inf_currents,
         final_inf_currents_FF,
+        final_inf_currents_leak,
         final_inf_conductances,
         final_inf_conductances_FF,
     )
