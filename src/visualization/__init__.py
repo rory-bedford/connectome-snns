@@ -18,6 +18,10 @@ from .connectivity import (
 from .firing_statistics import (
     plot_firing_rate_distribution,
 )
+from .odours import (
+    plot_input_firing_rate_histogram,
+    plot_firing_rate_variance_comparison,
+)
 
 __all__ = [
     "plot_membrane_voltages",
@@ -32,4 +36,6 @@ __all__ = [
     "plot_synaptic_input_histogram",
     "plot_feedforward_connectivity",
     "plot_firing_rate_distribution",
+    "plot_input_firing_rate_histogram",
+    "plot_firing_rate_variance_comparison",
 ]

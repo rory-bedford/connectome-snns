@@ -191,6 +191,69 @@ def generate_odour_firing_rates(
     return firing_rates
 
 
+def generate_baseline_firing_rates(
+    n_input_neurons: int,
+    input_source_indices: Union[np.ndarray, torch.Tensor],
+    cell_type_names: list[str],
+    odour_configs: dict,
+) -> np.ndarray:
+    """
+    Generate constant baseline firing rates (no modulation).
+
+    Creates a single firing rate pattern where all cells fire at their baseline rate.
+    This serves as a control condition with no odour-specific modulation.
+
+    Args:
+        n_input_neurons: Total number of input neurons.
+        input_source_indices: Array indicating cell type for each input neuron.
+        cell_type_names: List of cell type names (e.g., ["mitral"]).
+        odour_configs: Dict mapping cell type names to OdourInputConfig objects.
+
+    Returns:
+        Firing rates array of shape (1, n_input_neurons) in Hz.
+        Single pattern with all neurons at baseline rate.
+
+    Example:
+        >>> from parameter_loaders.fitting_activity import OdourInputConfig
+        >>> odour_config = OdourInputConfig(
+        ...     baseline_rate=6.0,
+        ...     modulation_rate=1.0,
+        ...     modulation_fraction=0.1
+        ... )
+        >>> firing_rates = generate_baseline_firing_rates(
+        ...     n_input_neurons=1000,
+        ...     input_source_indices=np.zeros(1000, dtype=int),
+        ...     cell_type_names=["mitral"],
+        ...     odour_configs={"mitral": odour_config}
+        ... )
+        >>> firing_rates.shape
+        (1, 1000)
+    """
+    # Convert to numpy if needed
+    if isinstance(input_source_indices, torch.Tensor):
+        input_source_indices = input_source_indices.cpu().numpy()
+
+    # Initialize firing rates: single pattern (1, n_input_neurons)
+    firing_rates = np.zeros((1, n_input_neurons))
+
+    for ct_idx, ct_name in enumerate(cell_type_names):
+        # Get mask for this cell type
+        mask = input_source_indices == ct_idx
+
+        if ct_name not in odour_configs:
+            raise ValueError(f"No odour configuration found for cell type '{ct_name}'")
+
+        odour_config = odour_configs[ct_name]
+
+        # Get baseline rate only (no modulation)
+        baseline_rate = odour_config.baseline_rate
+
+        # Set all neurons of this type to baseline
+        firing_rates[0, mask] = baseline_rate
+
+    return firing_rates
+
+
 def collate_pattern_batches(batch):
     """
     Collate function for organizing pattern data with batch dimension.

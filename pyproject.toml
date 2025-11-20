@@ -5,15 +5,18 @@ description = "Research code modellnig connectome-constrained neural network dyn
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "dask>=2025.11.0",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.7",
     "numpy>=2.3.3",
     "pandas>=2.3.3",
     "pydantic>=2.12.3",
+    "scipy>=1.16.3",
     "tabulate>=0.9.0",
     "toml>=0.10.2",
     "tqdm>=4.67.1",
     "wandb>=0.22.3",
+    "zarr>=3.1.3",
 ]
 
 [build-system]

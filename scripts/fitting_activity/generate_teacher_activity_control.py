@@ -1,8 +1,9 @@
 """
-Generating spike trains from a synthetic connectome
+Generating spike trains from a synthetic connectome - CONTROL EXPERIMENT
 
 This script generates spiketrains from a predefined synthetic connectome
-to be used as teacher activity for fitting recurrent networks.
+with unmodulated (constant baseline) inputs as a control condition.
+Unlike the main experiment, inputs do not have odour-specific modulation.
 """
 
 import numpy as np
@@ -12,19 +13,16 @@ import zarr
 from inputs.dataloaders import (
     PoissonSpikeDataset,
     collate_pattern_batches,
-    generate_odour_firing_rates,
+    generate_baseline_firing_rates,
 )
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from torch.utils.data import DataLoader
 from parameter_loaders import TeacherActivityParams
 from tqdm import tqdm
-from scripts.fitting_activity.generate_teacher_activity_control import (
-    main as main_control,
-)
 
 
 def main(input_dir, output_dir, params_file):
-    """Main execution function for Dp network simulation.
+    """Main execution function for control experiment with unmodulated inputs.
 
     Args:
         input_dir (Path, optional): Directory containing input data files (may be None)
@@ -79,20 +77,23 @@ def main(input_dir, output_dir, params_file):
     # Create Feedforward Inputs
     # =========================
 
-    # Generate odour-modulated firing rate patterns
-    input_firing_rates = generate_odour_firing_rates(
+    # Generate baseline (unmodulated) firing rates - CONTROL CONDITION
+    input_firing_rates = generate_baseline_firing_rates(
         n_input_neurons=feedforward_weights.shape[0],
         input_source_indices=input_source_indices,
         cell_type_names=feedforward.cell_types.names,
         odour_configs=params.odours,
-        n_patterns=simulation.num_odours,
     )
 
-    n_patterns = simulation.num_odours
+    print("CONTROL EXPERIMENT: Using unmodulated baseline inputs")
+    print(f"  Input firing rates shape: {input_firing_rates.shape}")
+    print("  All neurons set to baseline rate (no modulation)")
+
+    # Single pattern, same batch size as main experiment
+    n_patterns = 1
     batch_size = simulation.batch_size
 
-    # Create Poisson dataset for multiple patterns
-    # Dataset cycles through patterns indefinitely
+    # Create Poisson dataset with single baseline pattern
     spike_dataset = PoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
@@ -102,10 +103,11 @@ def main(input_dir, output_dir, params_file):
 
     # DataLoader: batch_size * n_patterns items fetched per iteration
     # Result shape: (batch_size, n_patterns, n_steps, n_neurons)
-    # batch_size = number of repeats/trials, n_patterns = number of different patterns
+    # n_patterns = 1 for control (no pattern variation)
     spike_dataloader = DataLoader(
         spike_dataset,
-        batch_size=batch_size * n_patterns,  # Fetch batch_size repeats of all patterns
+        batch_size=batch_size
+        * n_patterns,  # Fetch batch_size repeats of single pattern
         shuffle=False,
         collate_fn=collate_pattern_batches,
         num_workers=0,  # Keep 0 for GPU generation
@@ -155,13 +157,11 @@ def main(input_dir, output_dir, params_file):
     # Initialize Zarr arrays with compression
     total_steps = simulation.num_chunks * simulation.chunk_size
 
-    # Create zarr group (directory-based storage)
-    root = zarr.open_group(results_dir / "spike_data.zarr", mode="w")
+    # Create zarr group (directory-based storage) - CONTROL VERSION
+    root = zarr.open_group(results_dir / "spike_data_control.zarr", mode="w")
 
     # Create datasets with chunking optimized for both writing and reading
     # Chunks span all (batch, pattern) combinations for one time slice
-    # This allows: 1) efficient writes (one chunk per simulation step)
-    #              2) efficient aggregations over time (all trials processed together)
     output_spikes_zarr = root.create_dataset(
         "output_spikes",
         shape=(batch_size, n_patterns, total_steps, n_neurons),
@@ -188,11 +188,13 @@ def main(input_dir, output_dir, params_file):
     # Run Chunked Network Simulation
     # ==============================
 
-    print("\n" + "=" * len("STARTING CHUNKED NETWORK SIMULATION"))
-    print("STARTING CHUNKED NETWORK SIMULATION")
-    print("=" * len("STARTING CHUNKED NETWORK SIMULATION"))
+    print("\n" + "=" * len("STARTING CONTROL EXPERIMENT SIMULATION"))
+    print("STARTING CONTROL EXPERIMENT SIMULATION")
+    print("=" * len("STARTING CONTROL EXPERIMENT SIMULATION"))
 
-    print(f"Running simulation with {n_patterns} patterns × {batch_size} repeats")
+    print(
+        f"Running simulation with {n_patterns} pattern (baseline) × {batch_size} repeats"
+    )
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
@@ -284,7 +286,7 @@ def main(input_dir, output_dir, params_file):
         data=input_firing_rates,
     )
 
-    print(f"✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
+    print(f"✓ Saved spike data to {results_dir / 'spike_data_control.zarr'}")
     print(f"  - output_spikes: {output_spikes_zarr.shape}")
     print(f"  - input_spikes: {input_spikes_zarr.shape}")
     print(f"  - input_firing_rates: {input_firing_rates.shape}")
@@ -299,22 +301,11 @@ def main(input_dir, output_dir, params_file):
     # Clean Up
     # ========
 
-    print("\n" + "=" * len("SIMULATION COMPLETE!"))
-    print("SIMULATION COMPLETE!")
-    print("=" * len("SIMULATION COMPLETE!"))
-    print(f"✓ Spike data saved to {results_dir / 'spike_data.zarr'}")
+    print("\n" + "=" * len("CONTROL EXPERIMENT COMPLETE!"))
+    print("CONTROL EXPERIMENT COMPLETE!")
+    print("=" * len("CONTROL EXPERIMENT COMPLETE!"))
+    print(f"✓ Spike data saved to {results_dir / 'spike_data_control.zarr'}")
     print(
-        f"✓ Data can be loaded with: zarr.open('{results_dir / 'spike_data.zarr'}', mode='r')"
+        f"✓ Data can be loaded with: zarr.open('{results_dir / 'spike_data_control.zarr'}', mode='r')"
     )
-    print("=" * len("SIMULATION COMPLETE!"))
-
-    # ==========================================
-    # Run Control Experiment (Unmodulated Input)
-    # ==========================================
-
-    print("\n" + "=" * len("STARTING CONTROL EXPERIMENT"))
-    print("STARTING CONTROL EXPERIMENT")
-    print("=" * len("STARTING CONTROL EXPERIMENT"))
-    print("Running same simulation with unmodulated baseline inputs...")
-
-    main_control(input_dir, output_dir, params_file)
+    print("=" * len("CONTROL EXPERIMENT COMPLETE!"))
