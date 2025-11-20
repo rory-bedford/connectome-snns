@@ -9,7 +9,6 @@ from .base_configs import (
     SimulationConfig,
     TrainingConfig,
     Hyperparameters,
-    ActivityConfig,
     BaseRecurrentLayerConfig,
     BaseFeedforwardLayerConfig,
 )
@@ -18,6 +17,45 @@ from .base_configs import (
 # =============================================================================
 # FITTING-ACTIVITY-SPECIFIC CONFIGS
 # =============================================================================
+
+
+class SimulationConfigWithOdours(SimulationConfig):
+    """Simulation config extended with odour stimulus parameters."""
+
+    num_odours: int
+
+
+class OdourInputConfig(BaseModel):
+    """Configuration for modulated Poisson input activity.
+
+    Defines baseline and modulated firing rates for input cells responding to odours.
+    A fraction of cells are modulated up/down from baseline when odour is present.
+    """
+
+    baseline_rate: float
+    modulation_rate: float
+    modulation_fraction: float
+
+    def get_modulated_rates(self) -> tuple[float, float]:
+        """Get the up-modulated and down-modulated rates.
+
+        Returns:
+            Tuple of (up_rate, down_rate) in Hz.
+        """
+        up_rate = self.baseline_rate + self.modulation_rate
+        down_rate = self.baseline_rate - self.modulation_rate
+        return (up_rate, down_rate)
+
+    def get_n_modulated(self, n_neurons: int) -> int:
+        """Get number of neurons modulated in each direction (up or down).
+
+        Args:
+            n_neurons: Total number of neurons of this cell type.
+
+        Returns:
+            Number of neurons to modulate up (same number will be modulated down).
+        """
+        return int(n_neurons * self.modulation_fraction / 2.0)
 
 
 class FittingActivityRecurrentConfig(BaseRecurrentLayerConfig):
@@ -29,11 +67,11 @@ class FittingActivityRecurrentConfig(BaseRecurrentLayerConfig):
 
 
 class FittingActivityFeedforwardConfig(BaseFeedforwardLayerConfig):
-    """Feedforward layer config for fitting activity (includes activity but no topology/weights)."""
+    """Feedforward layer config for fitting activity (no topology/weights)."""
 
-    activity: Dict[str, ActivityConfig]
     # cell_types, synapses inherited from BaseFeedforwardLayerConfig
     # All methods inherited from BaseFeedforwardLayerConfig
+    pass
 
 
 # =============================================================================
@@ -48,9 +86,10 @@ class TeacherActivityParams(BaseModel):
     Does not include training or optimization parameters.
     """
 
-    simulation: SimulationConfig
+    simulation: SimulationConfigWithOdours
     recurrent: FittingActivityRecurrentConfig
     feedforward: FittingActivityFeedforwardConfig
+    odours: Dict[str, OdourInputConfig]
 
 
 class StudentTrainingParams(BaseModel):
@@ -60,8 +99,9 @@ class StudentTrainingParams(BaseModel):
     to reproduce target activity patterns.
     """
 
-    simulation: SimulationConfig
+    simulation: SimulationConfigWithOdours
     training: TrainingConfig
     hyperparameters: Hyperparameters
     recurrent: FittingActivityRecurrentConfig
     feedforward: FittingActivityFeedforwardConfig
+    odours: Dict[str, OdourInputConfig]

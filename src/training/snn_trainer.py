@@ -222,8 +222,8 @@ class SNNTrainer:
 
     def _forward_pass(self) -> Dict[str, torch.Tensor]:
         """Run forward pass through the model."""
-        # Get next input spikes
-        input_spikes = next(self.spike_iter)
+        # Get next input spikes (unpack tuple from PoissonSpikeDataset)
+        input_spikes, _ = next(self.spike_iter)
 
         # Run network simulation with mixed precision
         with autocast(

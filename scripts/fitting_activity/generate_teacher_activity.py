@@ -5,14 +5,20 @@ This script generates spiketrains from a predefined synthetic connectome
 to be used as teacher activity for fitting recurrent networks.
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
-from inputs.dataloaders import PoissonOdourDataset, collate_pattern_batches
-from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
+import toml
+from inputs.dataloaders import (
+    PoissonSpikeDataset,
+    collate_pattern_batches,
+    generate_odour_firing_rates,
+)
+from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from torch.utils.data import DataLoader
 from parameter_loaders import TeacherActivityParams
-import toml
 from tqdm import tqdm
+from visualization import plot_input_firing_rate_histogram
 
 
 def main(input_dir, output_dir, params_file):
@@ -71,25 +77,21 @@ def main(input_dir, output_dir, params_file):
     # Create Feedforward Inputs
     # =========================
 
-    # Define input patterns
-    n_patterns = 10  # Number of distinct input patterns
-    batch_size = 10  # Number of repeats/trials per pattern
+    # Generate odour-modulated firing rate patterns
+    input_firing_rates = generate_odour_firing_rates(
+        n_input_neurons=feedforward_weights.shape[0],
+        input_source_indices=input_source_indices,
+        cell_type_names=feedforward.cell_types.names,
+        odour_configs=params.odours,
+        n_patterns=simulation.num_odours,
+    )
 
-    # Create firing rates array for input patterns: (n_patterns, n_input_neurons)
-    input_firing_rates = np.zeros((n_patterns, feedforward_weights.shape[0]))
+    n_patterns = simulation.num_odours
+    batch_size = simulation.batch_size
 
-    # Generate different patterns with varying firing rates
-    for pattern_idx in range(n_patterns):
-        for ct_idx, ct_name in enumerate(feedforward.cell_types.names):
-            mask = input_source_indices == ct_idx
-            base_rate = feedforward.activity[ct_name].firing_rate
-            # Vary rates across patterns (0.5x to 1.5x base rate)
-            modulation = 0.5 + (pattern_idx / max(1, n_patterns - 1)) * 1.0
-            input_firing_rates[pattern_idx, mask] = base_rate * modulation
-
-    # Create Poisson odour dataset for multiple patterns
+    # Create Poisson dataset for multiple patterns
     # Dataset cycles through patterns indefinitely
-    spike_dataset = PoissonOdourDataset(
+    spike_dataset = PoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
@@ -147,7 +149,7 @@ def main(input_dir, output_dir, params_file):
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
-        f"DataLoader returns (batch_size={batch_size}, n_patterns={n_patterns}, time, neurons) per chunk"
+        f"DataLoader returns (batch_size={batch_size}, n_patterns={n_patterns}, chunk_size, neurons) per chunk"
     )
 
     # Initialize storage with explicit batch/pattern dimensions
@@ -250,6 +252,27 @@ def main(input_dir, output_dir, params_file):
         del model
         torch.cuda.empty_cache()
         print("✓ Freed GPU memory")
+
+    # ========================================
+    # Generate Visualizations - Input Patterns
+    # ========================================
+    print("\nGenerating input pattern visualizations...")
+
+    # Create figures directory
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    # Plot input firing rate histogram
+    fig = plot_input_firing_rate_histogram(
+        input_spikes=input_spikes,
+        dt=simulation.dt,
+    )
+    fig.savefig(
+        figures_dir / "input_firing_rate_histogram.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig)
+
+    print(f"✓ Saved input firing rate histogram to {figures_dir}")
 
     # ========
     # Clean Up

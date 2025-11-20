@@ -14,106 +14,31 @@ from typing import Union, Tuple
 
 class PoissonSpikeDataset(Dataset):
     """
-    Dataset for generating Poisson spike trains.
+    Dataset for generating Poisson spike trains with optional multiple patterns.
 
     This dataset generates spike trains on-the-fly according to a homogeneous
-    Poisson process with specified firing rates for each neuron. Each call to
-    __getitem__ returns a new randomly generated spike train chunk.
+    Poisson process. Supports both single and multiple pattern cases:
+    - 1D firing_rates (n_neurons,) - always returns pattern_idx 0
+    - 2D firing_rates (n_patterns, n_neurons) - cycles through patterns
 
     Args:
-        firing_rates (Union[np.ndarray, torch.Tensor]): Firing rates in Hz for each neuron (num_neurons,).
-        chunk_size (int): Number of simulation time steps per chunk.
-        dt (float): Simulation time step in milliseconds.
-        device (Union[str, torch.device]): Device to generate spikes on. Default: "cpu".
-
-    Example:
-        >>> firing_rates = np.array([10.0, 10.0, 20.0, 20.0])
-        >>> dataset = PoissonSpikeDataset(
-        ...     firing_rates=firing_rates,
-        ...     chunk_size=1000,
-        ...     dt=1.0,
-        ...     device="cuda"
-        ... )
-        >>> # Generate spikes indefinitely
-        >>> for i in range(100):
-        ...     spikes = dataset[i]  # shape: (chunk_size, num_neurons)
-    """
-
-    def __init__(
-        self,
-        firing_rates: Union[np.ndarray, torch.Tensor],
-        chunk_size: int,
-        dt: float,
-        device: Union[str, torch.device] = "cpu",
-    ):
-        self.chunk_size = chunk_size
-        self.dt = dt
-        self.device = device
-
-        # Convert firing rates to torch tensor on device
-        if isinstance(firing_rates, np.ndarray):
-            self.firing_rates = torch.from_numpy(firing_rates).float().to(device)
-        elif isinstance(firing_rates, torch.Tensor):
-            self.firing_rates = firing_rates.float().to(device)
-        else:
-            raise TypeError("firing_rates must be a numpy array or torch tensor")
-
-        self.num_neurons = len(self.firing_rates)
-
-        # Pre-compute spike probabilities: rate (Hz) * dt (ms) * 1e-3 (ms->s conversion)
-        self.spike_probs = self.firing_rates * dt * 1e-3  # Shape: (num_neurons,)
-
-    def __len__(self) -> int:
-        """Return a large number to allow indefinite iteration."""
-        return 2**31 - 1  # Max int32 value for effectively infinite iteration
-
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        """
-        Generate a single chunk of Poisson spike trains.
-
-        Args:
-            idx (int): Index of the chunk (not used in generation, but required by Dataset).
-
-        Returns:
-            torch.Tensor: Boolean tensor of shape (chunk_size, num_neurons) with spike times.
-        """
-        # Generate random values and compare with spike probabilities
-        random_vals = torch.rand(self.chunk_size, self.num_neurons, device=self.device)
-        spikes = random_vals < self.spike_probs
-
-        return spikes
-
-
-class PoissonOdourDataset(Dataset):
-    """
-    Dataset for generating Poisson spike trains with multiple input patterns (e.g., odours).
-
-    This dataset generates spikes for multiple distinct input patterns, cycling through them
-    indefinitely. Each __getitem__ call returns spikes for ONE pattern. The index cycles
-    through patterns repeatedly, allowing infinite iteration.
-
-    Args:
-        firing_rates (Union[np.ndarray, torch.Tensor]): Firing rates in Hz for each pattern.
-            Shape: (n_patterns, n_neurons)
+        firing_rates (Union[np.ndarray, torch.Tensor]): Firing rates in Hz.
+            Shape: (n_neurons,) or (n_patterns, n_neurons).
+            1D inputs are automatically reshaped to (1, n_neurons).
         chunk_size (float): Duration of each chunk in milliseconds.
         dt (float): Simulation time step in milliseconds.
         device (Union[str, torch.device]): Device to generate spikes on. Default: "cpu".
 
     Example:
-        >>> firing_rates = np.random.uniform(5, 20, (10, 100))  # 10 patterns, 100 neurons
-        >>> dataset = PoissonOdourDataset(
-        ...     firing_rates=firing_rates,
-        ...     chunk_size=100.0,
-        ...     dt=1.0,
-        ...     device="cuda"
-        ... )
-        >>> # Use with DataLoader and collate_pattern_batches
-        >>> from torch.utils.data import DataLoader
-        >>> loader = DataLoader(dataset, batch_size=10, collate_fn=collate_pattern_batches)
-        >>> for spikes, pattern_indices in loader:
-        ...     # spikes shape: (1, 10, n_steps, n_neurons) - 1 trial of 10 patterns
-        ...     # Cycles through patterns indefinitely: 0,1,2,...,9,0,1,2,...
-        ...     pass
+        >>> # Single pattern (homogeneous)
+        >>> firing_rates = np.array([10.0, 10.0, 20.0, 20.0])
+        >>> dataset = PoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0)
+        >>> spikes, pattern_idx = dataset[0]  # pattern_idx always 0
+        >>>
+        >>> # Multiple patterns (e.g., odours)
+        >>> firing_rates = np.random.uniform(5, 20, (10, 100))
+        >>> dataset = PoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0)
+        >>> spikes, pattern_idx = dataset[15]  # pattern_idx = 15 % 10 = 5
     """
 
     def __init__(
@@ -125,17 +50,21 @@ class PoissonOdourDataset(Dataset):
     ):
         # Convert firing rates to torch tensor on device
         if isinstance(firing_rates, np.ndarray):
-            self.firing_rates = torch.from_numpy(firing_rates).float().to(device)
+            firing_rates = torch.from_numpy(firing_rates).float().to(device)
         elif isinstance(firing_rates, torch.Tensor):
-            self.firing_rates = firing_rates.float().to(device)
+            firing_rates = firing_rates.float().to(device)
         else:
             raise TypeError("firing_rates must be a numpy array or torch tensor")
 
-        if self.firing_rates.ndim != 2:
+        # Auto-reshape 1D to 2D: (n_neurons,) -> (1, n_neurons)
+        if firing_rates.ndim == 1:
+            firing_rates = firing_rates.unsqueeze(0)
+        elif firing_rates.ndim != 2:
             raise ValueError(
-                "firing_rates must be 2D array of shape (n_patterns, n_neurons)"
+                "firing_rates must be 1D (n_neurons,) or 2D (n_patterns, n_neurons)"
             )
 
+        self.firing_rates = firing_rates
         self.n_patterns = self.firing_rates.shape[0]
         self.n_neurons = self.firing_rates.shape[1]
         self.chunk_size = chunk_size
@@ -175,6 +104,93 @@ class PoissonOdourDataset(Dataset):
         return spikes, pattern_idx
 
 
+def generate_odour_firing_rates(
+    n_input_neurons: int,
+    input_source_indices: Union[np.ndarray, torch.Tensor],
+    cell_type_names: list[str],
+    odour_configs: dict,
+    n_patterns: int,
+) -> np.ndarray:
+    """
+    Generate firing rate patterns for odour-modulated Poisson inputs.
+
+    Creates a firing rate matrix where each pattern (odour) has different modulation
+    of cell firing rates. A fraction of cells are modulated up/down from baseline.
+
+    Args:
+        n_input_neurons: Total number of input neurons.
+        input_source_indices: Array indicating cell type for each input neuron.
+        cell_type_names: List of cell type names (e.g., ["mitral"]).
+        odour_configs: Dict mapping cell type names to OdourInputConfig objects.
+        n_patterns: Number of distinct odour patterns to generate.
+
+    Returns:
+        Firing rates array of shape (n_patterns, n_input_neurons) in Hz.
+
+    Example:
+        >>> from parameter_loaders.fitting_activity import OdourInputConfig
+        >>> odour_config = OdourInputConfig(
+        ...     baseline_rate=6.0,
+        ...     modulation_rate=1.0,
+        ...     modulation_fraction=0.1
+        ... )
+        >>> firing_rates = generate_odour_firing_rates(
+        ...     n_input_neurons=1000,
+        ...     input_source_indices=np.zeros(1000, dtype=int),
+        ...     cell_type_names=["mitral"],
+        ...     odour_configs={"mitral": odour_config},
+        ...     n_patterns=10
+        ... )
+        >>> firing_rates.shape
+        (10, 1000)
+    """
+    # Convert to numpy if needed
+    if isinstance(input_source_indices, torch.Tensor):
+        input_source_indices = input_source_indices.cpu().numpy()
+
+    # Initialize firing rates: (n_patterns, n_input_neurons)
+    firing_rates = np.zeros((n_patterns, n_input_neurons))
+
+    for ct_idx, ct_name in enumerate(cell_type_names):
+        # Get mask for this cell type
+        mask = input_source_indices == ct_idx
+
+        if ct_name not in odour_configs:
+            raise ValueError(f"No odour configuration found for cell type '{ct_name}'")
+
+        odour_config = odour_configs[ct_name]
+
+        # Get modulation parameters
+        baseline_rate = odour_config.baseline_rate
+        up_rate, down_rate = odour_config.get_modulated_rates()
+
+        # Number of neurons of this cell type
+        n_neurons_this_type = np.sum(mask)
+        n_modulated = odour_config.get_n_modulated(n_neurons_this_type)
+
+        # Get indices of neurons of this cell type
+        neuron_indices = np.where(mask)[0]
+
+        # For each pattern, randomly select which neurons are modulated
+        for pattern_idx in range(n_patterns):
+            # Shuffle neuron indices for this pattern
+            shuffled_indices = np.random.permutation(neuron_indices)
+
+            # Assign modulated up neurons
+            up_indices = shuffled_indices[:n_modulated]
+            firing_rates[pattern_idx, up_indices] = up_rate
+
+            # Assign modulated down neurons
+            down_indices = shuffled_indices[n_modulated : 2 * n_modulated]
+            firing_rates[pattern_idx, down_indices] = down_rate
+
+            # Assign baseline to remaining neurons
+            baseline_indices = shuffled_indices[2 * n_modulated :]
+            firing_rates[pattern_idx, baseline_indices] = baseline_rate
+
+    return firing_rates
+
+
 def collate_pattern_batches(batch):
     """
     Collate function for organizing pattern data with batch dimension.
@@ -184,7 +200,7 @@ def collate_pattern_batches(batch):
     independent repeats/trials of all patterns.
 
     Args:
-        batch: List of (spikes, pattern_idx) tuples from PoissonOdourDataset.
+        batch: List of (spikes, pattern_idx) tuples from PoissonSpikeDataset.
                Each spikes tensor has shape (n_steps, n_neurons).
                Length of batch = batch_size * n_patterns
 
