@@ -28,11 +28,11 @@ if __name__ == "__main__":
     # Parse arguments
     config_path = "workspace/experiment.toml"  # default
     skip_git_check = False
-    
+
     for arg in sys.argv[1:]:
         if arg == "--no-commit":
             skip_git_check = True
         elif not arg.startswith("--"):
             config_path = arg
-    
+
     run_experiment(config_path, skip_git_check=skip_git_check)

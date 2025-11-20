@@ -1,0 +1,82 @@
+# Parameters for use with our teacher-student training regime
+# Adapted from Meissner-Bernard et al. (2025)
+
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+seed = 43                              # Random seed for reproducibility
+dt = 1.0                               # ms - Time resolution of the simulation
+duration = 60000.0                     # ms - Total duration of the simulation
+chunk_size = 100                       # Number of timesteps per chunk
+batch_size = 10                        # Number of batches (repeats of each odour)
+num_odours = 10                        # Distinct number of odour inputs
+
+# ==========================
+# FEEDFORWARD LAYER TOPOLOGY
+# ==========================
+
+[feedforward.cell_types]
+names = [ "mitral",]                   # Cell type names
+
+# ==========================
+# FEEDFORWARD LAYER ACTIVITY
+# ==========================
+
+[odours.mitral]
+baseline_rate = 6.0                    # Hz - Baseline firing rate of mitral cells (Poisson process)
+modulation_rate = 1.0                  # Hz - Amount cells get modulated from baseline (positive and negative)
+modulation_fraction = 0.1              # Proportion of cells that get modulated (half get modulated up, half down)
+
+# ==========================
+# FEEDFORWARD LAYER SYNAPSES
+# ==========================
+
+[feedforward.synapses.mitral]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 0.5, 0.1,]                   # nS - Maximum synaptic conductances
+
+# ========================
+# RECURRENT LAYER TOPOLOGY 
+# ========================
+
+[recurrent.cell_types]
+names = [ "excitatory", "inhibitory",] # Cell type names
+
+# =======================================
+# RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
+# =======================================
+
+[recurrent.physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset potential after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 1.35                             # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.excitatory]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 0.5, 0.1,]                   # nS - Synaptic conductances (per spike)
+
+[recurrent.physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 0.9                              # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.inhibitory]
+names = [ "GABA_A",]
+tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
+tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
+E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
+g_bar = [ 2.0,]                        # nS - Synaptic conductances (per spike)
