@@ -24,6 +24,9 @@ class VanRossumLoss(nn.Module):
         """
         Van Rossum distance for spike trains.
 
+        Works with any leading batch-like dimensions - treats first N-2 dims as independent
+        trials, last 2 dims as (time, neurons).
+
         Args:
             tau (float): Time constant for exponential kernel (ms).
             dt (float): Simulation time step (ms).
@@ -47,25 +50,38 @@ class VanRossumLoss(nn.Module):
         Compute Van Rossum distance between spike trains.
 
         Args:
-            output_spikes (torch.Tensor): Output spike trains (batch, time, n_neurons).
-            target_spikes (torch.Tensor): Target spike trains (batch, time, n_neurons).
+            output_spikes (torch.Tensor): Output spike trains.
+                Shape: (..., time, n_neurons) where ... represents any batch/pattern dims.
+            target_spikes (torch.Tensor): Target spike trains (same shape as output_spikes).
 
         Returns:
             torch.Tensor: Mean Van Rossum loss across all dimensions.
         """
-        # Reshape for conv1d: (batch * n_neurons, 1, time) (makes convolution easier)
-        batch, time, n_neurons = output_spikes.shape
+        # Get dimensions
+        *leading_dims, time, n_neurons = output_spikes.shape
+        n_trials = (
+            int(torch.prod(torch.tensor(leading_dims)).item()) if leading_dims else 1
+        )
 
-        output_flat = output_spikes.permute(0, 2, 1).reshape(-1, 1, time)
-        target_flat = target_spikes.permute(0, 2, 1).reshape(-1, 1, time)
+        # Flatten leading dimensions: (n_trials, time, n_neurons)
+        output_flat = output_spikes.reshape(n_trials, time, n_neurons)
+        target_flat = target_spikes.reshape(n_trials, time, n_neurons)
+
+        # Reshape for conv1d: (n_trials * n_neurons, 1, time)
+        output_conv = output_flat.permute(0, 2, 1).reshape(
+            n_trials * n_neurons, 1, time
+        )
+        target_conv = target_flat.permute(0, 2, 1).reshape(
+            n_trials * n_neurons, 1, time
+        )
 
         # Convolve with exponential kernel
         output_smooth = F.conv1d(
-            output_flat, self.kernel, padding=self.kernel.shape[-1] // 2
+            output_conv, self.kernel, padding=self.kernel.shape[-1] // 2
         )
 
         target_smooth = F.conv1d(
-            target_flat, self.kernel, padding=self.kernel.shape[-1] // 2
+            target_conv, self.kernel, padding=self.kernel.shape[-1] // 2
         )
 
         # Compute squared difference
@@ -150,12 +166,17 @@ class FiringRateLoss(nn.Module):
         """
         Firing rate loss for spike trains.
 
-        Computes firing rate (Hz) for each neuron across all batches (treating batches as trials)
-        and compares to target values using normalized MSE loss. Each neuron's squared error is
-        divided by its target rate to give equal relative importance regardless of target firing rate.
+        Computes firing rate (Hz) for each trial/pattern independently and compares to
+        target values using normalized MSE loss. Each neuron's squared error is divided
+        by its target rate to give equal relative importance.
+
+        Works with any leading batch-like dimensions - treats first N-2 dims as independent
+        trials, last 2 dims as (time, neurons).
 
         Args:
-            target_rate (torch.Tensor): Target firing rates for each neuron in Hz (n_neurons,).
+            target_rate (torch.Tensor): Target firing rates for each neuron in Hz.
+                Shape must be broadcastable to spike shape with time dim removed.
+                E.g., (n_neurons,) for any input, or (n_patterns, n_neurons) for 4D input.
             dt (float): Simulation time step (ms).
         """
         super(FiringRateLoss, self).__init__()
@@ -167,30 +188,30 @@ class FiringRateLoss(nn.Module):
         Compute firing rate loss for spike trains.
 
         Args:
-            output_spikes (torch.Tensor): Output spike trains (batch, time, n_neurons).
+            output_spikes (torch.Tensor): Output spike trains.
+                Shape: (..., time, n_neurons) where ... represents any batch/pattern dims.
+                Each leading dimension is treated as an independent trial.
 
         Returns:
             torch.Tensor: Mean normalized MSE loss between actual and target firing rates.
         """
-        batch, time, n_neurons = output_spikes.shape
+        # Sum over time dimension (always second-to-last)
+        spike_counts = output_spikes.sum(dim=-2)  # (..., n_neurons)
 
-        # Compute firing rate across all batches: sum spikes over time and batch, convert to Hz
-        # Total time in seconds = batch * time * dt / 1000
-        total_time_s = batch * time * self.dt / 1000.0
-
-        # Sum spikes over time and batch dimensions
-        spike_counts = output_spikes.sum(dim=(0, 1))  # (n_neurons,)
+        # Compute time duration in seconds
+        time_steps = output_spikes.shape[-2]
+        total_time_s = time_steps * self.dt / 1000.0
 
         # Convert to firing rate in Hz
-        firing_rates = spike_counts / total_time_s  # (n_neurons,)
+        firing_rates = spike_counts / total_time_s  # (..., n_neurons)
 
-        # Compute squared error for each neuron
-        squared_errors = (firing_rates - self.target_rate) ** 2  # (n_neurons,)
+        # Compute squared error (broadcasting handles shape differences)
+        squared_errors = (firing_rates - self.target_rate) ** 2
 
-        # Normalize by target rate to weight low firing rate neurons appropriately
+        # Normalize by target rate
         normalized_errors = squared_errors / (self.target_rate + 1e-6)
 
-        # Take mean across neurons
+        # Take mean across all dimensions
         loss = normalized_errors.mean()
 
         return loss
@@ -204,7 +225,10 @@ class SilentNeuronPenalty(nn.Module):
         Exponential penalty for silent neurons.
 
         Applies an exponential penalty to neurons with very low or zero firing rates
-        to encourage all neurons to be active. The penalty is: exp(-alpha * firing_rate)
+        to encourage all neurons to be active. The penalty is: exp(-alpha * firing_rate).
+
+        Works with any leading batch-like dimensions - treats first N-2 dims as independent
+        trials, last 2 dims as (time, neurons).
 
         Args:
             alpha (float): Exponential decay parameter. Higher values create stronger
@@ -220,29 +244,29 @@ class SilentNeuronPenalty(nn.Module):
         Compute silent neuron penalty.
 
         Args:
-            output_spikes (torch.Tensor): Output spike trains (batch, time, n_neurons).
+            output_spikes (torch.Tensor): Output spike trains.
+                Shape: (..., time, n_neurons) where ... represents any batch/pattern dims.
+                Each leading dimension is treated as an independent trial.
 
         Returns:
-            torch.Tensor: Mean exponential penalty across neurons.
+            torch.Tensor: Mean exponential penalty across all trials and neurons.
         """
-        batch, time, n_neurons = output_spikes.shape
+        # Sum over time dimension (always second-to-last)
+        spike_counts = output_spikes.sum(dim=-2)  # (..., n_neurons)
 
-        # Compute firing rate across all batches: sum spikes over time and batch, convert to Hz
-        # Total time in seconds = batch * time * dt / 1000
-        total_time_s = batch * time * self.dt / 1000.0
-
-        # Sum spikes over time and batch dimensions
-        spike_counts = output_spikes.sum(dim=(0, 1))  # (n_neurons,)
+        # Compute time duration in seconds
+        time_steps = output_spikes.shape[-2]
+        total_time_s = time_steps * self.dt / 1000.0
 
         # Convert to firing rate in Hz
-        firing_rates = spike_counts / total_time_s  # (n_neurons,)
+        firing_rates = spike_counts / total_time_s  # (..., n_neurons)
 
         # Compute exponential penalty: exp(-alpha * firing_rate)
         # Silent neurons (firing_rate ~ 0) get penalty ~ 1
         # Active neurons (firing_rate > 0) get penalty < 1
         penalty = torch.exp(-self.alpha * firing_rates)
 
-        # Take mean across neurons
+        # Take mean across all dimensions
         loss = penalty.mean()
 
         return loss

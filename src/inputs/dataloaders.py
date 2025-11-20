@@ -8,8 +8,11 @@ PyTorch's training pipeline.
 
 import torch
 import numpy as np
+import zarr
+from pathlib import Path
 from torch.utils.data import Dataset
 from typing import Union, Tuple
+from analysis.firing_rate import compute_firing_rates_from_zarr
 
 
 class PoissonSpikeDataset(Dataset):
@@ -315,3 +318,111 @@ def collate_pattern_batches(batch):
     batched_spikes = all_stacked.reshape(batch_size, n_patterns, n_steps, n_neurons)
 
     return batched_spikes, unique_patterns
+
+
+class PrecomputedSpikeDataset(Dataset):
+    """
+    Dataset for loading pre-generated spike trains from disk in chunks.
+
+    This dataset loads spike data stored in Zarr format on disk, yielding chunks
+    of a specified size. Designed to work with spike data saved in the format:
+    (batch_size, n_patterns, total_time, n_neurons).
+
+    At initialization, computes the firing rates for each neuron in each pattern
+    and batch using the firing_rate analysis module.
+
+    Args:
+        spike_data_path (Path): Path to zarr directory containing spike data.
+        chunk_size (int): Number of timesteps per chunk.
+        dt (float): Timestep in milliseconds.
+        dataset_name (str): Name of dataset within zarr group. Default: "input_spikes".
+        device (Union[str, torch.device]): Device to load data to. Default: "cpu".
+
+    Attributes:
+        input_firing_rates (torch.Tensor): Firing rates in Hz with shape (batch_size, n_patterns, n_neurons).
+            Stored as a torch tensor on the specified device.
+
+    Example:
+        >>> dataset = PrecomputedSpikeDataset(
+        ...     spike_data_path=Path("results/spike_data.zarr"),
+        ...     chunk_size=100,
+        ...     dt=1.0,
+        ...     dataset_name="input_spikes",
+        ...     device="cuda"
+        ... )
+        >>> spikes, pattern_idx = dataset[0]  # First chunk
+        >>> spikes.shape  # (batch_size, n_patterns, chunk_size, n_neurons)
+        >>> dataset.input_firing_rates.shape  # (batch_size, n_patterns, n_neurons)
+        >>> dataset.input_firing_rates.device  # cuda:0
+    """
+
+    def __init__(
+        self,
+        spike_data_path: Union[Path, str],
+        chunk_size: int,
+        dt: float,
+        dataset_name: str = "input_spikes",
+        device: Union[str, torch.device] = "cpu",
+    ):
+        self.spike_data_path = Path(spike_data_path)
+        self.chunk_size = chunk_size
+        self.dt = dt
+        self.device = device
+
+        # Open zarr array (read-only)
+        root = zarr.open_group(self.spike_data_path, mode="r")
+        self.spike_data = root[dataset_name]
+
+        # Shape: (batch_size, n_patterns, total_time, n_neurons)
+        self.batch_size, self.n_patterns, self.total_time, self.n_neurons = (
+            self.spike_data.shape
+        )
+        self.num_chunks = self.total_time // chunk_size
+
+        if self.total_time % chunk_size != 0:
+            print(
+                f"Warning: total_time ({self.total_time}) not divisible by chunk_size ({chunk_size})"
+            )
+
+        # Compute firing rates for each neuron in each pattern/batch
+        print("Computing firing rates from spike data...")
+        firing_rates_np = compute_firing_rates_from_zarr(
+            zarr_path=self.spike_data_path,
+            dataset_name=dataset_name,
+            dt=dt,
+        )
+        # Convert to torch tensor and move to device
+        self.firing_rates = torch.from_numpy(firing_rates_np).float().to(device)
+        print(
+            f"✓ Computed input firing rates with shape {self.input_firing_rates.shape}"
+        )
+
+    def __len__(self) -> int:
+        """Total number of chunks."""
+        return self.num_chunks
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, list]:
+        """
+        Get a full chunk across all batches and patterns.
+
+        Args:
+            idx (int): Chunk index (0 to num_chunks-1).
+
+        Returns:
+            Tuple of (spike_chunk, pattern_indices) where:
+                - spike_chunk: torch.Tensor of shape (batch_size, n_patterns, chunk_size, n_neurons)
+                - pattern_indices: list of pattern indices [0, 1, ..., n_patterns-1]
+        """
+        # Extract chunk from zarr - all batches and patterns for this time slice
+        start_t = idx * self.chunk_size
+        end_t = start_t + self.chunk_size
+
+        spike_chunk = self.spike_data[:, :, start_t:end_t, :]
+
+        # Convert to torch tensor
+        spike_tensor = torch.from_numpy(spike_chunk).float().to(self.device)
+
+        # Pattern indices are just 0 to n_patterns-1
+        pattern_indices = list(range(self.n_patterns))
+
+        return spike_tensor, pattern_indices

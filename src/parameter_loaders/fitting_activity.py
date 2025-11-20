@@ -7,8 +7,6 @@ from typing import Dict
 from pydantic import BaseModel
 from .base_configs import (
     SimulationConfig,
-    TrainingConfig,
-    Hyperparameters,
     BaseRecurrentLayerConfig,
     BaseFeedforwardLayerConfig,
 )
@@ -23,6 +21,39 @@ class SimulationConfigWithOdours(SimulationConfig):
     """Simulation config extended with odour stimulus parameters."""
 
     num_odours: int
+
+
+class StudentSimulationConfig(BaseModel):
+    """Minimal simulation config for student training."""
+
+    seed: int
+    dt: float
+    chunk_size: int
+
+
+class StudentTrainingConfig(BaseModel):
+    """Training config for student."""
+
+    chunks_per_update: int
+    log_interval: int
+    checkpoint_interval: int
+    mixed_precision: bool
+
+
+class StudentLossWeights(BaseModel):
+    """Loss function weights for student training."""
+
+    firing_rate: float
+    vanrossum: float
+
+
+class StudentHyperparameters(BaseModel):
+    """Optimization hyperparameters for student training."""
+
+    surrgrad_scale: float
+    learning_rate: float
+    van_rossum_timescale: float
+    loss_weight: StudentLossWeights
 
 
 class OdourInputConfig(BaseModel):
@@ -58,22 +89,6 @@ class OdourInputConfig(BaseModel):
         return int(n_neurons * self.modulation_fraction / 2.0)
 
 
-class FittingActivityRecurrentConfig(BaseRecurrentLayerConfig):
-    """Recurrent layer config for fitting activity (no topology/weights)."""
-
-    # cell_types, physiology, synapses inherited from BaseRecurrentLayerConfig
-    # All methods inherited from BaseRecurrentLayerConfig
-    pass
-
-
-class FittingActivityFeedforwardConfig(BaseFeedforwardLayerConfig):
-    """Feedforward layer config for fitting activity (no topology/weights)."""
-
-    # cell_types, synapses inherited from BaseFeedforwardLayerConfig
-    # All methods inherited from BaseFeedforwardLayerConfig
-    pass
-
-
 # =============================================================================
 # TOP-LEVEL MODELS
 # =============================================================================
@@ -87,8 +102,8 @@ class TeacherActivityParams(BaseModel):
     """
 
     simulation: SimulationConfigWithOdours
-    recurrent: FittingActivityRecurrentConfig
-    feedforward: FittingActivityFeedforwardConfig
+    recurrent: BaseRecurrentLayerConfig
+    feedforward: BaseFeedforwardLayerConfig
     odours: Dict[str, OdourInputConfig]
 
 
@@ -96,12 +111,11 @@ class StudentTrainingParams(BaseModel):
     """Parameters for training student network to match teacher activity.
 
     Includes training configuration and hyperparameters for optimizing network
-    to reproduce target activity patterns.
+    to reproduce target activity patterns. Does not include odours configuration.
     """
 
-    simulation: SimulationConfigWithOdours
-    training: TrainingConfig
-    hyperparameters: Hyperparameters
-    recurrent: FittingActivityRecurrentConfig
-    feedforward: FittingActivityFeedforwardConfig
-    odours: Dict[str, OdourInputConfig]
+    simulation: StudentSimulationConfig
+    training: StudentTrainingConfig
+    hyperparameters: StudentHyperparameters
+    recurrent: BaseRecurrentLayerConfig
+    feedforward: BaseFeedforwardLayerConfig
