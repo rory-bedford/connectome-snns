@@ -32,8 +32,6 @@ from .homeostatic_plasticity import HomeostaticPlasticityParams
 from .fitting_activity import (
     TeacherActivityParams,
     StudentTrainingParams,
-    FittingActivityRecurrentConfig,
-    FittingActivityFeedforwardConfig,
 )
 
 __all__ = [
@@ -61,6 +59,4 @@ __all__ = [
     # Fitting activity
     "TeacherActivityParams",
     "StudentTrainingParams",
-    "FittingActivityRecurrentConfig",
-    "FittingActivityFeedforwardConfig",
 ]

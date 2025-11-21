@@ -158,6 +158,9 @@ def main(input_dir, output_dir, params_file):
     # Create zarr group (directory-based storage)
     root = zarr.open_group(results_dir / "spike_data.zarr", mode="w")
 
+    # Store dt as a metadata attribute
+    root.attrs["dt"] = simulation.dt
+
     # Create datasets with chunking optimized for both writing and reading
     # Chunks span all (batch, pattern) combinations for one time slice
     # This allows: 1) efficient writes (one chunk per simulation step)

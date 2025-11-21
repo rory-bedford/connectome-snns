@@ -20,6 +20,9 @@ from optimisation.utils import AsyncLogger
 from torch.amp import GradScaler
 from optimisation.loss_functions import FiringRateLoss, VanRossumLoss
 import wandb
+from tqdm import tqdm
+from training.snn_trainer import SNNTrainer
+from training.weight_perturbers import perturb_weights_scaling_factor
 
 
 def main(input_dir, output_dir, params_file, wandb_config=None):
@@ -31,13 +34,8 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
         params_file (Path): Path to the file containing network parameters
     """
 
-    # ======================================
     # Device Selection and Parameter Loading
-    # ======================================
-
-    # Select device (CPU/GPU)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
     # Load all network parameters from TOML file
     with open(params_file, "r") as f:
@@ -55,43 +53,59 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
     if simulation.seed is not None:
         np.random.seed(simulation.seed)
         torch.manual_seed(simulation.seed)
-        print(f"Using seed: {simulation.seed}")
-    else:
-        print("No seed specified - using random initialization")
 
-    # ================================
     # Load Network Structure from Disk
-    # ================================
-
-    print("Loading network structure from disk...")
     network_structure = np.load(input_dir / "network_structure.npz")
 
     # Extract network components
     weights = network_structure["recurrent_weights"]
     feedforward_weights = network_structure["feedforward_weights"]
     cell_type_indices = network_structure["cell_type_indices"]
-    input_source_indices = network_structure["feedforward_cell_type_indices"]
+    feedforward_cell_type_indices = network_structure["feedforward_cell_type_indices"]
 
-    print(f"✓ Loaded network with {len(cell_type_indices)} neurons")
-    print(f"✓ Loaded recurrent weights: {weights.shape}")
-    print(f"✓ Loaded feedforward weights: {feedforward_weights.shape}")
+    connectivity_graph = weights != 0.0
+    feedforward_connectivity_graph = feedforward_weights != 0.0
 
-    # ==============================
-    # Setup Optimiser and DataLoader
-    # ==============================
+    # Apply Weight Perturbations
+    (
+        weights,
+        feedforward_weights,
+        target_scaling_factors,
+        target_feedforward_scaling_factors,
+    ) = perturb_weights_scaling_factor(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=feedforward_cell_type_indices,
+        variance=training.weight_perturbation_variance,
+    )
 
-    optimiser = torch.optim.Adam(model.parameters(), lr=hyperparameters.learning_rate)
+    # Create targets directory if it doesn't exist
+    targets_dir = output_dir / "targets"
+    targets_dir.mkdir(parents=True, exist_ok=True)
 
-    # Mixed precision training scaler (only used if enabled)
-    scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
+    # Save perturbed network structure
+    np.savez(
+        targets_dir / "perturbed_network_structure.npz",
+        recurrent_weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=feedforward_cell_type_indices,
+    )
 
-    print("Loading precomputed spike trains from disk...")
+    # Save target scaling factors
+    np.savez(
+        targets_dir / "target_scaling_factors.npz",
+        recurrent_scaling_factors=target_scaling_factors,
+        feedforward_scaling_factors=target_feedforward_scaling_factors,
+    )
+
+    # Load Precomputed Spike Trains
 
     # Load precomputed spike data from zarr
     spike_dataset = PrecomputedSpikeDataset(
         spike_data_path=input_dir / "spike_data.zarr",
         chunk_size=simulation.chunk_size,
-        dataset_name="input_spikes",
         device=device,
     )
 
@@ -115,19 +129,24 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
     # Initialize LIF Network
     # ======================
 
+    section = "INITIALIZING LIF NETWORK"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+
     # Initialize conductance-based LIF network model
     model = ConductanceLIFNetwork(
-        dt=simulation.dt,
+        dt=spike_dataset.dt,
         weights=weights,
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference, but required parameter
         weights_FF=feedforward_weights,
-        cell_type_indices_FF=input_source_indices,
+        cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable=None,  # No optimization for inference
+        optimisable="scaling_factors",
         use_tqdm=False,  # Disable model's internal progress bar
     )
 
@@ -139,27 +158,42 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
     model.compile_step()
     print("✓ Model JIT compiled for faster execution")
 
-    # =====================
-    # Define Loss Functions
-    # =====================
+    # ===============
+    # Setup Optimiser
+    # ===============
+
+    section = "SETTING UP OPTIMIZER AND LOSS FUNCTIONS"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+
+    optimiser = torch.optim.Adam(model.parameters(), lr=hyperparameters.learning_rate)
+
+    # Mixed precision training scaler (only used if enabled)
+    scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
     # Initialize all target tensors
-    target_rate_tensor = spike_dataset.firing_rates
+    target_rate_tensor = spike_dataset.target_firing_rates
 
     # Initialize loss functions
     firing_rate_loss_fn = FiringRateLoss(
-        target_rate=target_rate_tensor, dt=simulation.dt
+        target_rate=target_rate_tensor, dt=spike_dataset.dt
     )
 
     # Define loss weights from config
     loss_weights = {
         "firing_rate": hyperparameters.loss_weight.firing_rate,
-        "van_rossum": hyperparameters.loss_weight.van_rossum,
+        "van_rossum": hyperparameters.loss_weight.vanrossum,
     }
 
     # =============
     # Setup Loggers
     # =============
+
+    section = "SETTING UP LOGGERS"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
 
     # Initialize async logger for non-blocking metric logging
     metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
@@ -186,3 +220,121 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
         wandb_run = wandb.init(**wandb_init_kwargs)
         wandb.watch(model, log="parameters", log_freq=training.log_interval)
         print("=" * 60 + "\n")
+
+    # ===================
+    # Setup Training Loop
+    # ===================
+
+    section = "SETTING UP TRAINING LOOP"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+
+    # Initialize simulation config with dataset and training parameters
+    simulation.setup(
+        dt=spike_dataset.dt,
+        chunks_per_epoch=spike_dataset.num_chunks,
+        epochs=training.epochs,
+    )
+
+    # Initialize progress bar for training loop
+    pbar = tqdm(
+        range(simulation.num_chunks),
+        desc="Training",
+        unit="chunk",
+        total=simulation.num_chunks,
+    )
+
+    # Create trainer with all initialized components
+    trainer = SNNTrainer(
+        model=model,
+        optimizer=optimiser,
+        scaler=scaler,
+        spike_dataloader=spike_dataloader,
+        loss_functions={
+            "firing_rate": firing_rate_loss_fn,
+            "van_rossum": VanRossumLoss(
+                dt=spike_dataset.dt, tau=hyperparameters.van_rossum_tau, device=device
+            ),
+        },
+        loss_weights=loss_weights,
+        params=params,
+        device=device,
+        metrics_logger=metrics_logger,
+        wandb_logger=wandb_run,
+        progress_bar=pbar,
+        connectome_mask=torch.from_numpy(connectivity_graph.astype(np.float32)).to(
+            device
+        ),
+        feedforward_mask=torch.from_numpy(
+            feedforward_connectivity_graph.astype(np.float32)
+        ).to(device),
+    )
+
+    # =================
+    # Run Training Loop
+    # =================
+
+    section = "STARTING TRAINING"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+
+    # Print training configuration
+    print(f"Starting training from chunk {trainer.current_epoch}...")
+    print(
+        f"Chunk size: {simulation.chunk_size} timesteps ({simulation.chunk_duration_s:.1f}s)"
+    )
+    print(
+        f"Total chunks: {simulation.num_chunks} ({simulation.total_duration_s:.1f}s total)"
+    )
+    print(f"Epochs: {training.epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Patterns: {n_patterns}")
+    print(
+        f"Log interval: {training.log_interval} chunks ({training.log_interval_s(simulation.chunk_duration_s):.1f}s)"
+    )
+    print(
+        f"Checkpoint interval: {training.checkpoint_interval} chunks ({training.checkpoint_interval_s(simulation.chunk_duration_s):.1f}s)"
+    )
+
+    # Run training with the trainer
+    best_loss = trainer.train(output_dir=output_dir)
+
+    # ========
+    # Clean Up
+    # ========
+
+    section = "TRAINING COMPLETE"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+    print(f"Best loss achieved: {best_loss:.6f}")
+
+    # ===================================
+    # Save Final State and Run Inference
+    # ===================================
+
+    section = "SAVING FINAL STATE AND RUNNING INFERENCE"
+    print("\n" + "=" * len(section))
+    print(section)
+    print("=" * len(section))
+
+    # Create final_state directory
+    final_state_dir = output_dir / "final_state"
+    final_state_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save final network structure as single npz file
+    print("Saving final network structure...")
+    np.savez(
+        final_state_dir / "network_structure.npz",
+        recurrent_weights=model.weights.detach().cpu().numpy(),
+        feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+        recurrent_connectivity=connectivity_graph,
+        feedforward_connectivity=feedforward_connectivity_graph,
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=feedforward_cell_type_indices,
+    )
+    print(
+        f"✓ Final network structure saved to {final_state_dir / 'network_structure.npz'}"
+    )

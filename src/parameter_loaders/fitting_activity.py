@@ -24,20 +24,84 @@ class SimulationConfigWithOdours(SimulationConfig):
 
 
 class StudentSimulationConfig(BaseModel):
-    """Minimal simulation config for student training."""
+    """Minimal simulation config for student training.
+
+    Unlike the base SimulationConfig, this doesn't have dt or duration in TOML.
+    Instead, dt comes from the dataset and num_chunks is computed from
+    epochs * chunks_per_epoch. Call setup() after loading the dataset.
+    """
 
     seed: int
-    dt: float
     chunk_size: int
+
+    # These are set by setup() method
+    dt: float = 0.0
+    num_chunks: int = 0
+
+    def setup(self, dt: float, chunks_per_epoch: int, epochs: int) -> None:
+        """Initialize computed simulation parameters from dataset and training config.
+
+        Args:
+            dt: Timestep in milliseconds (from dataset).
+            chunks_per_epoch: Number of chunks in one epoch (from dataset).
+            epochs: Number of training epochs (from training config).
+        """
+        self.dt = dt
+        self.num_chunks = epochs * chunks_per_epoch
+
+    @property
+    def chunk_duration_s(self) -> float:
+        """Duration of a single chunk in seconds."""
+        return self.chunk_size * self.dt / 1000.0
+
+    @property
+    def total_duration_s(self) -> float:
+        """Total training duration in seconds."""
+        return self.num_chunks * self.chunk_duration_s
 
 
 class StudentTrainingConfig(BaseModel):
     """Training config for student."""
 
+    epochs: int
     chunks_per_update: int
     log_interval: int
     checkpoint_interval: int
     mixed_precision: bool
+    weight_perturbation_variance: float
+
+    def total_chunks(self, num_chunks_per_epoch: int) -> int:
+        """Total number of chunks across all epochs.
+
+        Args:
+            num_chunks_per_epoch: Number of chunks in one epoch.
+
+        Returns:
+            Total number of training chunks.
+        """
+        return self.epochs * num_chunks_per_epoch
+
+    def log_interval_s(self, chunk_duration_s: float) -> float:
+        """Time interval between logging in seconds.
+
+        Args:
+            chunk_duration_s: Duration of one chunk in seconds.
+
+        Returns:
+            Log interval in seconds.
+        """
+        return self.log_interval * chunk_duration_s
+
+    def checkpoint_interval_s(self, chunk_duration_s: float) -> float:
+        """Time interval between checkpoints in seconds.
+
+        Args:
+            chunk_duration_s: Duration of one chunk in seconds.
+
+        Returns:
+            Checkpoint interval in seconds.
+        """
+        return self.checkpoint_interval * chunk_duration_s
 
 
 class StudentLossWeights(BaseModel):
@@ -52,7 +116,7 @@ class StudentHyperparameters(BaseModel):
 
     surrgrad_scale: float
     learning_rate: float
-    van_rossum_timescale: float
+    van_rossum_tau: float
     loss_weight: StudentLossWeights
 
 

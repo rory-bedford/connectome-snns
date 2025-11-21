@@ -20,28 +20,51 @@ import torch.nn.functional as F
 
 
 class VanRossumLoss(nn.Module):
-    def __init__(self, tau: float, dt: float):
+    required_inputs = ["output_spikes"]
+    requires_target = True
+
+    def __init__(
+        self, tau: float, dt: float, kernel_size: int = None, device: str = "cpu"
+    ):
         """
-        Van Rossum distance for spike trains.
+        Van Rossum distance for spike trains with state continuation across chunks.
 
         Works with any leading batch-like dimensions - treats first N-2 dims as independent
         trials, last 2 dims as (time, neurons).
 
+        Maintains internal state to handle temporal continuity across chunks. The smoothed
+        values from the end of one chunk decay exponentially and contribute to the next chunk.
+
         Args:
             tau (float): Time constant for exponential kernel (ms).
             dt (float): Simulation time step (ms).
+            kernel_size (int, optional): Number of timesteps in the kernel.
+                If None, defaults to 5 * tau / dt (5 time constants).
+            device (str, optional): Device to place kernel on. Defaults to "cpu".
+
+        Note:
+            If kernel_size is larger than chunk_size, the convolution will still work correctly
+            due to padding, and the state continuation ensures proper temporal continuity.
         """
         super(VanRossumLoss, self).__init__()
         self.tau = tau
         self.dt = dt
 
         # Pre-compute and register kernel as buffer
-        kernel_size = int(5 * tau / dt)  # 5 time constants
-        t = torch.arange(kernel_size, dtype=torch.float32) * dt
+        if kernel_size is None:
+            kernel_size = int(5 * tau / dt)  # 5 time constants
+
+        self.kernel_size = kernel_size
+        t = torch.arange(kernel_size, dtype=torch.float32, device=device) * dt
         kernel = torch.exp(-t / tau)
         kernel = kernel / kernel.sum()  # Normalize
 
         self.register_buffer("kernel", kernel.view(1, 1, -1))
+
+        # Internal state: smoothed values from previous chunk
+        # Will be initialized on first forward pass
+        self.prev_output_smooth = None
+        self.prev_target_smooth = None
 
     def forward(
         self, output_spikes: torch.Tensor, target_spikes: torch.Tensor
@@ -52,11 +75,17 @@ class VanRossumLoss(nn.Module):
         Args:
             output_spikes (torch.Tensor): Output spike trains.
                 Shape: (..., time, n_neurons) where ... represents any batch/pattern dims.
+                Can be bool or float.
             target_spikes (torch.Tensor): Target spike trains (same shape as output_spikes).
+                Can be bool or float.
 
         Returns:
             torch.Tensor: Mean Van Rossum loss across all dimensions.
         """
+        # Convert to float if needed (for convolution operations)
+        output_spikes = output_spikes.float()
+        target_spikes = target_spikes.float()
+
         # Get dimensions
         *leading_dims, time, n_neurons = output_spikes.shape
         n_trials = (
@@ -75,24 +104,61 @@ class VanRossumLoss(nn.Module):
             n_trials * n_neurons, 1, time
         )
 
-        # Convolve with exponential kernel
-        output_smooth = F.conv1d(
-            output_conv, self.kernel, padding=self.kernel.shape[-1] // 2
-        )
+        # Ensure kernel matches input dtype (for mixed precision training)
+        kernel = self.kernel.to(dtype=output_conv.dtype)
 
-        target_smooth = F.conv1d(
-            target_conv, self.kernel, padding=self.kernel.shape[-1] // 2
-        )
+        # Convolve with exponential kernel (smoothing from current chunk only)
+        output_smooth = F.conv1d(output_conv, kernel, padding=kernel.shape[-1] // 2)
+
+        target_smooth = F.conv1d(target_conv, kernel, padding=kernel.shape[-1] // 2)
+
+        # Get actual output time dimension after convolution (may differ due to padding)
+        conv_time = output_smooth.shape[-1]
+
+        # Add decayed previous state if it exists
+        if self.prev_output_smooth is not None:
+            # Create decay vector for actual convolution output length
+            t = (
+                torch.arange(
+                    conv_time, device=output_spikes.device, dtype=output_smooth.dtype
+                )
+                * self.dt
+            )
+            decay = torch.exp(-t / self.tau)  # (conv_time,)
+
+            # Ensure previous state matches current dtype (for mixed precision)
+            prev_output = self.prev_output_smooth.to(dtype=output_smooth.dtype)
+            prev_target = self.prev_target_smooth.to(dtype=target_smooth.dtype)
+
+            # Add decayed previous state across all timesteps
+            # Broadcasting: (n_trials*n_neurons, 1, 1) * (conv_time,) -> (n_trials*n_neurons, 1, conv_time)
+            output_smooth = output_smooth + prev_output * decay.view(1, 1, -1)
+            target_smooth = target_smooth + prev_target * decay.view(1, 1, -1)
 
         # Compute squared difference
         diff = (output_smooth - target_smooth) ** 2
 
+        # Save final smoothed values for next chunk (detached to prevent gradient flow)
+        self.prev_output_smooth = output_smooth[:, :, -1:].detach()
+        self.prev_target_smooth = target_smooth[:, :, -1:].detach()
+
         # Compute mean over all dimensions
         return diff.mean()
+
+    def reset_state(self):
+        """
+        Reset internal state to zero.
+
+        Call this at the start of a new sequence or epoch to clear memory
+        from previous chunks.
+        """
+        self.prev_output_smooth = None
+        self.prev_target_smooth = None
 
 
 class CVLoss(nn.Module):
     required_inputs = ["output_spikes"]
+    requires_target = False
 
     def __init__(self, target_cv: torch.Tensor):
         """
@@ -161,6 +227,7 @@ class CVLoss(nn.Module):
 
 class FiringRateLoss(nn.Module):
     required_inputs = ["output_spikes"]
+    requires_target = False
 
     def __init__(self, target_rate: torch.Tensor, dt: float):
         """
@@ -219,6 +286,7 @@ class FiringRateLoss(nn.Module):
 
 class SilentNeuronPenalty(nn.Module):
     required_inputs = ["output_spikes"]
+    requires_target = False
 
     def __init__(self, alpha: float = 1.0, dt: float = 1.0):
         """
@@ -274,6 +342,7 @@ class SilentNeuronPenalty(nn.Module):
 
 class SubthresholdVarianceLoss(nn.Module):
     required_inputs = ["voltages"]
+    requires_target = False
 
     def __init__(self, v_threshold: torch.Tensor, target_ratio: torch.Tensor):
         """

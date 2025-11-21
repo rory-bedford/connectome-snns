@@ -222,8 +222,39 @@ class SNNTrainer:
 
     def _forward_pass(self) -> Dict[str, torch.Tensor]:
         """Run forward pass through the model."""
-        # Get next input spikes (unpack tuple from PoissonSpikeDataset)
-        input_spikes, _ = next(self.spike_iter)
+        # Get next data from dataloader
+        # With batch_size=None, DataLoader returns items directly without batching
+        data = next(self.spike_iter)
+
+        # Dataset returns (input_spikes, target_spikes) tuple
+        if isinstance(data, (tuple, list)) and len(data) == 2:
+            input_spikes, target_spikes = data
+        else:
+            input_spikes = data
+            target_spikes = None
+
+        # Store original shape for reshaping outputs back
+        # Input shape: (..., chunk_size, n_input_neurons) - flatten all leading dims
+        original_shape = input_spikes.shape
+        leading_dims = original_shape[:-2]  # All dimensions except last 2
+
+        # Reshape to 3D: (batch_combined, chunk_size, n_input_neurons)
+        input_spikes_3d = input_spikes.reshape(-1, *original_shape[-2:])
+
+        # Reshape initial states to match flattened batch dimension if they exist
+        initial_v = self.initial_states["v"]
+        initial_g = self.initial_states["g"]
+        initial_g_FF = self.initial_states["g_FF"]
+
+        if initial_v is not None:
+            # Flatten leading dims: (..., n_neurons) -> (batch_combined, n_neurons)
+            initial_v = initial_v.reshape(-1, initial_v.shape[-1])
+        if initial_g is not None:
+            # Flatten leading dims: (..., n_neurons, 2, n_cell_types) -> (batch_combined, n_neurons, 2, n_cell_types)
+            initial_g = initial_g.reshape(-1, *initial_g.shape[-3:])
+        if initial_g_FF is not None:
+            # Flatten leading dims: (..., n_neurons, 2, n_cell_types_FF) -> (batch_combined, n_neurons, 2, n_cell_types_FF)
+            initial_g_FF = initial_g_FF.reshape(-1, *initial_g_FF.shape[-3:])
 
         # Run network simulation with mixed precision
         with autocast(
@@ -231,29 +262,37 @@ class SNNTrainer:
             enabled=self.training.mixed_precision and self.device == "cuda",
         ):
             outputs = self.model.forward(
-                input_spikes=input_spikes,
-                initial_v=self.initial_states["v"],
-                initial_g=self.initial_states["g"],
-                initial_g_FF=self.initial_states["g_FF"],
+                input_spikes=input_spikes_3d,
+                initial_v=initial_v,
+                initial_g=initial_g,
+                initial_g_FF=initial_g_FF,
             )
 
+        # Reshape outputs back to original leading dimensions + trailing dims
+        def reshape_output(tensor, leading_dims):
+            return tensor.reshape(*leading_dims, *tensor.shape[1:])
+
         return {
-            "spikes": outputs[0],
-            "voltages": outputs[1],
-            "currents": outputs[2],
-            "currents_FF": outputs[3],
-            "currents_leak": outputs[4],
-            "conductances": outputs[5],
-            "conductances_FF": outputs[6],
+            "spikes": reshape_output(outputs[0], leading_dims),
+            "voltages": reshape_output(outputs[1], leading_dims),
+            "currents": reshape_output(outputs[2], leading_dims),
+            "currents_FF": reshape_output(outputs[3], leading_dims),
+            "currents_leak": reshape_output(outputs[4], leading_dims),
+            "conductances": reshape_output(outputs[5], leading_dims),
+            "conductances_FF": reshape_output(outputs[6], leading_dims),
             "input_spikes": input_spikes,
+            "target_spikes": target_spikes,
         }
 
     def _update_initial_states(self, chunk_outputs: Dict[str, torch.Tensor]) -> None:
         """Update initial states for next chunk."""
+        # Extract final timestep states, preserving all leading batch/pattern dimensions
+        # Voltages: (..., time, n_neurons) -> (..., n_neurons)
+        # Conductances: (..., time, n_neurons, 2, n_cell_types) -> (..., n_neurons, 2, n_cell_types)
         self.initial_states = {
-            "v": chunk_outputs["voltages"][:, -1, :].detach(),
-            "g": chunk_outputs["conductances"][:, -1, :, :, :].detach(),
-            "g_FF": chunk_outputs["conductances_FF"][:, -1, :, :, :].detach(),
+            "v": chunk_outputs["voltages"][..., -1, :].detach(),
+            "g": chunk_outputs["conductances"][..., -1, :, :, :].detach(),
+            "g_FF": chunk_outputs["conductances_FF"][..., -1, :, :, :].detach(),
         }
 
     def _accumulate_data(
@@ -307,10 +346,19 @@ class SNNTrainer:
                         elif req_input == "dt":
                             inputs["dt"] = self.simulation.dt
                 else:
-                    # For losses without metadata (e.g., VanRossumLoss),
-                    # assume they take output_spikes as the first argument
-                    # Target spikes should already be bound in the loss function
+                    # For losses without metadata, assume they take output_spikes
                     inputs["output_spikes"] = spikes
+
+                # Add target spikes if the loss requires them
+                if hasattr(loss_fn, "requires_target") and loss_fn.requires_target:
+                    if chunk_outputs["target_spikes"] is not None:
+                        inputs["target_spikes"] = chunk_outputs["target_spikes"]
+                    else:
+                        raise ValueError(
+                            f"Loss function '{loss_name}' requires target spikes, "
+                            "but none were provided by the dataloader. "
+                            "Ensure your dataset returns (input_spikes, target_spikes)."
+                        )
 
                 individual_losses[loss_name] = loss_fn(**inputs)
 
@@ -656,6 +704,10 @@ class SNNTrainer:
 
     def _should_store_for_plot(self, epoch: int) -> bool:
         """Check if data should be stored for plotting."""
+        # Only store if plot generator exists and plot_size is configured
+        if not self.plot_generator or not hasattr(self.training, "plot_size"):
+            return False
+
         epochs_until_checkpoint = self.training.checkpoint_interval - (
             (epoch + 1) % self.training.checkpoint_interval
         )
