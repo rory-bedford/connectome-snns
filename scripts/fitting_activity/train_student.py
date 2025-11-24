@@ -376,26 +376,35 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
             )
 
         # Add scaling factor tracking
+        # Scaling factors are 2D: (n_source_types, n_target_types)
         current_recurrent_sf = model.scaling_factors.detach().cpu().numpy()
         current_feedforward_sf = model.scaling_factors_FF.detach().cpu().numpy()
 
-        # Log recurrent scaling factors
-        for i, synapse_name in enumerate(recurrent_synapse_names):
-            stats[f"scaling_factors/recurrent/{synapse_name}/current"] = float(
-                current_recurrent_sf[i]
-            )
-            stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
-                target_scaling_factors[i]
-            )
+        # Get cell type names
+        target_cell_types = params.recurrent.cell_types.names
+        source_ff_cell_types = params.feedforward.cell_types.names
 
-        # Log feedforward scaling factors
-        for i, synapse_name in enumerate(feedforward_synapse_names):
-            stats[f"scaling_factors/feedforward/{synapse_name}/current"] = float(
-                current_feedforward_sf[i]
-            )
-            stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
-                target_feedforward_scaling_factors[i]
-            )
+        # Log recurrent scaling factors: source -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(target_cell_types):
+                synapse_name = f"{source_type}-to-{target_type}"
+                stats[f"scaling_factors/recurrent/{synapse_name}/current"] = float(
+                    current_recurrent_sf[source_idx, target_idx]
+                )
+                stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
+                    target_scaling_factors[source_idx, target_idx]
+                )
+
+        # Log feedforward scaling factors: source_ff -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(source_ff_cell_types):
+                synapse_name = f"{source_type}-to-{target_type}"
+                stats[f"scaling_factors/feedforward/{synapse_name}/current"] = float(
+                    current_feedforward_sf[source_idx, target_idx]
+                )
+                stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
+                    target_feedforward_scaling_factors[source_idx, target_idx]
+                )
 
         return stats
 
