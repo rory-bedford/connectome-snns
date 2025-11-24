@@ -1,0 +1,85 @@
+# Parameters for training student networks to match teacher activity
+# Adapted from Meissner-Bernard et al. (2025)
+
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+seed = 43                              # Random seed for reproducibility
+chunk_size = 50                        # Number of timesteps per chunk
+
+# ======================
+# TRAINING CONFIGURATION
+# ======================
+
+[training]
+epochs = 100                           # Total number of loops through the training data
+chunks_per_update = 20                 # Number of loss calculations per gradient step
+log_interval = 200                     # Log metrics to CSV and wandb every N chunks
+checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
+mixed_precision = true                 # Whether to train with mixed precision
+weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
+
+# ===============
+# HYPERPARAMETERS
+# ===============
+
+[hyperparameters]
+surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
+learning_rate = 5e-4                   # Learning rate for ADAM optimiser
+van_rossum_tau = 100.0                 # ms - Exponential temporal kernel in van Rossum loss
+
+loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
+loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.01)
+
+# ==========================
+# FEEDFORWARD LAYER SYNAPSES
+# ==========================
+
+[feedforward.cell_types]
+names = [ "mitral",]                   # Cell type names
+
+[feedforward.synapses.mitral]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 0.5, 0.1,]                   # nS - Maximum synaptic conductances
+
+# =======================================
+# RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
+# =======================================
+
+[recurrent.cell_types]
+names = [ "excitatory", "inhibitory",] # Cell type names
+
+[recurrent.physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset potential after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 1.35                             # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.excitatory]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 0.5, 0.1,]                   # nS - Synaptic conductances (per spike)
+
+[recurrent.physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 0.9                              # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.inhibitory]
+names = [ "GABA_A",]
+tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
+tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
+E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
+g_bar = [ 2.0,]                        # nS - Synaptic conductances (per spike)
