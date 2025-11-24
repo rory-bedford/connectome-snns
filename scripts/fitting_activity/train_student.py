@@ -315,19 +315,34 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
 
     # Define stats computer function
     def stats_computer(spikes):
-        """Compute summary statistics from network activity."""
+        """Compute summary statistics from network activity.
+
+        Args:
+            spikes: Spike array with shape (..., time, neurons) where ... are leading batch dims
+        """
+        # Flatten leading dimensions to get shape (batch_combined, time, neurons)
+        original_shape = spikes.shape
+        leading_dims = original_shape[
+            :-2
+        ]  # All dimensions except last 2 (time, neurons)
+        n_time = original_shape[-2]
+        n_neurons = original_shape[-1]
+
+        # Reshape: (..., time, neurons) -> (batch_combined, time, neurons)
+        spikes_3d = spikes.reshape(-1, n_time, n_neurons)
+
         # Compute firing rates per neuron (Hz), averaged over batch
-        spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
+        spike_counts = spikes_3d.sum(axis=1)  # Sum over time: (batch_combined, neurons)
         spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
-        duration_s = spikes.shape[1] * params.simulation.dt / 1000.0  # Convert ms to s
+        duration_s = n_time * params.simulation.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
         # Vectorized CV computation
         from analysis.firing_statistics import compute_spike_train_cv
 
         cv_values = compute_spike_train_cv(
-            spikes, dt=params.simulation.dt
-        )  # Shape: (batch, neurons)
+            spikes_3d, dt=params.simulation.dt
+        )  # Shape: (batch_combined, neurons)
 
         # Suppress warning for neurons with no spikes (expected early in training)
         with np.errstate(invalid="ignore"):
