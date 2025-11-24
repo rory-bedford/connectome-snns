@@ -23,9 +23,7 @@ class VanRossumLoss(nn.Module):
     required_inputs = ["output_spikes"]
     requires_target = True
 
-    def __init__(
-        self, tau: float, dt: float, kernel_size: int = None, device: str = "cpu"
-    ):
+    def __init__(self, tau: float, dt: float, window_size: int, device: str = "cpu"):
         """
         Van Rossum distance for spike trains with state continuation across chunks.
 
@@ -35,29 +33,26 @@ class VanRossumLoss(nn.Module):
         Maintains internal state to handle temporal continuity across chunks. The smoothed
         values from the end of one chunk decay exponentially and contribute to the next chunk.
 
+        Uses causal convolution (only looks backward in time) with kernel size equal to
+        the window size.
+
         Args:
             tau (float): Time constant for exponential kernel (ms).
             dt (float): Simulation time step (ms).
-            kernel_size (int, optional): Number of timesteps in the kernel.
-                If None, defaults to 5 * tau / dt (5 time constants).
+            window_size (int): Number of timesteps in each chunk. Used as kernel size.
             device (str, optional): Device to place kernel on. Defaults to "cpu".
-
-        Note:
-            If kernel_size is larger than chunk_size, the convolution will still work correctly
-            due to padding, and the state continuation ensures proper temporal continuity.
         """
         super(VanRossumLoss, self).__init__()
         self.tau = tau
         self.dt = dt
+        self.kernel_size = window_size
 
-        # Pre-compute and register kernel as buffer
-        if kernel_size is None:
-            kernel_size = int(5 * tau / dt)  # 5 time constants
-
-        self.kernel_size = kernel_size
-        t = torch.arange(kernel_size, dtype=torch.float32, device=device) * dt
+        # Pre-compute exponential kernel
+        t = torch.arange(window_size, dtype=torch.float32, device=device) * dt
         kernel = torch.exp(-t / tau)
-        kernel = kernel / kernel.sum()  # Normalize
+
+        # Flip kernel for causal convolution: recent spikes get highest weight
+        kernel = torch.flip(kernel, dims=[0])
 
         self.register_buffer("kernel", kernel.view(1, 1, -1))
 
@@ -107,31 +102,33 @@ class VanRossumLoss(nn.Module):
         # Ensure kernel matches input dtype (for mixed precision training)
         kernel = self.kernel.to(dtype=output_conv.dtype)
 
-        # Convolve with exponential kernel (smoothing from current chunk only)
-        output_smooth = F.conv1d(output_conv, kernel, padding=kernel.shape[-1] // 2)
+        # Causal convolution: pad only on the left (look backward in time)
+        # Padding of (kernel_size - 1) ensures output has same length as input
+        padding = self.kernel_size - 1
+        output_smooth = F.conv1d(output_conv, kernel, padding=padding)
+        target_smooth = F.conv1d(target_conv, kernel, padding=padding)
 
-        target_smooth = F.conv1d(target_conv, kernel, padding=kernel.shape[-1] // 2)
-
-        # Get actual output time dimension after convolution (may differ due to padding)
-        conv_time = output_smooth.shape[-1]
+        # Remove extra timesteps from right side (causal padding adds to left only)
+        output_smooth = output_smooth[:, :, :time]
+        target_smooth = target_smooth[:, :, :time]
 
         # Add decayed previous state if it exists
         if self.prev_output_smooth is not None:
-            # Create decay vector for actual convolution output length
+            # Create decay vector for current chunk
             t = (
                 torch.arange(
-                    conv_time, device=output_spikes.device, dtype=output_smooth.dtype
+                    time, device=output_spikes.device, dtype=output_smooth.dtype
                 )
                 * self.dt
             )
-            decay = torch.exp(-t / self.tau)  # (conv_time,)
+            decay = torch.exp(-t / self.tau)  # (time,)
 
             # Ensure previous state matches current dtype (for mixed precision)
             prev_output = self.prev_output_smooth.to(dtype=output_smooth.dtype)
             prev_target = self.prev_target_smooth.to(dtype=target_smooth.dtype)
 
             # Add decayed previous state across all timesteps
-            # Broadcasting: (n_trials*n_neurons, 1, 1) * (conv_time,) -> (n_trials*n_neurons, 1, conv_time)
+            # Broadcasting: (n_trials*n_neurons, 1, 1) * (time,) -> (n_trials*n_neurons, 1, time)
             output_smooth = output_smooth + prev_output * decay.view(1, 1, -1)
             target_smooth = target_smooth + prev_target * decay.view(1, 1, -1)
 
@@ -142,7 +139,6 @@ class VanRossumLoss(nn.Module):
         self.prev_output_smooth = output_smooth[:, :, -1:].detach()
         self.prev_target_smooth = target_smooth[:, :, -1:].detach()
 
-        # Compute mean over all dimensions
         return diff.mean()
 
     def reset_state(self):

@@ -335,16 +335,20 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
             # weights[mask, :] → (n_in_type, n_neurons)
             # cached → (n_neurons, 2, n_syn)
             # Multiply them: (n_in_type, n_neurons, 2, n_syn)
-            weighted = weights[mask, :][:, :, None, None] * cached[None, :, :, :]
-            g[:, :, :, syn_mask] += torch.einsum("bi,ijkl->bjkl", s[:, mask], weighted)
+            g[:, :, :, syn_mask] += torch.einsum(
+                "bi,ijkl->bjkl",
+                s[:, mask],
+                weights[mask, :][:, :, None, None] * cached[None, :, :, :],
+            )
 
         # Update conductances (feedforward) - weights stay dynamic
         for mask, syn_mask, k, cached in zip(
             masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
         ):
-            weighted = weights_FF[mask, :][:, :, None, None] * cached[None, :, :, :]
             g[:, :, :, syn_mask] += torch.einsum(
-                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weighted
+                "bi,ijkl->bjkl",
+                input_spikes_t[:, mask].float(),
+                weights_FF[mask, :][:, :, None, None] * cached[None, :, :, :],
             )
 
         return v, g, s, I, I_leak
@@ -399,19 +403,19 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         ):
             # cached → (n_in_type, n_neurons, 2, n_syn)
             # scaling_factors[k, cell_type_indices] → (n_neurons,)
-            # Multiply them: (n_in_type, n_neurons, 2, n_syn)
-            scaled = cached * scaling_factors[k, cell_type_indices][None, :, None, None]
-            g[:, :, :, syn_mask] += torch.einsum("bi,ijkl->bjkl", s[:, mask], scaled)
+            # Apply scaling after einsum to reduce memory usage
+            g[:, :, :, syn_mask] += (
+                torch.einsum("bi,ijkl->bjkl", s[:, mask], cached)
+                * scaling_factors[k, cell_type_indices][None, :, None, None]
+            )
 
         # Update conductances (feedforward) - scaling_factors stay dynamic
         for mask, syn_mask, k, cached in zip(
             masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
         ):
-            scaled = (
-                cached * scaling_factors_FF[k, cell_type_indices][None, :, None, None]
-            )
-            g[:, :, :, syn_mask] += torch.einsum(
-                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), scaled
+            g[:, :, :, syn_mask] += (
+                torch.einsum("bi,ijkl->bjkl", input_spikes_t[:, mask].float(), cached)
+                * scaling_factors_FF[k, cell_type_indices][None, :, None, None]
             )
 
         return v, g, s, I, I_leak

@@ -100,8 +100,6 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
         feedforward_scaling_factors=target_feedforward_scaling_factors,
     )
 
-    # Load Precomputed Spike Trains
-
     # Load precomputed spike data from zarr
     spike_dataset = PrecomputedSpikeDataset(
         spike_data_path=input_dir / "spike_data.zarr",
@@ -158,14 +156,26 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
     model.compile_step()
     print("✓ Model JIT compiled for faster execution")
 
-    # ===============
-    # Setup Optimiser
-    # ===============
-
-    section = "SETTING UP OPTIMIZER AND LOSS FUNCTIONS"
+    # Print initial scaling factors and target values
+    section = "INITIAL SCALING FACTORS AND TARGETS"
     print("\n" + "=" * len(section))
     print(section)
     print("=" * len(section))
+    print(
+        f"Initial recurrent scaling factors:\n{model.scaling_factors.detach().cpu().numpy()}"
+    )
+    print(
+        f"\nInitial feedforward scaling factors:\n{model.scaling_factors_FF.detach().cpu().numpy()}"
+    )
+    print(f"\nTarget recurrent scaling factors:\n{target_scaling_factors}")
+    print(
+        f"\nTarget feedforward scaling factors:\n{target_feedforward_scaling_factors}"
+    )
+    print("=" * len(section) + "\n")
+
+    # ===============
+    # Setup Optimiser
+    # ===============
 
     optimiser = torch.optim.Adam(model.parameters(), lr=hyperparameters.learning_rate)
 
@@ -179,21 +189,22 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
     firing_rate_loss_fn = FiringRateLoss(
         target_rate=target_rate_tensor, dt=spike_dataset.dt
     )
+    van_rossum_loss_fn = VanRossumLoss(
+        tau=hyperparameters.van_rossum_tau,
+        dt=spike_dataset.dt,
+        window_size=simulation.chunk_size,
+        device=device,
+    )
 
     # Define loss weights from config
     loss_weights = {
         "firing_rate": hyperparameters.loss_weight.firing_rate,
-        "van_rossum": hyperparameters.loss_weight.vanrossum,
+        "van_rossum": hyperparameters.loss_weight.van_rossum,
     }
 
     # =============
     # Setup Loggers
     # =============
-
-    section = "SETTING UP LOGGERS"
-    print("\n" + "=" * len(section))
-    print(section)
-    print("=" * len(section))
 
     # Initialize async logger for non-blocking metric logging
     metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
@@ -253,9 +264,7 @@ def main(input_dir, output_dir, params_file, wandb_config=None):
         spike_dataloader=spike_dataloader,
         loss_functions={
             "firing_rate": firing_rate_loss_fn,
-            "van_rossum": VanRossumLoss(
-                dt=spike_dataset.dt, tau=hyperparameters.van_rossum_tau, device=device
-            ),
+            "van_rossum": van_rossum_loss_fn,
         },
         loss_weights=loss_weights,
         params=params,

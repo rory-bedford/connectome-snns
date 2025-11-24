@@ -108,7 +108,7 @@ class StudentLossWeights(BaseModel):
     """Loss function weights for student training."""
 
     firing_rate: float
-    vanrossum: float
+    van_rossum: float
 
 
 class StudentHyperparameters(BaseModel):
