@@ -86,6 +86,7 @@ def plot_weighted_connectivity(
     cell_type_indices: NDArray[np.int32],
     num_assemblies: int | None = None,
     plot_num_assemblies: int = 2,
+    plot_fraction: float = 0.1,
     heatmap_inches: float = 8.0,
     ax: plt.Axes | None = None,
 ) -> plt.Figure | None:
@@ -95,8 +96,9 @@ def plot_weighted_connectivity(
         weights (NDArray[np.float32]): Weight matrix (N x N).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         num_assemblies (int | None): Total number of assemblies in the network.
-            If None, shows 10% of the matrix. Defaults to None.
-        plot_num_assemblies (int): Number of assemblies to display (ignored if num_assemblies is None). Defaults to 2.
+            If None, uses plot_fraction to determine matrix size. Defaults to None.
+        plot_num_assemblies (int): Number of assemblies to display (only used if num_assemblies is not None). Defaults to 2.
+        plot_fraction (float): Fraction of neurons to display (only used if num_assemblies is None). Defaults to 0.1.
         heatmap_inches (float): Size of the heatmap in inches. Defaults to 8.0.
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
@@ -106,8 +108,8 @@ def plot_weighted_connectivity(
     num_neurons = weights.shape[0]
 
     if num_assemblies is None:
-        # Show 10% of the matrix
-        plot_size_neurons = int(num_neurons * 0.1)
+        # Show specified fraction of the matrix
+        plot_size_neurons = int(num_neurons * plot_fraction)
     else:
         neurons_per_assembly = num_neurons // num_assemblies
         plot_size_neurons = neurons_per_assembly * plot_num_assemblies

@@ -10,8 +10,8 @@ import torch
 import numpy as np
 import zarr
 from pathlib import Path
-from torch.utils.data import Dataset
-from typing import Union, Tuple
+from torch.utils.data import Dataset, Sampler
+from typing import Union, Tuple, Iterator
 from analysis.firing_rate import compute_firing_rates_from_zarr
 
 
@@ -454,3 +454,34 @@ class PrecomputedSpikeDataset(Dataset):
         target_tensor = torch.from_numpy(target_chunk).bool().to(self.device)
 
         return input_tensor, target_tensor
+
+
+class CyclicSampler(Sampler):
+    """
+    Sampler that cycles through indices infinitely.
+
+    This sampler repeats the dataset indices indefinitely, allowing
+    multi-epoch training without exhausting the dataloader iterator.
+
+    Args:
+        data_source: Dataset to sample from
+
+    Example:
+        >>> dataset = PrecomputedSpikeDataset(...)
+        >>> sampler = CyclicSampler(dataset)
+        >>> dataloader = DataLoader(dataset, sampler=sampler, batch_size=None)
+        >>> # Dataloader will never run out of data
+    """
+
+    def __init__(self, data_source: Dataset):
+        self.data_source = data_source
+        self.num_samples = len(data_source)
+
+    def __iter__(self) -> Iterator[int]:
+        """Yield indices cycling through the dataset infinitely."""
+        while True:
+            yield from range(self.num_samples)
+
+    def __len__(self) -> int:
+        """Return a very large number to indicate indefinite iteration."""
+        return 2**31 - 1  # Effectively infinite

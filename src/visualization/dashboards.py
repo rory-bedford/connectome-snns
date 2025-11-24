@@ -43,12 +43,11 @@ def create_connectivity_dashboard(
     input_cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     input_cell_type_names: list[str],
-    num_assemblies: int | None = None,
     recurrent_g_bar_by_type: dict[str, float] = None,
     feedforward_g_bar_by_type: dict[str, float] = None,
-    plot_num_assemblies: int = 2,
     heatmap_inches: float = 6.0,
-    plot_fraction: float = 0.1,
+    plot_fraction_feedforward: float = 0.1,
+    plot_fraction_recurrent: float = 0.1,
 ) -> plt.Figure:
     """Create a comprehensive connectivity dashboard with all connectivity plots.
 
@@ -59,13 +58,11 @@ def create_connectivity_dashboard(
         input_cell_type_indices (NDArray[np.int32]): Array of cell type indices for input neurons.
         cell_type_names (list[str]): Names of recurrent cell types.
         input_cell_type_names (list[str]): Names of input cell types.
-        num_assemblies (int | None): Total number of assemblies in the network.
-            If None, shows 10% of the matrix. Defaults to None.
         recurrent_g_bar_by_type (dict[str, float]): Total g_bar for each recurrent cell type.
         feedforward_g_bar_by_type (dict[str, float]): Total g_bar for each feedforward cell type.
-        plot_num_assemblies (int): Number of assemblies to display (ignored if num_assemblies is None). Defaults to 2.
         heatmap_inches (float): Size of heatmaps in inches. Defaults to 6.0.
-        plot_fraction (float): Fraction of neurons for feedforward connectivity. Defaults to 0.1.
+        plot_fraction_feedforward (float): Fraction of neurons to show in feedforward connectivity. Defaults to 0.1.
+        plot_fraction_recurrent (float): Fraction of neurons to show in recurrent connectivity. Defaults to 0.1.
 
     Returns:
         plt.Figure: Single comprehensive dashboard figure with all connectivity plots arranged.
@@ -100,7 +97,7 @@ def create_connectivity_dashboard(
     plot_feedforward_connectivity(
         feedforward_weights=feedforward_weights,
         input_cell_type_indices=input_cell_type_indices,
-        plot_fraction=plot_fraction,
+        plot_fraction=plot_fraction_feedforward,
         ax=ax1,
         show_legend=False,
         section_title="Weighted Connectomes",
@@ -113,8 +110,8 @@ def create_connectivity_dashboard(
     plot_weighted_connectivity(
         weights=weights,
         cell_type_indices=cell_type_indices,
-        num_assemblies=num_assemblies,
-        plot_num_assemblies=plot_num_assemblies,
+        num_assemblies=None,
+        plot_fraction=plot_fraction_recurrent,
         heatmap_inches=heatmap_inches,
         ax=ax2,
     )
