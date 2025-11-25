@@ -10,13 +10,13 @@ seed = 42                              # Random seed for reproducibility
 dt = 1.0                               # ms - Time resolution of the simulation
 duration = 100000                      # ms - Total duration of the simulation
 chunk_size = 50                        # Number of timesteps per chunk
-batch_size = 10                        # Number of batches to run in parallel for training
 
 # ======================
 # TRAINING CONFIGURATION
 # ======================
 
 [training]
+batch_size = 100                       # Number of batches to run in parallel for training
 chunks_per_update = 2                  # Number of loss calculations per gradient step
 log_interval = 200                     # Log metrics to CSV and wandb every N chunks
 checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks

@@ -29,7 +29,6 @@ class SimulationConfig(BaseModel):
     duration: float
     seed: int
     chunk_size: int
-    batch_size: int
 
     @property
     def num_chunks(self) -> int:

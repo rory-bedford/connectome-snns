@@ -14,6 +14,17 @@ from .conductance_based import RecurrentConfig, FeedforwardConfig
 
 
 # =============================================================================
+# CUSTOM CONFIGS FOR HOMEOSTATIC PLASTICITY
+# =============================================================================
+
+
+class HomeostaticTrainingConfig(TrainingConfig):
+    """Training config with batch_size for homeostatic plasticity."""
+
+    batch_size: int
+
+
+# =============================================================================
 # TOP-LEVEL MODEL
 # =============================================================================
 
@@ -22,7 +33,7 @@ class HomeostaticPlasticityParams(BaseModel):
     """Homeostatic plasticity training."""
 
     simulation: SimulationConfig
-    training: TrainingConfig
+    training: HomeostaticTrainingConfig
     targets: Targets
     hyperparameters: Hyperparameters
     recurrent: RecurrentConfig
