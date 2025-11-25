@@ -418,161 +418,6 @@ class SNNTrainer:
         if self.device == "cuda":
             torch.cuda.empty_cache()
 
-    def _log_wandb_custom_plots(
-        self, stats: Dict[str, float], epoch: int
-    ) -> Dict[str, Any]:
-        """Create custom wandb line plots for grouped metrics.
-
-        Args:
-            stats: Dictionary of statistics from stats_computer
-            epoch: Current epoch number
-
-        Returns:
-            Dictionary of wandb plot objects to log
-        """
-        import wandb
-
-        wandb_plots = {}
-
-        # Group stats by category
-        firing_rate_stats = {}
-        cv_stats = {}
-        fraction_active_stats = {}
-        scaling_factor_groups = {}
-
-        for key, value in stats.items():
-            parts = key.split("/")
-
-            if parts[0] == "firing_rate":
-                # Format: firing_rate/mean/{cell_type} or firing_rate/std/{cell_type}
-                if len(parts) == 3:
-                    stat_type, cell_type = parts[1], parts[2]
-                    if cell_type not in firing_rate_stats:
-                        firing_rate_stats[cell_type] = {}
-                    firing_rate_stats[cell_type][stat_type] = value
-
-            elif parts[0] == "cv":
-                # Format: cv/mean/{cell_type} or cv/std/{cell_type}
-                if len(parts) == 3:
-                    stat_type, cell_type = parts[1], parts[2]
-                    if cell_type not in cv_stats:
-                        cv_stats[cell_type] = {}
-                    cv_stats[cell_type][stat_type] = value
-
-            elif parts[0] == "fraction_active":
-                # Format: fraction_active/{cell_type}
-                if len(parts) == 2:
-                    cell_type = parts[1]
-                    fraction_active_stats[cell_type] = value
-
-            elif parts[0] == "scaling_factors":
-                # Format: scaling_factors/{layer}/{synapse_name}/{metric}
-                if len(parts) == 4:
-                    layer, synapse_name, metric = parts[1], parts[2], parts[3]
-                    group_key = f"{layer}/{synapse_name}"
-                    if group_key not in scaling_factor_groups:
-                        scaling_factor_groups[group_key] = {}
-                    scaling_factor_groups[group_key][metric] = value
-
-        # Create line plot for mean firing rates (all cell types on one plot)
-        if firing_rate_stats:
-            cell_types = sorted(firing_rate_stats.keys())
-            mean_values = [firing_rate_stats[ct].get("mean", 0.0) for ct in cell_types]
-
-            # Store in history for time series
-            if not hasattr(self, "_firing_rate_history"):
-                self._firing_rate_history = {ct: [] for ct in cell_types}
-                self._epoch_history = []
-
-            self._epoch_history.append(epoch)
-            for ct, val in zip(cell_types, mean_values):
-                self._firing_rate_history[ct].append(val)
-
-            # Create line series plot
-            wandb_plots["firing_rates/by_cell_type"] = wandb.plot.line_series(
-                xs=self._epoch_history,
-                ys=[self._firing_rate_history[ct] for ct in cell_types],
-                keys=cell_types,
-                title="Mean Firing Rate by Cell Type",
-                xname="Epoch",
-            )
-
-        # Create line plot for CV (all cell types on one plot)
-        if cv_stats:
-            cell_types = sorted(cv_stats.keys())
-            mean_cv_values = [cv_stats[ct].get("mean", 0.0) for ct in cell_types]
-
-            # Store in history for time series
-            if not hasattr(self, "_cv_history"):
-                self._cv_history = {ct: [] for ct in cell_types}
-
-            for ct, val in zip(cell_types, mean_cv_values):
-                self._cv_history[ct].append(val)
-
-            # Create line series plot (use same epoch history)
-            wandb_plots["cv/by_cell_type"] = wandb.plot.line_series(
-                xs=self._epoch_history,
-                ys=[self._cv_history[ct] for ct in cell_types],
-                keys=cell_types,
-                title="Mean CV by Cell Type",
-                xname="Epoch",
-            )
-
-        # Create line plot for fraction active (all cell types on one plot)
-        if fraction_active_stats:
-            cell_types = sorted(fraction_active_stats.keys())
-            fraction_values = [fraction_active_stats[ct] for ct in cell_types]
-
-            # Store in history for time series
-            if not hasattr(self, "_fraction_active_history"):
-                self._fraction_active_history = {ct: [] for ct in cell_types}
-
-            for ct, val in zip(cell_types, fraction_values):
-                self._fraction_active_history[ct].append(val)
-
-            # Create line series plot
-            wandb_plots["fraction_active/by_cell_type"] = wandb.plot.line_series(
-                xs=self._epoch_history,
-                ys=[self._fraction_active_history[ct] for ct in cell_types],
-                keys=cell_types,
-                title="Fraction Active by Cell Type",
-                xname="Epoch",
-            )
-
-        # Create separate plots for each scaling factor (value + target on same plot)
-        for group_key, metrics in scaling_factor_groups.items():
-            layer, synapse_name = group_key.split("/")
-
-            # Store in history for time series
-            if not hasattr(self, "_scaling_factor_history"):
-                self._scaling_factor_history = {}
-
-            if group_key not in self._scaling_factor_history:
-                self._scaling_factor_history[group_key] = {"value": [], "target": []}
-
-            value = metrics.get("value", 0.0)
-            target = metrics.get("target", 0.0)
-
-            self._scaling_factor_history[group_key]["value"].append(value)
-            self._scaling_factor_history[group_key]["target"].append(target)
-
-            # Create line series plot with value and target (both solid - wandb doesn't support dashed)
-            # We'll use naming convention to indicate which is target
-            wandb_plots[f"scaling_factors/{layer}/{synapse_name}"] = (
-                wandb.plot.line_series(
-                    xs=self._epoch_history,
-                    ys=[
-                        self._scaling_factor_history[group_key]["value"],
-                        self._scaling_factor_history[group_key]["target"],
-                    ],
-                    keys=["Current Value", "Target"],
-                    title=f"Scaling Factor: {synapse_name} ({layer})",
-                    xname="Epoch",
-                )
-            )
-
-        return wandb_plots
-
     def _log_metrics(
         self, losses: Dict[str, float], spikes: np.ndarray, epoch: int
     ) -> None:
@@ -627,16 +472,11 @@ class SNNTrainer:
             # Compute averaged gradient statistics
             avg_grad_stats = self._compute_average_gradients()
 
-            # Create custom wandb plots
-            wandb_custom_plots = self._log_wandb_custom_plots(stats, epoch + 1)
-
-            # Log everything together
             wandb.log(
                 {
                     **wandb_losses,
-                    **stats,  # Keep raw stats for reference
+                    **stats,
                     **avg_grad_stats,
-                    **wandb_custom_plots,  # Add custom grouped plots
                 },
                 step=epoch + 1,
             )
