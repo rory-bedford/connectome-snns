@@ -306,9 +306,10 @@ def main(
             input_cell_type_indices=feedforward_cell_type_indices,
             cell_type_names=params.recurrent.cell_types.names,
             input_cell_type_names=params.feedforward.cell_types.names,
-            num_assemblies=params.recurrent.topology.num_assemblies,
             recurrent_g_bar_by_type=recurrent_g_bar_by_type,
             feedforward_g_bar_by_type=feedforward_g_bar_by_type,
+            plot_fraction_recurrent=0.1,
+            plot_fraction_feedforward=0.1,
         )
 
         # Generate activity dashboard
