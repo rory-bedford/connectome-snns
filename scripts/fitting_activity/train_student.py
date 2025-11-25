@@ -19,7 +19,11 @@ from torch.utils.data import DataLoader
 from parameter_loaders import StudentTrainingParams
 from optimisation.utils import AsyncLogger
 from torch.amp import GradScaler
-from optimisation.loss_functions import FiringRateLoss, VanRossumLoss
+from optimisation.loss_functions import (
+    FiringRateLoss,
+    VanRossumLoss,
+    SilentNeuronPenalty,
+)
 import wandb
 from tqdm import tqdm
 from training.snn_trainer import SNNTrainer
@@ -151,7 +155,7 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
         cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable="scaling_factors",
+        optimisable="weights",
         use_tqdm=False,  # Disable model's internal progress bar
     )
 
@@ -192,6 +196,13 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
     # Initialize all target tensors
     target_rate_tensor = spike_dataset.target_firing_rates
 
+    # Build alpha tensor for silent neuron penalty (per-neuron)
+    alpha_tensor = torch.zeros(len(cell_type_indices), device=device)
+    for cell_type_name in recurrent.cell_types.names:
+        cell_type_idx = recurrent.cell_types.names.index(cell_type_name)
+        mask = cell_type_indices == cell_type_idx
+        alpha_tensor[mask] = hyperparameters.alpha[cell_type_name]
+
     # Initialize loss functions
     firing_rate_loss_fn = FiringRateLoss(
         target_rate=target_rate_tensor, dt=spike_dataset.dt
@@ -202,11 +213,13 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
         window_size=simulation.chunk_size,
         device=device,
     )
+    silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=spike_dataset.dt)
 
     # Define loss weights from config
     loss_weights = {
         "firing_rate": hyperparameters.loss_weight.firing_rate,
         "van_rossum": hyperparameters.loss_weight.van_rossum,
+        "silent_penalty": hyperparameters.loss_weight.silent_penalty,
     }
 
     # ==============
@@ -556,6 +569,7 @@ def main(input_dir, output_dir, params_file, wandb_config=None, resume_from=None
         loss_functions={
             "firing_rate": firing_rate_loss_fn,
             "van_rossum": van_rossum_loss_fn,
+            "silent_penalty": silent_penalty_fn,
         },
         loss_weights=loss_weights,
         params=params,
