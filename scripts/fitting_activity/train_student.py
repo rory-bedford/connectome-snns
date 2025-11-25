@@ -432,7 +432,7 @@ def main(
         for chunk_idx in range(chunks_needed):
             input_chunk, target_chunk = spike_dataset[chunk_idx]
             # Extract batch 0, pattern 0
-            inference_input_spikes_list.append(input_chunk[0, 0, :, :])
+            inference_input_spikes_list.append(input_chunk[0, :, :])
 
         # Concatenate chunks and truncate to exact duration
         inference_input_spikes = torch.cat(inference_input_spikes_list, dim=0)[
@@ -470,14 +470,14 @@ def main(
 
             # Convert to numpy and take only first batch
             plot_data = {
-                "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
-                "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
-                "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
-                "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
-                "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
-                "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
-                "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
-                "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+                "spikes": inf_spikes[0, ...].detach().cpu().numpy(),
+                "voltages": inf_voltages[0, ...].detach().cpu().numpy(),
+                "conductances": inf_conductances[0, ...].detach().cpu().numpy(),
+                "conductances_FF": inf_conductances_FF[0, ...].detach().cpu().numpy(),
+                "currents": inf_currents[0, ...].detach().cpu().numpy(),
+                "currents_FF": inf_currents_FF[0, ...].detach().cpu().numpy(),
+                "currents_leak": inf_currents_leak[0, ...].detach().cpu().numpy(),
+                "input_spikes": inference_input_spikes[0, ...].detach().cpu().numpy(),
                 "weights": model.weights.detach().cpu().numpy(),
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
             }
@@ -686,20 +686,14 @@ def main(
 
         # Convert to numpy and take only first batch
         plot_data = {
-            "spikes": final_inf_spikes[0:1, ...].detach().cpu().numpy(),
-            "voltages": final_inf_voltages[0:1, ...].detach().cpu().numpy(),
-            "conductances": final_inf_conductances[0:1, ...].detach().cpu().numpy(),
-            "conductances_FF": final_inf_conductances_FF[0:1, ...]
-            .detach()
-            .cpu()
-            .numpy(),
-            "currents": final_inf_currents[0:1, ...].detach().cpu().numpy(),
-            "currents_FF": final_inf_currents_FF[0:1, ...].detach().cpu().numpy(),
-            "currents_leak": final_inf_currents_leak[0:1, ...].detach().cpu().numpy(),
-            "input_spikes": final_inference_input_spikes[0:1, ...]
-            .detach()
-            .cpu()
-            .numpy(),
+            "spikes": final_inf_spikes[0, ...].detach().cpu().numpy(),
+            "voltages": final_inf_voltages[0, ...].detach().cpu().numpy(),
+            "conductances": final_inf_conductances[0, ...].detach().cpu().numpy(),
+            "conductances_FF": final_inf_conductances_FF[0, ...].detach().cpu().numpy(),
+            "currents": final_inf_currents[0, ...].detach().cpu().numpy(),
+            "currents_FF": final_inf_currents_FF[0, ...].detach().cpu().numpy(),
+            "currents_leak": final_inf_currents_leak[0, ...].detach().cpu().numpy(),
+            "input_spikes": final_inference_input_spikes[0, ...].detach().cpu().numpy(),
             "weights": model.weights.detach().cpu().numpy(),
             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
         }
