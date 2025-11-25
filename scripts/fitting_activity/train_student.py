@@ -347,14 +347,14 @@ def main(
         # Compute firing rates per neuron (Hz), averaged over batch
         spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
         spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
-        duration_s = spikes.shape[1] * params.simulation.dt / 1000.0  # Convert ms to s
+        duration_s = spikes.shape[1] * spike_dataset.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
         # Vectorized CV computation
         from analysis.firing_statistics import compute_spike_train_cv
 
         cv_values = compute_spike_train_cv(
-            spikes, dt=params.simulation.dt
+            spikes, dt=spike_dataset.dt
         )  # Shape: (batch, neurons)
 
         # Suppress warning for neurons with no spikes (expected early in training)
