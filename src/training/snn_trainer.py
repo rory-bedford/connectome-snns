@@ -403,6 +403,20 @@ class SNNTrainer:
                 if self.model.weights_FF.grad is not None:
                     self.model.weights_FF.grad *= self.feedforward_mask
 
+        # Debug: Print gradient statistics
+        print("\n=== Gradient Statistics ===")
+        for name, param in self.model.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                grad_max = param.grad.abs().max().item()
+                grad_mean = param.grad.abs().mean().item()
+                print(
+                    f"{name:30s} | norm: {grad_norm:10.6f} | max: {grad_max:10.6f} | mean: {grad_mean:10.6f}"
+                )
+            else:
+                print(f"{name:30s} | No gradient")
+        print("=" * 80)
+
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
         self.scaler.step(self.optimizer)

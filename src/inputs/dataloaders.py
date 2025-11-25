@@ -328,10 +328,11 @@ class PrecomputedSpikeDataset(Dataset):
     of a specified size. Designed to work with spike data saved in the format:
     (batch_size, n_patterns, total_time, n_neurons).
 
-    Returns both input spikes and target (output) spikes for each chunk.
+    Returns both input spikes and target (output) spikes for each chunk with
+    batch and pattern dimensions flattened into a single batch dimension.
 
-    At initialization, computes the firing rates for each neuron in each pattern
-    and batch using the firing_rate analysis module.
+    At initialization, computes the firing rates for each neuron averaged across
+    batches and patterns.
 
     Args:
         spike_data_path (Path): Path to zarr directory containing spike data.
@@ -342,8 +343,8 @@ class PrecomputedSpikeDataset(Dataset):
 
     Attributes:
         dt (float): Timestep in milliseconds, loaded from zarr attributes.
-        input_firing_rates (torch.Tensor): Input firing rates in Hz with shape (batch_size, n_patterns, n_input_neurons).
-        target_firing_rates (torch.Tensor): Target firing rates in Hz with shape (batch_size, n_patterns, n_neurons).
+        input_firing_rates (torch.Tensor): Input firing rates in Hz with shape (batch_size * n_patterns, n_input_neurons).
+        target_firing_rates (torch.Tensor): Target firing rates in Hz with shape (batch_size * n_patterns, n_neurons).
 
     Example:
         >>> dataset = PrecomputedSpikeDataset(
@@ -352,11 +353,11 @@ class PrecomputedSpikeDataset(Dataset):
         ...     device="cuda"
         ... )
         >>> input_spikes, target_spikes = dataset[0]  # First chunk
-        >>> input_spikes.shape  # (batch_size, n_patterns, chunk_size, n_input_neurons)
-        >>> target_spikes.shape  # (batch_size, n_patterns, chunk_size, n_neurons)
+        >>> input_spikes.shape  # (batch_size * n_patterns, chunk_size, n_input_neurons)
+        >>> target_spikes.shape  # (batch_size * n_patterns, chunk_size, n_neurons)
         >>> dataset.dt  # Timestep in ms, loaded from zarr
-        >>> dataset.input_firing_rates.shape  # (batch_size, n_patterns, n_input_neurons)
-        >>> dataset.target_firing_rates.shape  # (batch_size, n_patterns, n_neurons)
+        >>> dataset.input_firing_rates.shape  # (batch_size * n_patterns, n_input_neurons)
+        >>> dataset.target_firing_rates.shape  # (batch_size * n_patterns, n_neurons)
     """
 
     def __init__(
@@ -405,8 +406,12 @@ class PrecomputedSpikeDataset(Dataset):
             dataset_name=input_dataset_name,
             dt=self.dt,
         )
+        # Flatten batch and pattern dimensions: (batch, patterns, n_neurons) -> (batch*patterns, n_neurons)
+        input_firing_rates_flat = input_firing_rates_np.reshape(
+            -1, input_firing_rates_np.shape[-1]
+        )
         self.input_firing_rates = (
-            torch.from_numpy(input_firing_rates_np).float().to(device)
+            torch.from_numpy(input_firing_rates_flat).float().to(device)
         )
         print(
             f"✓ Computed input firing rates with shape {self.input_firing_rates.shape}"
@@ -419,8 +424,12 @@ class PrecomputedSpikeDataset(Dataset):
             dataset_name=target_dataset_name,
             dt=self.dt,
         )
+        # Flatten batch and pattern dimensions: (batch, patterns, n_neurons) -> (batch*patterns, n_neurons)
+        target_firing_rates_flat = target_firing_rates_np.reshape(
+            -1, target_firing_rates_np.shape[-1]
+        )
         self.target_firing_rates = (
-            torch.from_numpy(target_firing_rates_np).float().to(device)
+            torch.from_numpy(target_firing_rates_flat).float().to(device)
         )
         print(
             f"✓ Computed target firing rates with shape {self.target_firing_rates.shape}"
@@ -432,15 +441,15 @@ class PrecomputedSpikeDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Get a full chunk across all batches and patterns.
+        Get a chunk with batch and pattern dimensions flattened.
 
         Args:
             idx (int): Chunk index (0 to num_chunks-1).
 
         Returns:
             Tuple of (input_spike_chunk, target_spike_chunk) where:
-                - input_spike_chunk: torch.Tensor of shape (batch_size, n_patterns, chunk_size, n_input_neurons)
-                - target_spike_chunk: torch.Tensor of shape (batch_size, n_patterns, chunk_size, n_neurons)
+                - input_spike_chunk: torch.Tensor of shape (batch_size * n_patterns, chunk_size, n_input_neurons)
+                - target_spike_chunk: torch.Tensor of shape (batch_size * n_patterns, chunk_size, n_neurons)
         """
         # Extract chunk from zarr - all batches and patterns for this time slice
         start_t = idx * self.chunk_size
@@ -452,6 +461,10 @@ class PrecomputedSpikeDataset(Dataset):
         # Convert to torch tensors as bool (zarr storage format)
         input_tensor = torch.from_numpy(input_chunk).bool().to(self.device)
         target_tensor = torch.from_numpy(target_chunk).bool().to(self.device)
+
+        # Flatten batch and pattern dimensions: (batch, patterns, time, neurons) -> (batch*patterns, time, neurons)
+        input_tensor = input_tensor.reshape(-1, self.chunk_size, self.n_input_neurons)
+        target_tensor = target_tensor.reshape(-1, self.chunk_size, self.n_neurons)
 
         return input_tensor, target_tensor
 
