@@ -318,7 +318,7 @@ def main(
             input_spikes=input_spikes,
             cell_type_indices=cell_type_indices,
             cell_type_names=params.recurrent.cell_types.names,
-            dt=params.simulation.dt,
+            dt=spike_dataset.dt,
             voltages=voltages,
             neuron_types=cell_type_indices,
             neuron_params=neuron_params,
