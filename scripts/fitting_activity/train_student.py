@@ -409,10 +409,10 @@ def main(
         for target_idx, target_type in enumerate(target_cell_types):
             for source_idx, source_type in enumerate(target_cell_types):
                 synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/recurrent/scaling_factor/{synapse_name}"] = (
-                    float(current_recurrent_sf[source_idx, target_idx])
+                stats[f"scaling_factors/recurrent/{synapse_name}/value"] = float(
+                    current_recurrent_sf[source_idx, target_idx]
                 )
-                stats[f"scaling_factors/recurrent/target/{synapse_name}"] = float(
+                stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
                     target_scaling_factors[source_idx, target_idx]
                 )
 
@@ -420,10 +420,10 @@ def main(
         for target_idx, target_type in enumerate(target_cell_types):
             for source_idx, source_type in enumerate(source_ff_cell_types):
                 synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/feedforward/scaling_factor/{synapse_name}"] = (
-                    float(current_feedforward_sf[source_idx, target_idx])
+                stats[f"scaling_factors/feedforward/{synapse_name}/value"] = float(
+                    current_feedforward_sf[source_idx, target_idx]
                 )
-                stats[f"scaling_factors/feedforward/target/{synapse_name}"] = float(
+                stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
                     target_feedforward_scaling_factors[source_idx, target_idx]
                 )
 
