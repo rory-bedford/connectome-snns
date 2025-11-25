@@ -469,16 +469,16 @@ def main(
             figures_dir = initial_state_dir / "figures"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert to numpy and take only first batch
+            # Convert to numpy and take only first batch (keep batch dimension)
             plot_data = {
-                "spikes": inf_spikes[0, ...].detach().cpu().numpy(),
-                "voltages": inf_voltages[0, ...].detach().cpu().numpy(),
-                "conductances": inf_conductances[0, ...].detach().cpu().numpy(),
-                "conductances_FF": inf_conductances_FF[0, ...].detach().cpu().numpy(),
-                "currents": inf_currents[0, ...].detach().cpu().numpy(),
-                "currents_FF": inf_currents_FF[0, ...].detach().cpu().numpy(),
-                "currents_leak": inf_currents_leak[0, ...].detach().cpu().numpy(),
-                "input_spikes": inference_input_spikes[0, ...].detach().cpu().numpy(),
+                "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
+                "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
+                "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
+                "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
+                "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
+                "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+                "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
+                "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
                 "weights": model.weights.detach().cpu().numpy(),
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
             }
@@ -685,16 +685,22 @@ def main(
         figures_dir = final_state_dir / "figures"
         figures_dir.mkdir(parents=True, exist_ok=True)
 
-        # Convert to numpy and take only first batch
+        # Convert to numpy and take only first batch (keep batch dimension)
         plot_data = {
-            "spikes": final_inf_spikes[0, ...].detach().cpu().numpy(),
-            "voltages": final_inf_voltages[0, ...].detach().cpu().numpy(),
-            "conductances": final_inf_conductances[0, ...].detach().cpu().numpy(),
-            "conductances_FF": final_inf_conductances_FF[0, ...].detach().cpu().numpy(),
-            "currents": final_inf_currents[0, ...].detach().cpu().numpy(),
-            "currents_FF": final_inf_currents_FF[0, ...].detach().cpu().numpy(),
-            "currents_leak": final_inf_currents_leak[0, ...].detach().cpu().numpy(),
-            "input_spikes": final_inference_input_spikes[0, ...].detach().cpu().numpy(),
+            "spikes": final_inf_spikes[0:1, ...].detach().cpu().numpy(),
+            "voltages": final_inf_voltages[0:1, ...].detach().cpu().numpy(),
+            "conductances": final_inf_conductances[0:1, ...].detach().cpu().numpy(),
+            "conductances_FF": final_inf_conductances_FF[0:1, ...]
+            .detach()
+            .cpu()
+            .numpy(),
+            "currents": final_inf_currents[0:1, ...].detach().cpu().numpy(),
+            "currents_FF": final_inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+            "currents_leak": final_inf_currents_leak[0:1, ...].detach().cpu().numpy(),
+            "input_spikes": final_inference_input_spikes[0:1, ...]
+            .detach()
+            .cpu()
+            .numpy(),
             "weights": model.weights.detach().cpu().numpy(),
             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
         }
