@@ -341,9 +341,17 @@ def main(
             "activity_dashboard": activity_fig,
         }
 
-    # Define stats computer function
-    def stats_computer(spikes):
-        """Compute summary statistics from network activity."""
+    # Define stats computer function (captures model and target scaling factors in closure)
+    def stats_computer(spikes, model):
+        """Compute summary statistics from network activity.
+
+        Args:
+            spikes: Spike array of shape (batch, time, neurons)
+            model: The network model (for accessing current scaling factors)
+
+        Returns:
+            Dictionary with keys: metric/stat/cell_type and scaling_factors/layer/metric/connection
+        """
         # Compute firing rates per neuron (Hz), averaged over batch
         spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
         spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
@@ -368,18 +376,18 @@ def main(
             cell_type_name = params.recurrent.cell_types.names[int(cell_type)]
 
             # Firing rate statistics
-            stats[f"firing_rate/{cell_type_name}/mean"] = float(
+            stats[f"firing_rate/mean/{cell_type_name}"] = float(
                 firing_rates[mask].mean()
             )
-            stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
+            stats[f"firing_rate/std/{cell_type_name}"] = float(firing_rates[mask].std())
 
             # CV statistics (only for neurons with valid CVs)
             cell_cvs = cv_per_neuron[mask]
             valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
-            stats[f"cv/{cell_type_name}/mean"] = (
+            stats[f"cv/mean/{cell_type_name}"] = (
                 float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
-            stats[f"cv/{cell_type_name}/std"] = (
+            stats[f"cv/std/{cell_type_name}"] = (
                 float(np.std(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
 
@@ -387,6 +395,37 @@ def main(
             stats[f"fraction_active/{cell_type_name}"] = float(
                 (firing_rates[mask] > 0).mean()
             )
+
+        # Add scaling factor tracking
+        # Scaling factors are 2D: (n_source_types, n_target_types)
+        current_recurrent_sf = model.scaling_factors.detach().cpu().numpy()
+        current_feedforward_sf = model.scaling_factors_FF.detach().cpu().numpy()
+
+        # Get cell type names
+        target_cell_types = params.recurrent.cell_types.names
+        source_ff_cell_types = params.feedforward.cell_types.names
+
+        # Log recurrent scaling factors: source -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(target_cell_types):
+                synapse_name = f"{source_type}_to_{target_type}"
+                stats[f"scaling_factors/recurrent/scaling_factor/{synapse_name}"] = (
+                    float(current_recurrent_sf[source_idx, target_idx])
+                )
+                stats[f"scaling_factors/recurrent/target/{synapse_name}"] = float(
+                    target_scaling_factors[source_idx, target_idx]
+                )
+
+        # Log feedforward scaling factors: source_ff -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(source_ff_cell_types):
+                synapse_name = f"{source_type}_to_{target_type}"
+                stats[f"scaling_factors/feedforward/scaling_factor/{synapse_name}"] = (
+                    float(current_feedforward_sf[source_idx, target_idx])
+                )
+                stats[f"scaling_factors/feedforward/target/{synapse_name}"] = float(
+                    target_feedforward_scaling_factors[source_idx, target_idx]
+                )
 
         return stats
 

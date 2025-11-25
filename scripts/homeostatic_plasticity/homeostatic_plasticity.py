@@ -357,8 +357,16 @@ def main(
         }
 
     # Define stats computer function
-    def stats_computer(spikes):
-        """Compute summary statistics from network activity."""
+    def stats_computer(spikes, model):
+        """Compute summary statistics from network activity.
+
+        Args:
+            spikes: Spike array of shape (batch, time, neurons)
+            model: The network model (unused in this script)
+
+        Returns:
+            Dictionary with keys: metric/cell_type/stat
+        """
         # Compute firing rates per neuron (Hz), averaged over batch
         spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
         spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)

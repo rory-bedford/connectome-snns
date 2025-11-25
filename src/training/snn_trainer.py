@@ -100,6 +100,9 @@ class SNNTrainer:
         # This ensures CV and other stats are computed on longer recordings
         self.spike_accumulator = deque(maxlen=self.training.log_interval)
 
+        # Gradient statistics accumulator for online averaging over log_interval
+        self.gradient_accumulator = deque(maxlen=self.training.log_interval)
+
         # Track training state
         self.current_epoch = 0
         self.best_loss = float("inf")
@@ -403,8 +406,8 @@ class SNNTrainer:
                 if self.model.weights_FF.grad is not None:
                     self.model.weights_FF.grad *= self.feedforward_mask
 
-        # Log gradient statistics to wandb
-        self._log_gradient_statistics()
+        # Accumulate gradient statistics for online averaging
+        self._accumulate_gradient_statistics()
 
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
@@ -428,7 +431,7 @@ class SNNTrainer:
         # Compute statistics if function provided
         stats = {}
         if self.stats_computer:
-            stats = self.stats_computer(spikes)
+            stats = self.stats_computer(spikes, self.model)
 
         # Prepare CSV data with _loss suffix for loss names
         csv_data = {}
@@ -466,10 +469,14 @@ class SNNTrainer:
             for loss_name, loss_value in losses.items():
                 wandb_losses[f"loss/{loss_name}"] = loss_value
 
+            # Compute averaged gradient statistics
+            avg_grad_stats = self._compute_average_gradients()
+
             wandb.log(
                 {
                     **wandb_losses,
                     **stats,
+                    **avg_grad_stats,
                 },
                 step=epoch + 1,
             )
@@ -659,13 +666,8 @@ class SNNTrainer:
             if key in chunk_outputs:
                 del chunk_outputs[key]
 
-    def _log_gradient_statistics(self) -> None:
-        """Log gradient statistics to wandb."""
-        if not self.wandb_logger:
-            return
-
-        import wandb
-
+    def _accumulate_gradient_statistics(self) -> None:
+        """Accumulate gradient statistics for online averaging."""
         grad_stats = {}
         for name, param in self.model.named_parameters():
             if param.grad is not None:
@@ -673,13 +675,33 @@ class SNNTrainer:
                 grad_max = param.grad.abs().max().item()
                 grad_mean = param.grad.abs().mean().item()
 
-                # Log with parameter name prefix
+                # Store with parameter name prefix
                 grad_stats[f"gradients/{name}/norm"] = grad_norm
                 grad_stats[f"gradients/{name}/max"] = grad_max
                 grad_stats[f"gradients/{name}/mean"] = grad_mean
 
         if grad_stats:
-            wandb.log(grad_stats, step=self.current_epoch + 1)
+            self.gradient_accumulator.append(grad_stats)
+
+    def _compute_average_gradients(self) -> Dict[str, float]:
+        """Compute online average of gradient statistics over the log_interval."""
+        if not self.gradient_accumulator:
+            return {}
+
+        # Get all gradient stat names from the history
+        all_grad_names = set()
+        for grad_dict in self.gradient_accumulator:
+            all_grad_names.update(grad_dict.keys())
+
+        # Compute average for each gradient statistic
+        avg_grads = {}
+        for grad_name in all_grad_names:
+            values = [
+                grad_dict.get(grad_name, 0.0) for grad_dict in self.gradient_accumulator
+            ]
+            avg_grads[grad_name] = sum(values) / len(values)
+
+        return avg_grads
 
     def _update_progress_bar(self, losses: Dict[str, float]) -> None:
         """Update progress bar with current losses."""
