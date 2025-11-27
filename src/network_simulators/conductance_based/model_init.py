@@ -513,9 +513,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
         )  # Shape (2, n_synapse_types + n_synapse_types_FF)
 
         # Normalize by peak using combined arrays
-        norm_peak = (self.tau_decay / self.tau_rise) ** (
-            self.tau_rise / (self.tau_decay - self.tau_rise)
-        )
+        r = self.tau_rise / self.tau_decay
+        norm_peak = (r ** (r / (1 - r))) - (r ** (1 / (1 - r)))
         g_scale = g_scale / norm_peak
         self.register_buffer("g_scale", g_scale)
 

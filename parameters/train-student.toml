@@ -45,7 +45,7 @@ names = [ "AMPA", "NMDA",]
 tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
 tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
 E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
-g_bar = [ 0.5, 0.1,]                   # nS - Maximum synaptic conductances
+g_bar = [ 0.4177, 0.0448,]             # nS - Maximum synaptic conductances
 
 # =======================================
 # RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
@@ -67,7 +67,7 @@ names = [ "AMPA", "NMDA",]
 tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
 tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
 E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
-g_bar = [ 0.5, 0.1,]                   # nS - Synaptic conductances (per spike)
+g_bar = [ 0.4177, 0.0448,]             # nS - Synaptic conductances (per spike)
 
 [recurrent.physiology.inhibitory]
 tau_mem = 50.0                         # ms - Membrane time constant
@@ -82,4 +82,4 @@ names = [ "GABA_A",]
 tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
 tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
 E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
-g_bar = [ 2.0,]                        # nS - Synaptic conductances (per spike)
+g_bar = [ 0.8139,]                     # nS - Synaptic conductances (per spike)
