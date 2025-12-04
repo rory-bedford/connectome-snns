@@ -413,6 +413,14 @@ class SNNTrainer:
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
+
+        # Clamp weights to be non-negative for connectome-constrained positivity
+        with torch.no_grad():
+            if hasattr(self.model, "weights"):
+                self.model.weights.clamp_(min=0.0)
+            if hasattr(self.model, "weights_FF"):
+                self.model.weights_FF.clamp_(min=0.0)
+
         self.optimizer.zero_grad(set_to_none=True)
 
         if self.device == "cuda":
