@@ -367,3 +367,56 @@ class SubthresholdVarianceLoss(nn.Module):
         loss = ((ratio - self.target_ratio) ** 2).mean()
 
         return loss
+
+
+class RecurrentFeedforwardBalanceLoss(nn.Module):
+    """
+    Loss to encourage recurrent weights to be larger than feedforward weights.
+
+    Computes the ratio of mean recurrent weights to mean feedforward weights
+    and penalizes deviations from a target ratio.
+
+    Args:
+        target_ratio (float): Target ratio of recurrent/feedforward mean weights.
+            For example, 2.0 means recurrent weights should be 2x larger on average.
+    """
+
+    required_inputs = ["recurrent_weights", "feedforward_weights"]
+    requires_target = False
+
+    def __init__(self, target_ratio: float):
+        """
+        Initialize the recurrent-feedforward balance loss.
+
+        Args:
+            target_ratio (float): Target ratio of mean(recurrent_weights) / mean(feedforward_weights).
+        """
+        super(RecurrentFeedforwardBalanceLoss, self).__init__()
+        self.target_ratio = target_ratio
+
+    def forward(
+        self,
+        recurrent_weights: torch.Tensor,
+        feedforward_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute recurrent-feedforward balance loss.
+
+        Args:
+            recurrent_weights (torch.Tensor): Recurrent weight matrix.
+            feedforward_weights (torch.Tensor): Feedforward weight matrix.
+
+        Returns:
+            torch.Tensor: Scalar loss value.
+        """
+        # Compute mean weights (only over non-zero connections)
+        rec_mean = recurrent_weights[recurrent_weights > 0].mean()
+        ff_mean = feedforward_weights[feedforward_weights > 0].mean()
+
+        # Compute actual ratio
+        actual_ratio = rec_mean / (ff_mean + 1e-8)
+
+        # Loss is squared difference from target ratio
+        loss = (actual_ratio - self.target_ratio) ** 2
+
+        return loss

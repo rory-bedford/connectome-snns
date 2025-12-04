@@ -348,6 +348,10 @@ class SNNTrainer:
                             inputs["voltages"] = chunk_outputs["voltages"]
                         elif req_input == "dt":
                             inputs["dt"] = self.simulation.dt
+                        elif req_input == "recurrent_weights":
+                            inputs["recurrent_weights"] = self.model.weights
+                        elif req_input == "feedforward_weights":
+                            inputs["feedforward_weights"] = self.model.weights_FF
                 else:
                     # For losses without metadata, assume they take output_spikes
                     inputs["output_spikes"] = spikes

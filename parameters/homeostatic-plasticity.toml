@@ -34,6 +34,7 @@ alpha.excitatory = 10.0                # S - Penalty parameter for nearly silent
 alpha.inhibitory = 2.0                 # S - Penalty parameter for nearly silent inhibitroy neurons
 threshold_ratio.excitatory = 0.25      # Target ratio of std vs threshold for excitatory neurons
 threshold_ratio.inhibitory = 0.45      # Target ratio of std vs threshold for inhibitory neurons
+weight_ratio = 2.0                     # Target ratio of recurrent mean weights over feedforward mean weights
 
 # ===============
 # HYPERPARAMETERS
@@ -46,6 +47,7 @@ loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical un
 loss_weight.cv = 0.5                   # Weight for CV loss (typical unweighted: ~0.01-0.1)
 loss_weight.silent_penalty = 1.0       # Weight for silent neuron penalty (typical unweighted: ~0.01-0.1)
 loss_weight.membrane_variance = 10.0   # Weight for membrane variance loss (typical unweighted: ~0.01-0.1)
+loss_weight.weight_ratio = 3.0         # Weight for the weight ratio loss (typical unweighted: ~0.1-1.0)
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY

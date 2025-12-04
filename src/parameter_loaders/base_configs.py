@@ -68,6 +68,7 @@ class LossWeights(BaseModel):
     cv: float
     silent_penalty: float
     membrane_variance: float
+    weight_ratio: float
 
 
 class Hyperparameters(BaseModel):
@@ -84,6 +85,7 @@ class Targets(BaseModel):
     firing_rate: Dict[str, float]
     alpha: Dict[str, float]
     threshold_ratio: Dict[str, float]
+    weight_ratio: float
 
 
 # =============================================================================

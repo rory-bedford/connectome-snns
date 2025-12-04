@@ -35,10 +35,12 @@ from optimisation.loss_functions import (
     CVLoss,
     SilentNeuronPenalty,
     SubthresholdVarianceLoss,
+    RecurrentFeedforwardBalanceLoss,
 )
 from optimisation.utils import load_checkpoint, AsyncLogger
 from parameter_loaders import HomeostaticPlasticityParams
 from training import SNNTrainer
+from analysis.firing_statistics import compute_spike_train_cv
 import toml
 import wandb
 from visualization.dashboards import (
@@ -245,6 +247,9 @@ def main(
     membrane_variance_loss_fn = SubthresholdVarianceLoss(
         v_threshold=v_threshold_tensor, target_ratio=threshold_ratio_tensor
     )
+    weight_ratio_loss_fn = RecurrentFeedforwardBalanceLoss(
+        target_ratio=targets.weight_ratio
+    )
 
     # Define loss weights from config
     loss_weights = {
@@ -252,6 +257,7 @@ def main(
         "cv": hyperparameters.loss_weight.cv,
         "silent_penalty": hyperparameters.loss_weight.silent_penalty,
         "membrane_variance": hyperparameters.loss_weight.membrane_variance,
+        "weight_ratio": hyperparameters.loss_weight.weight_ratio,
     }
 
     # =============
@@ -379,8 +385,6 @@ def main(
         firing_rates = spike_counts_avg / duration_s
 
         # Vectorized CV computation
-        from analysis.firing_statistics import compute_spike_train_cv
-
         cv_values = compute_spike_train_cv(
             spikes, dt=params.simulation.dt
         )  # Shape: (batch, neurons)
@@ -558,6 +562,7 @@ def main(
             "cv": cv_loss_fn,
             "silent_penalty": silent_penalty_fn,
             "membrane_variance": membrane_variance_loss_fn,
+            "weight_ratio": weight_ratio_loss_fn,
         },
         loss_weights=loss_weights,
         params=params,
