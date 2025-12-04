@@ -307,6 +307,39 @@ class BaseRecurrentLayerConfig(BaseModel):
             for cell_type, synapse_config in self.synapses.items()
         }
 
+    def get_tau_rise_by_type(self) -> Dict[str, float]:
+        """Get rise time constant for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to tau_rise values.
+        """
+        return {
+            cell_type: float(synapse_config.tau_rise[0])
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_tau_decay_by_type(self) -> Dict[str, float]:
+        """Get decay time constant for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to tau_decay values.
+        """
+        return {
+            cell_type: float(synapse_config.tau_decay[0])
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_E_syn_by_type(self) -> Dict[str, float]:
+        """Get reversal potential for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to E_syn values.
+        """
+        return {
+            cell_type: float(synapse_config.E_syn[0])
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
     def get_neuron_params_for_plotting(self) -> Dict[int, Dict[str, float | str]]:
         """Get neuron parameters formatted for visualization functions.
 
@@ -421,6 +454,39 @@ class BaseFeedforwardLayerConfig(BaseModel):
         """
         return {
             cell_type: float(sum(synapse_config.g_bar))
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_tau_rise_by_type(self) -> Dict[str, float]:
+        """Get rise time constant for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to tau_rise values.
+        """
+        return {
+            cell_type: float(synapse_config.tau_rise[0])
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_tau_decay_by_type(self) -> Dict[str, float]:
+        """Get decay time constant for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to tau_decay values.
+        """
+        return {
+            cell_type: float(synapse_config.tau_decay[0])
+            for cell_type, synapse_config in self.synapses.items()
+        }
+
+    def get_E_syn_by_type(self) -> Dict[str, float]:
+        """Get reversal potential for each cell type (first synapse).
+
+        Returns:
+            Dict mapping cell type names to E_syn values.
+        """
+        return {
+            cell_type: float(synapse_config.E_syn[0])
             for cell_type, synapse_config in self.synapses.items()
         }
 

@@ -223,10 +223,9 @@ def main(input_dir, output_dir, params_file):
         for chunk_idx in range(simulation.num_chunks):
             print(f"Processing chunk {chunk_idx + 1}/{simulation.num_chunks}...")
 
-            # Get one chunk of input spikes from dataset
-            input_spikes_chunk = spike_dataset[chunk_idx].unsqueeze(
-                0
-            )  # Add batch dimension
+            # Get one chunk of input spikes from dataset (returns tuple)
+            input_spikes_chunk, _ = spike_dataset[chunk_idx]
+            input_spikes_chunk = input_spikes_chunk.unsqueeze(0)  # Add batch dimension
 
             # Run one chunk of simulation
             (
@@ -319,6 +318,16 @@ def main(input_dir, output_dir, params_file):
 
     print("Generating dashboards...")
 
+    # Calculate mean membrane potential by cell type from voltage traces
+    recurrent_V_mem_by_type = {}
+    for i, cell_type_name in enumerate(params.recurrent.cell_types.names):
+        cell_mask = cell_type_indices == i
+        if cell_mask.sum() > 0:
+            # Average over batch, time, and neurons of this type
+            recurrent_V_mem_by_type[cell_type_name] = float(
+                output_voltages[:, :, cell_mask].mean()
+            )
+
     # Generate connectivity dashboard
     connectivity_fig = create_connectivity_dashboard(
         weights=weights,
@@ -328,8 +337,6 @@ def main(input_dir, output_dir, params_file):
         cell_type_names=params.recurrent.cell_types.names,
         input_cell_type_names=params.feedforward.cell_types.names,
         num_assemblies=params.recurrent.topology.num_assemblies,
-        recurrent_g_bar_by_type=params.recurrent.get_g_bar_by_type(),
-        feedforward_g_bar_by_type=params.feedforward.get_g_bar_by_type(),
     )
 
     # Compute total excitatory and inhibitory currents from recurrent and feedforward

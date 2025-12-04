@@ -296,10 +296,6 @@ def main(
     recurrent_synapse_names = params.recurrent.get_synapse_names()
     feedforward_synapse_names = params.feedforward.get_synapse_names()
 
-    # Compute g_bar values for synaptic input histogram
-    recurrent_g_bar_by_type = params.recurrent.get_g_bar_by_type()
-    feedforward_g_bar_by_type = params.feedforward.get_g_bar_by_type()
-
     # Define plot generator function that creates both dashboards
     def plot_generator(
         spikes,
@@ -314,6 +310,16 @@ def main(
         feedforward_weights,
     ):
         """Generate connectivity and activity dashboards."""
+        # Calculate mean membrane potential by cell type from voltage traces
+        recurrent_V_mem_by_type = {}
+        for i, cell_type_name in enumerate(params.recurrent.cell_types.names):
+            cell_mask = cell_type_indices == i
+            if cell_mask.sum() > 0:
+                # Average over batch, time, and neurons of this type
+                recurrent_V_mem_by_type[cell_type_name] = float(
+                    voltages[:, :, cell_mask].mean()
+                )
+
         # Generate connectivity dashboard
         connectivity_fig = create_connectivity_dashboard(
             weights=weights,
@@ -323,8 +329,6 @@ def main(
             cell_type_names=params.recurrent.cell_types.names,
             input_cell_type_names=params.feedforward.cell_types.names,
             num_assemblies=params.recurrent.topology.num_assemblies,
-            recurrent_g_bar_by_type=recurrent_g_bar_by_type,
-            feedforward_g_bar_by_type=feedforward_g_bar_by_type,
         )
 
         # Generate activity dashboard

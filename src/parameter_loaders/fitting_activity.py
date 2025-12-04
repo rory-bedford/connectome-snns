@@ -18,9 +18,14 @@ from .base_configs import (
 
 
 class SimulationConfigWithOdours(SimulationConfig):
-    """Simulation config extended with odour stimulus parameters."""
+    """Simulation config extended with odour stimulus parameters and batch size.
+
+    Used for teacher activity generation where we need multiple trial repeats
+    of each odour pattern.
+    """
 
     num_odours: int
+    batch_size: int
 
 
 class StudentSimulationConfig(BaseModel):

@@ -9,17 +9,20 @@ import numpy as np
 import torch
 import toml
 import zarr
+import matplotlib.pyplot as plt
 from inputs.dataloaders import (
     PoissonSpikeDataset,
     collate_pattern_batches,
     generate_odour_firing_rates,
+    generate_baseline_firing_rates,
 )
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from torch.utils.data import DataLoader
 from parameter_loaders import TeacherActivityParams
 from tqdm import tqdm
-from scripts.fitting_activity.generate_teacher_activity_control import (
-    main as main_control,
+from visualization.dashboards import (
+    create_connectivity_dashboard,
+    create_activity_dashboard,
 )
 
 
@@ -80,7 +83,7 @@ def main(input_dir, output_dir, params_file):
     # =========================
 
     # Generate odour-modulated firing rate patterns
-    input_firing_rates = generate_odour_firing_rates(
+    input_firing_rates_odour = generate_odour_firing_rates(
         n_input_neurons=feedforward_weights.shape[0],
         input_source_indices=input_source_indices,
         cell_type_names=feedforward.cell_types.names,
@@ -88,7 +91,26 @@ def main(input_dir, output_dir, params_file):
         n_patterns=simulation.num_odours,
     )
 
-    n_patterns = simulation.num_odours
+    # Generate baseline (control) firing rate pattern
+    input_firing_rates_baseline = generate_baseline_firing_rates(
+        n_input_neurons=feedforward_weights.shape[0],
+        input_source_indices=input_source_indices,
+        cell_type_names=feedforward.cell_types.names,
+        odour_configs=params.odours,
+    )
+
+    # Concatenate odour patterns with baseline pattern
+    # This appends the control as the last pattern
+    input_firing_rates = np.concatenate(
+        [input_firing_rates_odour, input_firing_rates_baseline], axis=0
+    )
+
+    print(
+        f"✓ Generated {simulation.num_odours} odour patterns + 1 baseline (control) pattern"
+    )
+    print(f"  Total patterns: {input_firing_rates.shape[0]}")
+
+    n_patterns = simulation.num_odours + 1  # Include control pattern
     batch_size = simulation.batch_size
 
     # Create Poisson dataset for multiple patterns
@@ -196,6 +218,7 @@ def main(input_dir, output_dir, params_file):
     print("=" * len("STARTING CHUNKED NETWORK SIMULATION"))
 
     print(f"Running simulation with {n_patterns} patterns × {batch_size} repeats")
+    print(f"  ({simulation.num_odours} odour patterns + 1 baseline control)")
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
@@ -206,6 +229,20 @@ def main(input_dir, output_dir, params_file):
     initial_v = None
     initial_g = None
     initial_g_FF = None
+
+    # Variables to store traces from last ~10 seconds for visualization
+    viz_duration_s = 10.0  # Save last 10 seconds
+    viz_chunks = int(np.ceil(viz_duration_s / simulation.chunk_duration_s))
+    viz_start_chunk = max(0, simulation.num_chunks - viz_chunks)
+
+    viz_voltages = []
+    viz_currents = []
+    viz_currents_FF = []
+    viz_currents_leak = []
+    viz_conductances = []
+    viz_conductances_FF = []
+    viz_output_spikes = []
+    viz_input_spikes = []
 
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
@@ -243,6 +280,46 @@ def main(input_dir, output_dir, params_file):
                 batch_size, n_patterns, n_steps_out, n_neurons
             )
 
+            # Store traces from last few chunks for visualization (control pattern, first batch only)
+            if chunk_idx >= viz_start_chunk:
+                # Extract first batch, last pattern (control) for visualization
+                viz_voltages.append(
+                    output_voltages_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :
+                    ].clone()
+                )
+                viz_currents.append(
+                    output_currents_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :, :
+                    ].clone()
+                )
+                viz_currents_FF.append(
+                    output_currents_FF_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :, :
+                    ].clone()
+                )
+                viz_currents_leak.append(
+                    output_currents_leak_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :
+                    ].clone()
+                )
+                viz_conductances.append(
+                    output_conductances_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :, :
+                    ].clone()
+                )
+                viz_conductances_FF.append(
+                    output_conductances_FF_chunk_flat[
+                        n_patterns - 1 : n_patterns, :, :, :
+                    ].clone()
+                )
+                viz_output_spikes.append(
+                    output_spikes_chunk_flat[n_patterns - 1 : n_patterns, :, :].clone()
+                )
+                viz_input_spikes.append(
+                    input_spikes_flat[n_patterns - 1 : n_patterns, :, :].clone()
+                )
+
             # Store final states for next chunk: (batch_size*n_patterns, neurons) or (batch_size*n_patterns, neurons, syn_types)
             initial_v = output_voltages_chunk_flat[:, -1, :].clone()
             initial_g = output_conductances_chunk_flat[:, -1, :, :].clone()
@@ -276,21 +353,73 @@ def main(input_dir, output_dir, params_file):
     # =====================================
     # Save Output Data for Further Analysis
     # =====================================
-    print("Saving input firing rates...")
+    print("Saving separated odour and control data...")
 
-    # Spike data already saved incrementally to Zarr during simulation
-    # Save input_firing_rates separately as a Zarr array
+    # Create separate arrays for odour patterns and control pattern
+    # Odour patterns: indices 0 to num_odours-1
+    # Control pattern: index num_odours (last pattern)
+
     root.create_dataset(
-        "input_firing_rates",
-        shape=input_firing_rates.shape,
-        dtype=input_firing_rates.dtype,
-        data=input_firing_rates,
+        "output_spikes_odour",
+        shape=(batch_size, simulation.num_odours, total_steps, n_neurons),
+        chunks=(batch_size, simulation.num_odours, simulation.chunk_size, n_neurons),
+        dtype=np.bool_,
+        data=output_spikes_zarr[:, :-1, :, :],  # All except last pattern
+    )
+
+    root.create_dataset(
+        "output_spikes_control",
+        shape=(batch_size, 1, total_steps, n_neurons),
+        chunks=(batch_size, 1, simulation.chunk_size, n_neurons),
+        dtype=np.bool_,
+        data=output_spikes_zarr[:, -1:, :, :],  # Last pattern only
+    )
+
+    root.create_dataset(
+        "input_spikes_odour",
+        shape=(batch_size, simulation.num_odours, total_steps, n_input_neurons),
+        chunks=(
+            batch_size,
+            simulation.num_odours,
+            simulation.chunk_size,
+            n_input_neurons,
+        ),
+        dtype=np.bool_,
+        data=input_spikes_zarr[:, :-1, :, :],  # All except last pattern
+    )
+
+    root.create_dataset(
+        "input_spikes_control",
+        shape=(batch_size, 1, total_steps, n_input_neurons),
+        chunks=(batch_size, 1, simulation.chunk_size, n_input_neurons),
+        dtype=np.bool_,
+        data=input_spikes_zarr[:, -1:, :, :],  # Last pattern only
+    )
+
+    # Save input firing rates (separated)
+    root.create_dataset(
+        "input_firing_rates_odour",
+        shape=input_firing_rates_odour.shape,
+        dtype=input_firing_rates_odour.dtype,
+        data=input_firing_rates_odour,
+    )
+
+    root.create_dataset(
+        "input_firing_rates_control",
+        shape=input_firing_rates_baseline.shape,
+        dtype=input_firing_rates_baseline.dtype,
+        data=input_firing_rates_baseline,
     )
 
     print(f"✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
-    print(f"  - output_spikes: {output_spikes_zarr.shape}")
-    print(f"  - input_spikes: {input_spikes_zarr.shape}")
-    print(f"  - input_firing_rates: {input_firing_rates.shape}")
+    print(f"  - output_spikes (combined): {output_spikes_zarr.shape}")
+    print(f"  - output_spikes_odour: {root['output_spikes_odour'].shape}")
+    print(f"  - output_spikes_control: {root['output_spikes_control'].shape}")
+    print(f"  - input_spikes (combined): {input_spikes_zarr.shape}")
+    print(f"  - input_spikes_odour: {root['input_spikes_odour'].shape}")
+    print(f"  - input_spikes_control: {root['input_spikes_control'].shape}")
+    print(f"  - input_firing_rates_odour: {input_firing_rates_odour.shape}")
+    print(f"  - input_firing_rates_control: {input_firing_rates_baseline.shape}")
 
     # Free GPU memory
     if device == "cuda":
@@ -311,13 +440,108 @@ def main(input_dir, output_dir, params_file):
     )
     print("=" * len("SIMULATION COMPLETE!"))
 
-    # ==========================================
-    # Run Control Experiment (Unmodulated Input)
-    # ==========================================
+    # =====================================
+    # Generate Dashboards for Visualization
+    # =====================================
 
-    print("\n" + "=" * len("STARTING CONTROL EXPERIMENT"))
-    print("STARTING CONTROL EXPERIMENT")
-    print("=" * len("STARTING CONTROL EXPERIMENT"))
-    print("Running same simulation with unmodulated baseline inputs...")
+    print("\n" + "=" * len("GENERATING DASHBOARDS"))
+    print("GENERATING DASHBOARDS")
+    print("=" * len("GENERATING DASHBOARDS"))
 
-    main_control(input_dir, output_dir, params_file)
+    # Concatenate visualization traces
+    print("Preparing data for dashboards...")
+    viz_voltages = torch.cat(viz_voltages, dim=1)
+    viz_currents = torch.cat(viz_currents, dim=1)
+    viz_currents_FF = torch.cat(viz_currents_FF, dim=1)
+    viz_currents_leak = torch.cat(viz_currents_leak, dim=1)
+    viz_conductances = torch.cat(viz_conductances, dim=1)
+    viz_conductances_FF = torch.cat(viz_conductances_FF, dim=1)
+    viz_output_spikes = torch.cat(viz_output_spikes, dim=1)
+    viz_input_spikes = torch.cat(viz_input_spikes, dim=1)
+
+    # Move to CPU and convert to numpy
+    if device == "cuda":
+        viz_voltages = viz_voltages.cpu()
+        viz_currents = viz_currents.cpu()
+        viz_currents_FF = viz_currents_FF.cpu()
+        viz_currents_leak = viz_currents_leak.cpu()
+        viz_conductances = viz_conductances.cpu()
+        viz_conductances_FF = viz_conductances_FF.cpu()
+        viz_output_spikes = viz_output_spikes.cpu()
+        viz_input_spikes = viz_input_spikes.cpu()
+
+    viz_voltages = viz_voltages.numpy().astype(np.float32)
+    viz_currents = viz_currents.numpy().astype(np.float32)
+    viz_currents_FF = viz_currents_FF.numpy().astype(np.float32)
+    viz_currents_leak = viz_currents_leak.numpy().astype(np.float32)
+    viz_conductances = viz_conductances.numpy().astype(np.float32)
+    viz_conductances_FF = viz_conductances_FF.numpy().astype(np.float32)
+    viz_output_spikes = viz_output_spikes.numpy().astype(np.int32)
+    viz_input_spikes = viz_input_spikes.numpy().astype(np.int32)
+
+    print(
+        f"✓ Prepared {viz_voltages.shape[1]} time steps for visualization (last ~{viz_duration_s:.1f}s)"
+    )
+
+    # Calculate mean membrane potential by cell type from voltage traces
+    recurrent_V_mem_by_type = {}
+    for i, cell_type_name in enumerate(recurrent.cell_types.names):
+        cell_mask = cell_type_indices == i
+        if cell_mask.sum() > 0:
+            # Average over batch, time, and neurons of this type
+            recurrent_V_mem_by_type[cell_type_name] = float(
+                viz_voltages[:, :, cell_mask].mean()
+            )
+
+    # Generate connectivity dashboard
+    print("Generating connectivity dashboard...")
+    connectivity_fig = create_connectivity_dashboard(
+        weights=weights,
+        feedforward_weights=feedforward_weights,
+        cell_type_indices=cell_type_indices,
+        input_cell_type_indices=input_source_indices,
+        cell_type_names=recurrent.cell_types.names,
+        input_cell_type_names=feedforward.cell_types.names,
+    )
+
+    # Generate activity dashboard
+    print("Generating activity dashboard...")
+    activity_fig = create_activity_dashboard(
+        output_spikes=viz_output_spikes,
+        input_spikes=viz_input_spikes,
+        cell_type_indices=cell_type_indices,
+        cell_type_names=recurrent.cell_types.names,
+        dt=simulation.dt,
+        voltages=viz_voltages,
+        neuron_types=cell_type_indices,
+        neuron_params=recurrent.get_neuron_params_for_plotting(),
+        recurrent_currents=viz_currents,
+        feedforward_currents=viz_currents_FF,
+        leak_currents=viz_currents_leak,
+        recurrent_conductances=viz_conductances,
+        feedforward_conductances=viz_conductances_FF,
+        input_cell_type_names=feedforward.cell_types.names,
+        recurrent_synapse_names=recurrent.get_synapse_names(),
+        feedforward_synapse_names=feedforward.get_synapse_names(),
+        window_size=50.0,
+        n_neurons_plot=20,
+        fraction=1.0,
+        random_seed=42,
+    )
+
+    # Save dashboards
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    connectivity_fig.savefig(
+        figures_dir / "connectivity_dashboard.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(connectivity_fig)
+
+    activity_fig.savefig(
+        figures_dir / "activity_dashboard.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(activity_fig)
+
+    print(f"✓ Saved dashboard plots to {figures_dir}")
+    print("=" * len("GENERATING DASHBOARDS"))

@@ -14,8 +14,9 @@ from src.parameter_loaders import (
 )
 from visualization.connectivity import (
     plot_weighted_connectivity,
-    plot_input_count_histogram,
-    plot_synaptic_input_histogram,
+    plot_input_count_pie_chart,
+    plot_weight_distribution_by_input_type,
+    plot_weight_statistics_matrix,
     plot_feedforward_connectivity,
 )
 from visualization.firing_statistics import (
@@ -43,14 +44,12 @@ def create_connectivity_dashboard(
     input_cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     input_cell_type_names: list[str],
-    recurrent_g_bar_by_type: dict[str, float] = None,
-    feedforward_g_bar_by_type: dict[str, float] = None,
     num_assemblies: int | None = None,
     heatmap_inches: float = 6.0,
     plot_fraction_feedforward: float = 0.1,
     plot_fraction_recurrent: float = 0.1,
 ) -> plt.Figure:
-    """Create a comprehensive connectivity dashboard with all connectivity plots.
+    """Create a connectivity dashboard showing connectomes and weight distributions.
 
     Args:
         weights (NDArray[np.float32]): Weight matrix (N x N).
@@ -59,8 +58,6 @@ def create_connectivity_dashboard(
         input_cell_type_indices (NDArray[np.int32]): Array of cell type indices for input neurons.
         cell_type_names (list[str]): Names of recurrent cell types.
         input_cell_type_names (list[str]): Names of input cell types.
-        recurrent_g_bar_by_type (dict[str, float]): Total g_bar for each recurrent cell type.
-        feedforward_g_bar_by_type (dict[str, float]): Total g_bar for each feedforward cell type.
         num_assemblies (int | None): Number of assemblies in the network. If provided, uses this
             to determine plotting size instead of plot_fraction_recurrent. Defaults to None.
         heatmap_inches (float): Size of heatmaps in inches. Defaults to 6.0.
@@ -68,29 +65,28 @@ def create_connectivity_dashboard(
         plot_fraction_recurrent (float): Fraction of neurons to show in recurrent connectivity (only used if num_assemblies is None). Defaults to 0.1.
 
     Returns:
-        plt.Figure: Single comprehensive dashboard figure with all connectivity plots arranged.
+        plt.Figure: Single comprehensive dashboard figure with connectivity plots arranged.
     """
     # Create main dashboard figure
     fig = plt.figure(figsize=(24, 16))
 
     # Create layout:
     # - Left column (2 rows): connectivity heatmaps (feedforward above weighted)
-    # - Right column (2 rows): input count histograms (3x2 grid)
-    # - Bottom row (full width): conductance histograms (1x3 grid)
+    # - Right column (2 rows of 2 boxes): pie chart top left, violin plot top right, bottom two empty
     gs_main = fig.add_gridspec(
-        3,
+        2,
         2,
         hspace=0.35,
-        wspace=0.25,
-        height_ratios=[1, 2.4, 1],
-        width_ratios=[1, 1.5],
+        wspace=0.15,
+        height_ratios=[1, 2.4],
+        width_ratios=[1, 1],
         left=0.05,
         right=0.98,
         top=0.94,
         bottom=0.05,
     )
 
-    # Top left: Feedforward connectivity (without legend in dashboard)
+    # Top left: Feedforward connectivity
     ax1 = fig.add_subplot(gs_main[0, 0])
 
     # Middle left: Weighted connectivity (1.5x the size of feedforward)
@@ -102,13 +98,10 @@ def create_connectivity_dashboard(
         input_cell_type_indices=input_cell_type_indices,
         plot_fraction=plot_fraction_feedforward,
         ax=ax1,
-        show_legend=False,
+        show_legend=True,
         section_title="Weighted Connectomes",
         section_title_axes=[ax1, ax2],
     )
-    # Add 20% padding on the right side of feedforward plot
-    pos = ax1.get_position()
-    ax1.set_position([pos.x0, pos.y0, pos.width * 0.8, pos.height])
 
     plot_weighted_connectivity(
         weights=weights,
@@ -119,39 +112,51 @@ def create_connectivity_dashboard(
         ax=ax2,
     )
 
-    # Right side: Input count histograms
-    # This creates a grid of (n_input_sources x n_output_types)
-    # With 2 recurrent + 1 feedforward = 3 input sources and 2 output types = 3x2 grid
-    gs_histograms = gs_main[0:2, 1].subgridspec(3, 2, hspace=0.35, wspace=0.25)
-    # Create axes in row-major order (what the function expects)
-    histogram_axes = [
-        fig.add_subplot(gs_histograms[i, j]) for i in range(3) for j in range(2)
-    ]
-
-    plot_input_count_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_cell_type_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
-        ax=histogram_axes,
+    # Right side: 2x2 grid (pie chart top left, violin plot top right, bottom two empty)
+    gs_right = gs_main[0:2, 1].subgridspec(
+        2, 2, hspace=0.3, wspace=0.15, height_ratios=[1, 1]
     )
 
-    # Bottom row: Create 1x3 subplot grid for synaptic conductance histograms
-    gs_conductance = gs_main[2, :].subgridspec(1, 3, wspace=0.25)
-    conductance_axes = [fig.add_subplot(gs_conductance[0, j]) for j in range(3)]
+    # Top left: Pie chart (shift left by adjusting position)
+    ax_pie = fig.add_subplot(gs_right[0, 0])
+    # Shift the pie chart left by 20 pixels (~0.08 figure coordinates at width=24)
+    pos = ax_pie.get_position()
+    ax_pie.set_position([pos.x0 - 0.02, pos.y0, pos.width, pos.height])
+    plot_input_count_pie_chart(
+        weights,
+        feedforward_weights,
+        cell_type_indices,
+        input_cell_type_indices,
+        cell_type_names,
+        input_cell_type_names,
+        ax_pie,
+    )
 
-    plot_synaptic_input_histogram(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        input_cell_type_indices=input_cell_type_indices,
-        cell_type_names=cell_type_names,
-        input_cell_type_names=input_cell_type_names,
-        recurrent_g_bar_by_type=recurrent_g_bar_by_type,
-        feedforward_g_bar_by_type=feedforward_g_bar_by_type,
-        ax=conductance_axes,
+    # Top right: Violin plot
+    ax_violin = fig.add_subplot(gs_right[0, 1])
+    plot_weight_distribution_by_input_type(
+        weights,
+        feedforward_weights,
+        cell_type_indices,
+        input_cell_type_indices,
+        cell_type_names,
+        input_cell_type_names,
+        ax_violin,
+    )
+
+    # Bottom left: Mean weight matrix
+    ax_mean = fig.add_subplot(gs_right[1, 0])
+    # Bottom right: Std weight matrix
+    ax_std = fig.add_subplot(gs_right[1, 1])
+    plot_weight_statistics_matrix(
+        weights,
+        feedforward_weights,
+        cell_type_indices,
+        input_cell_type_indices,
+        cell_type_names,
+        input_cell_type_names,
+        ax_mean,
+        ax_std,
     )
 
     return fig
