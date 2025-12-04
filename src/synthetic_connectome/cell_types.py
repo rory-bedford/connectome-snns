@@ -25,6 +25,7 @@ IntArray = NDArray[np.int_]
 def assign_cell_types(
     num_neurons: int,
     cell_type_proportions: List[float],
+    num_assemblies: int | None = None,
 ) -> IntArray:
     """
     Randomly assign neurons to cell types based on given proportions.
@@ -32,6 +33,7 @@ def assign_cell_types(
     Args:
         num_neurons (int): Total number of neurons to assign.
         cell_type_proportions (List[float]): List of proportions for each cell type. Must sum to 1.0.
+        num_assemblies (int | None): If provided, balance cell types evenly across assemblies.
 
     Returns:
         IntArray: Array of shape (num_neurons,) with cell type indices.
@@ -66,7 +68,37 @@ def assign_cell_types(
         cell_type_indices[start_idx : start_idx + count] = cell_type_idx
         start_idx += count
 
-    # Shuffle to randomize assignment
-    np.random.shuffle(cell_type_indices)
+    # If num_assemblies specified, balance cell types across assemblies
+    if num_assemblies is not None:
+        assembly_size = num_neurons // num_assemblies
+        n_neurons_used = assembly_size * num_assemblies
 
-    return cell_type_indices
+        # Get unique cell types and their counts (only use neurons that fit into assemblies)
+        unique_types, counts = np.unique(
+            cell_type_indices[:n_neurons_used], return_counts=True
+        )
+
+        # Create new balanced array
+        balanced = np.zeros(n_neurons_used, dtype=int)
+
+        # For each assembly, distribute cell types evenly
+        for assembly_id in range(num_assemblies):
+            start_idx_asm = assembly_id * assembly_size
+            end_idx_asm = (assembly_id + 1) * assembly_size
+
+            # Calculate how many of each type should go in this assembly
+            neurons_per_type = counts // num_assemblies
+
+            pos = start_idx_asm
+            for cell_type, count_per_assembly in zip(unique_types, neurons_per_type):
+                balanced[pos : pos + count_per_assembly] = cell_type
+                pos += count_per_assembly
+
+            # Shuffle within each assembly to randomize positions
+            np.random.shuffle(balanced[start_idx_asm:end_idx_asm])
+
+        return balanced
+    else:
+        # Shuffle to randomize assignment
+        np.random.shuffle(cell_type_indices)
+        return cell_type_indices

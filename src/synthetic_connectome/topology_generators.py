@@ -109,37 +109,80 @@ def sparse_graph_generator(
                 if n_src == 0 or n_tgt == 0:
                     continue
 
-                # Each source neuron gets conn_prob * n_tgt connections
-                # Each target neuron gets conn_prob * n_src connections
-                expected_out_per_source = conn_prob * n_tgt
-                expected_in_per_target = conn_prob * n_src
+                # Calculate total number of edges to create
+                total_edges = int(np.round(conn_prob * n_src * n_tgt))
 
-                out_degrees = np.round(np.full(n_src, expected_out_per_source)).astype(
-                    int
-                )
-                in_degrees = np.round(np.full(n_tgt, expected_in_per_target)).astype(
-                    int
-                )
+                # We will create more stubs than needed then randomly remove to get exact total_edges count
+                expected_src = int(np.ceil(total_edges / n_src))
+                expected_tgt = int(np.ceil(total_edges / n_tgt))
 
-                # Create stub lists for this cell type pair
-                out_stubs = np.repeat(src_indices, out_degrees)
-                in_stubs = np.repeat(tgt_indices, in_degrees)
+                # Shuffle indices once, then tile
+                shuffled_src = src_indices.copy()
+                np.random.shuffle(shuffled_src)
+                shuffled_tgt = tgt_indices.copy()
+                np.random.shuffle(shuffled_tgt)
 
-                # Shuffle stubs
+                # Create stub lists by tiling the shuffled indices
+                out_stubs = np.tile(shuffled_src, expected_src)[:total_edges]
+                in_stubs = np.tile(shuffled_tgt, expected_tgt)[:total_edges]
+
+                # Final shuffle
                 np.random.shuffle(out_stubs)
                 np.random.shuffle(in_stubs)
 
-                # Due to rounding, the number of stubs may not match
-                n_stubs = min(len(out_stubs), len(in_stubs))
-                out_stubs = out_stubs[:n_stubs]
-                in_stubs = in_stubs[:n_stubs]
+                # Clean up repeated edges and self-loops
+                while True:
+                    # Find repeated edges and self-loops
+                    # Create edge pairs
+                    edges = np.column_stack([out_stubs, in_stubs])
 
-                # Match stubs - lengths are equal after balancing
+                    # Find self-loops (where source == target) only if not allowed
+                    if not allow_self_loops:
+                        self_loop_indices = np.where(out_stubs == in_stubs)[0]
+                    else:
+                        self_loop_indices = np.array([], dtype=int)
+
+                    # Find repeated edges (excluding first occurrence)
+                    # Use edges directly without sorting to detect exact duplicates (i,j) == (i,j)
+                    _, first_occurrence_indices, inverse_indices, counts = np.unique(
+                        edges,
+                        axis=0,
+                        return_index=True,
+                        return_inverse=True,
+                        return_counts=True,
+                    )
+
+                    # Vectorized: Find indices where edges are repeated (count > 1) AND it's not the first occurrence
+                    # Create mask for first occurrences
+                    is_first_occurrence = np.zeros(len(edges), dtype=bool)
+                    is_first_occurrence[first_occurrence_indices] = True
+
+                    # Find repeated edges that are not first occurrences
+                    is_repeated = counts[inverse_indices] > 1
+                    repeated_edge_indices = np.where(
+                        is_repeated & ~is_first_occurrence
+                    )[0]
+
+                    if len(self_loop_indices) == 0 and len(repeated_edge_indices) == 0:
+                        break  # No self-loops or repeated edges, we're done
+
+                    # Combine all problematic indices
+                    problematic_indices = np.concatenate(
+                        [self_loop_indices, repeated_edge_indices]
+                    )
+
+                    # For each problematic index, swap its in_stub with a random position
+                    for idx in problematic_indices:
+                        # Choose a random position to swap with
+                        swap_idx = np.random.randint(0, len(in_stubs))
+                        # Swap
+                        in_stubs[idx], in_stubs[swap_idx] = (
+                            in_stubs[swap_idx],
+                            in_stubs[idx],
+                        )
+
+                # Match stubs
                 adjacency[out_stubs, in_stubs] = True
-
-    # Mask out self-loops if not allowed
-    if not allow_self_loops and n_source == n_target:
-        np.fill_diagonal(adjacency, False)
 
     return adjacency
 
@@ -333,5 +376,56 @@ def assembly_generator(
     # Mask out self-loops if not allowed
     if not allow_self_loops and n_source_used == n_target_used:
         np.fill_diagonal(adjacency, False)
+
+    # Print connection statistics for entire network by cell type
+    print("\n" + "=" * 80)
+    print("NETWORK CONNECTIVITY STATISTICS (Entire Matrix)")
+    print("=" * 80)
+
+    source_types_used = source_cell_types[:n_source_used]
+    target_types_used = target_cell_types[:n_target_used]
+
+    # Get unique cell types
+    unique_source_types = np.unique(source_types_used)
+    unique_target_types = np.unique(target_types_used)
+
+    # Print statistics for each source-target cell type pair across entire network
+    for src_type in unique_source_types:
+        for tgt_type in unique_target_types:
+            src_mask = source_types_used == src_type
+            tgt_mask = target_types_used == tgt_type
+
+            # Get submatrix for this cell type pair
+            src_indices = np.where(src_mask)[0]
+            tgt_indices = np.where(tgt_mask)[0]
+
+            if len(src_indices) == 0 or len(tgt_indices) == 0:
+                continue
+
+            submatrix = adjacency[np.ix_(src_indices, tgt_indices)]
+
+            # Incoming connections: for each target, count connections from all sources of src_type
+            in_connections_per_target = submatrix.sum(axis=0)
+            min_in = in_connections_per_target.min()
+            mean_in = in_connections_per_target.mean()
+            std_in = in_connections_per_target.std()
+            max_in = in_connections_per_target.max()
+
+            # Outgoing connections: for each source, count connections to all targets of tgt_type
+            out_connections_per_source = submatrix.sum(axis=1)
+            min_out = out_connections_per_source.min()
+            mean_out = out_connections_per_source.mean()
+            std_out = out_connections_per_source.std()
+            max_out = out_connections_per_source.max()
+
+            print(f"  Source Type {src_type} → Target Type {tgt_type}:")
+            print(
+                f"    In  (to targets):   min={min_in:4d}, mean={mean_in:6.1f}, std={std_in:6.1f}, max={max_in:4d}"
+            )
+            print(
+                f"    Out (from sources): min={min_out:4d}, mean={mean_out:6.1f}, std={std_out:6.1f}, max={max_out:4d}"
+            )
+
+    print("\n" + "=" * 80 + "\n")
 
     return adjacency

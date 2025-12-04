@@ -101,6 +101,7 @@ def main(
     cell_type_indices = cell_types.assign_cell_types(
         num_neurons=recurrent.topology.num_neurons,
         cell_type_proportions=recurrent.cell_types.proportion,
+        num_assemblies=recurrent.topology.num_assemblies,
     )
 
     # Generate assembly-based connectivity graph
