@@ -25,7 +25,7 @@ Typical workflow:
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import List
+from typing import List, Tuple
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
@@ -231,7 +231,7 @@ def assembly_generator(
     conn_between: List[List[float]],
     allow_self_loops: bool = False,
     method: str = "erdos-renyi",
-) -> BoolArray:
+) -> Tuple[BoolArray, IntArray]:
     """
     Generate a graph with assembly structure and cell types.
     Creates boolean adjacency matrix with assembly structure using
@@ -247,13 +247,16 @@ def assembly_generator(
         method (str): Method for graph generation. Either "erdos-renyi" or "configuration".
 
     Returns:
-        BoolArray: Boolean adjacency matrix of shape (len(source_cell_types), len(target_cell_types)).
+        Tuple[BoolArray, IntArray]:
+            - Boolean adjacency matrix of shape (len(source_cell_types), len(target_cell_types))
+            - 0-indexed array of assembly IDs for source neurons (shape: len(source_cell_types))
+              Neurons not assigned to assemblies get ID -1
 
     Note:
         For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
         The "configuration" method uses configuration model for both within-assembly and between-assembly connections.
         For between-assembly connections, each source assembly connects to targets across all other assemblies.
-        Assemblies are made equal-sized; any remaining neurons are discarded.
+        Assemblies are made equal-sized; any remaining neurons are discarded and assigned assembly ID -1.
     """
     assert method in ["erdos-renyi", "configuration"], (
         f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
@@ -377,4 +380,9 @@ def assembly_generator(
     if not allow_self_loops and n_source_used == n_target_used:
         np.fill_diagonal(adjacency, False)
 
-    return adjacency
+    # Create assembly ID array for all source neurons
+    # Neurons not in assemblies (if n_source > n_source_used) get ID -1
+    assembly_ids = np.full(n_source, -1, dtype=np.int32)
+    assembly_ids[:n_source_used] = source_assembly_id
+
+    return adjacency, assembly_ids

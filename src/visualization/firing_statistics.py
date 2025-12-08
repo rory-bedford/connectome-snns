@@ -795,3 +795,531 @@ def plot_firing_rate_distribution(
         plt.tight_layout()
 
     return fig if return_fig else None
+
+
+def plot_assembly_population_activity(
+    spike_trains: NDArray[np.int32],
+    cell_type_indices: NDArray[np.int32],
+    assembly_ids: NDArray[np.int32],
+    window_size: float,
+    dt: float = 1.0,
+    excitatory_idx: int = 0,
+    ax: plt.Axes | None = None,
+    title: str | None = None,
+) -> Figure:
+    """
+    Plot population activity for excitatory neurons grouped by assembly.
+
+    Similar to PSTH but shows smoothed activity for each assembly separately,
+    focusing only on excitatory neurons.
+
+    Args:
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
+        cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
+        assembly_ids (NDArray[np.int32]): Array of assembly IDs for each neuron (0-indexed, -1 for unassigned).
+        window_size (float): Window size for smoothing in milliseconds.
+        dt (float): Time step duration in milliseconds. Defaults to 1.0.
+        excitatory_idx (int): Index of excitatory cell type. Defaults to 0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        title (str | None): Optional custom title. If None, uses default title.
+
+    Returns:
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
+    """
+    batch_size, n_steps, n_neurons = spike_trains.shape
+
+    # Filter for excitatory neurons only
+    excitatory_mask = cell_type_indices == excitatory_idx
+    excitatory_spikes = spike_trains[:, :, excitatory_mask]
+    excitatory_assembly_ids = assembly_ids[excitatory_mask]
+
+    # Get unique assembly IDs (excluding -1 for unassigned neurons)
+    unique_assemblies = np.unique(excitatory_assembly_ids)
+    unique_assemblies = unique_assemblies[unique_assemblies >= 0]  # Remove -1
+    n_assemblies = len(unique_assemblies)
+
+    if n_assemblies == 0:
+        raise ValueError("No assemblies found with assigned neurons")
+
+    # Generate colors for assemblies
+    cmap = plt.cm.get_cmap("tab10")
+    colors = [cmap(i % 10) for i in range(n_assemblies)]
+
+    # Convert window size to timesteps
+    window_steps = int(np.round(window_size / dt))
+
+    # Create time array for bin centers (one bin per timestep)
+    time_centers = np.arange(n_steps) * dt * 1e-3  # Convert to seconds
+
+    # Create figure
+    if ax is None:
+        fig, ax_to_use = plt.subplots(figsize=(12, 6))
+        return_fig = True
+    else:
+        fig = ax.get_figure()
+        ax_to_use = ax
+        return_fig = False
+
+    # Calculate smoothed activity for each assembly
+    for assembly_idx, assembly_id in enumerate(unique_assemblies):
+        # Get mask for neurons in this assembly
+        assembly_mask = excitatory_assembly_ids == assembly_id
+        n_neurons_assembly = assembly_mask.sum()
+
+        if n_neurons_assembly == 0:
+            continue
+
+        # Sum spikes across neurons in this assembly and all batches
+        spike_counts = excitatory_spikes[:, :, assembly_mask].sum(
+            axis=(0, 2)
+        )  # Shape: (n_steps,)
+
+        # Use convolution for efficient sliding window smoothing
+        kernel = np.ones(window_steps)
+        convolved = np.convolve(spike_counts, kernel, mode="same")
+
+        # Convert to firing rate: spikes per window -> Hz
+        firing_rates = (
+            convolved / (window_size * 1e-3) / n_neurons_assembly / batch_size
+        )
+
+        # Plot assembly activity
+        ax_to_use.plot(
+            time_centers,
+            firing_rates,
+            color=colors[assembly_idx],
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"Assembly {assembly_id} (n={n_neurons_assembly})",
+        )
+
+    ax_to_use.set_xlabel("Time (s)", fontsize=10)
+    ax_to_use.set_ylabel("Firing Rate (Hz)", fontsize=10)
+    ax_to_use.tick_params(labelsize=9)
+
+    if title is None:
+        title = "Excitatory Assembly Population Activity"
+    ax_to_use.set_title(title, fontsize=11)
+
+    # Set xlim to span full time range
+    start_time_s = 0
+    end_time_s = (n_steps - 1) * dt * 1e-3
+    ax_to_use.set_xlim(start_time_s, end_time_s + 0.01)
+    ax_to_use.margins(x=0)
+
+    ax_to_use.legend(loc="upper right", fontsize=9)
+    ax_to_use.grid(True, alpha=0.3)
+
+    if return_fig:
+        plt.tight_layout()
+
+    return fig if return_fig else None
+
+
+def plot_cross_correlation_histogram(
+    spike_trains_trial1: NDArray[np.int32] | NDArray[np.float32],
+    spike_trains_trial2: NDArray[np.int32] | NDArray[np.float32],
+    window_size: float,
+    dt: float = 1.0,
+    bin_size: float = 0.1,
+    cell_type_indices: NDArray[np.int32] | None = None,
+    assembly_ids: NDArray[np.int32] | None = None,
+    excitatory_idx: int = 0,
+    ax: plt.Axes | None = None,
+    title: str | None = None,
+    x_label: str | None = None,
+    y_label: str | None = None,
+) -> Figure:
+    """
+    Create a 2D histogram comparing binned firing rates between two trials.
+
+    Pools spikes by assembly (excitatory neurons only), computing average firing
+    rates per assembly, then creates a 2D histogram comparing binned rates between
+    two trials.
+
+    Args:
+        spike_trains_trial1 (NDArray[np.int32] | NDArray[np.float32]): Spike trains for trial 1 of shape (batch_size, n_steps, n_neurons).
+        spike_trains_trial2 (NDArray[np.int32] | NDArray[np.float32]): Spike trains for trial 2 of shape (batch_size, n_steps, n_neurons).
+        window_size (float): Window size for binning spikes in seconds.
+        dt (float): Time step duration in milliseconds. Defaults to 1.0.
+        bin_size (float): Bin size for histogram in Hz. Defaults to 0.1.
+        cell_type_indices (NDArray[np.int32] | None): Array of cell type indices for each neuron. Required if assembly_ids is provided.
+        assembly_ids (NDArray[np.int32] | None): Array of assembly IDs for each neuron (0-indexed, -1 for unassigned). If provided, pools by assembly.
+        excitatory_idx (int): Index of excitatory cell type. Defaults to 0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        title (str | None): Optional custom title. If None, uses default title.
+        x_label (str | None): Custom label for x-axis. If None, uses default.
+        y_label (str | None): Custom label for y-axis. If None, uses default.
+
+    Returns:
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
+    """
+    batch_size1, n_steps, n_neurons = spike_trains_trial1.shape
+    batch_size2, n_steps2, n_neurons2 = spike_trains_trial2.shape
+
+    if n_steps != n_steps2 or n_neurons != n_neurons2:
+        raise ValueError(
+            f"Spike train dimensions must match. Got trial1: ({n_steps}, {n_neurons}), "
+            f"trial2: ({n_steps2}, {n_neurons2})"
+        )
+
+    # Pool by assembly if assembly_ids is provided
+    if assembly_ids is not None:
+        if cell_type_indices is None:
+            raise ValueError(
+                "cell_type_indices must be provided when assembly_ids is specified"
+            )
+
+        # Get excitatory neurons and their assembly IDs
+        excitatory_mask = cell_type_indices == excitatory_idx
+        excitatory_assembly_ids = assembly_ids[excitatory_mask]
+        unique_assemblies = np.unique(excitatory_assembly_ids)
+        unique_assemblies = unique_assemblies[
+            unique_assemblies >= 0
+        ]  # Remove -1 (unassigned)
+        n_assemblies = len(unique_assemblies)
+
+        if n_assemblies == 0:
+            raise ValueError("No assemblies found with assigned excitatory neurons")
+
+        print(
+            f"  Pooling {excitatory_mask.sum()} excitatory neurons into {n_assemblies} assemblies"
+        )
+
+        # Pool spikes by assembly for both trials
+        assembly_spikes_trial1 = np.zeros(
+            (batch_size1, n_steps, n_assemblies), dtype=np.float32
+        )
+        assembly_spikes_trial2 = np.zeros(
+            (batch_size2, n_steps, n_assemblies), dtype=np.float32
+        )
+
+        # Extract excitatory spikes
+        excitatory_spikes_trial1 = spike_trains_trial1[:, :, excitatory_mask]
+        excitatory_spikes_trial2 = spike_trains_trial2[:, :, excitatory_mask]
+
+        # Sum spikes within each assembly and divide by number of neurons
+        for assembly_idx, assembly_id in enumerate(unique_assemblies):
+            assembly_mask = excitatory_assembly_ids == assembly_id
+            n_neurons_in_assembly = assembly_mask.sum()
+
+            # Sum spikes and divide by number of neurons to get average spikes per neuron
+            assembly_spikes_trial1[:, :, assembly_idx] = (
+                excitatory_spikes_trial1[:, :, assembly_mask].sum(axis=2)
+                / n_neurons_in_assembly
+            )
+            assembly_spikes_trial2[:, :, assembly_idx] = (
+                excitatory_spikes_trial2[:, :, assembly_mask].sum(axis=2)
+                / n_neurons_in_assembly
+            )
+
+        # Use assembly-pooled spikes
+        spike_trains_trial1 = assembly_spikes_trial1
+        spike_trains_trial2 = assembly_spikes_trial2
+        n_neurons = n_assemblies
+        print(f"  Using {n_assemblies} assemblies for histogram")
+
+    # Average over batches
+    spike_trains_trial1 = spike_trains_trial1.mean(
+        axis=0
+    )  # Shape: (n_steps, n_neurons)
+    spike_trains_trial2 = spike_trains_trial2.mean(
+        axis=0
+    )  # Shape: (n_steps, n_neurons)
+
+    # Convert window size from seconds to steps
+    window_steps = int(window_size * 1000 / dt)  # Convert s to ms, then to steps
+
+    # Calculate number of windows
+    n_windows = n_steps // window_steps
+
+    if n_windows == 0:
+        raise ValueError(
+            f"Window size ({window_size}s = {window_steps} steps) is larger than "
+            f"simulation duration ({n_steps} steps = {n_steps * dt / 1000}s)"
+        )
+
+    # Reshape data into windows
+    # Truncate to fit complete windows
+    truncated_steps = n_windows * window_steps
+    spikes_trial1_windowed = spike_trains_trial1[:truncated_steps, :].reshape(
+        n_windows, window_steps, n_neurons
+    )
+    spikes_trial2_windowed = spike_trains_trial2[:truncated_steps, :].reshape(
+        n_windows, window_steps, n_neurons
+    )
+
+    # Sum spikes within each window for each neuron
+    # Shape: (n_windows, n_neurons)
+    spike_counts_trial1 = spikes_trial1_windowed.sum(axis=1)
+    spike_counts_trial2 = spikes_trial2_windowed.sum(axis=1)
+
+    # Convert to firing rates (Hz)
+    window_duration_s = window_steps * dt * 1e-3  # Convert to seconds
+    firing_rates_trial1 = spike_counts_trial1 / window_duration_s
+    firing_rates_trial2 = spike_counts_trial2 / window_duration_s
+
+    # Flatten to get all (neuron, window) pairs
+    firing_rates_trial1_flat = firing_rates_trial1.flatten()
+    firing_rates_trial2_flat = firing_rates_trial2.flatten()
+
+    # Debug info
+    print(
+        f"    2D histogram: {n_windows} windows × {n_neurons} cells = {len(firing_rates_trial1_flat)} points"
+    )
+    print(
+        f"    Window size: {window_size}s ({window_steps} steps), Bin size: {bin_size} Hz"
+    )
+
+    # Create figure
+    if ax is None:
+        fig, ax_to_use = plt.subplots(figsize=(8, 8))
+        return_fig = True
+    else:
+        fig = ax.get_figure()
+        ax_to_use = ax
+        return_fig = False
+
+    # Calculate bins
+    max_rate = max(firing_rates_trial1_flat.max(), firing_rates_trial2_flat.max())
+    bins = np.arange(0, max_rate + bin_size, bin_size)
+
+    # Create 2D histogram
+    hist, xedges, yedges = np.histogram2d(
+        firing_rates_trial1_flat, firing_rates_trial2_flat, bins=[bins, bins]
+    )
+
+    # Plot as heatmap (log scale for better visibility)
+    hist_log = np.log10(hist + 1)  # Add 1 to avoid log(0)
+    im = ax_to_use.imshow(
+        hist_log.T,
+        origin="lower",
+        extent=[0, max_rate, 0, max_rate],
+        aspect="auto",
+        cmap="viridis",
+        interpolation="nearest",
+    )
+
+    # Add colorbar with smaller size
+    cbar = plt.colorbar(im, ax=ax_to_use, fraction=0.046, pad=0.04)
+    cbar.set_label("log10(Count + 1)", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+
+    # Add diagonal line (perfect correlation)
+    ax_to_use.plot(
+        [0, max_rate], [0, max_rate], "r--", alpha=0.7, linewidth=1.5, label="Unity"
+    )
+
+    # Calculate correlation coefficient
+    corr_coef = np.corrcoef(firing_rates_trial1_flat, firing_rates_trial2_flat)[0, 1]
+
+    # Set axis labels with custom or default values
+    x_axis_label = x_label if x_label is not None else "Trial 1 Firing Rate (Hz)"
+    y_axis_label = y_label if y_label is not None else "Trial 2 Firing Rate (Hz)"
+
+    ax_to_use.set_xlabel(x_axis_label, fontsize=11)
+    ax_to_use.set_ylabel(y_axis_label, fontsize=11)
+    ax_to_use.tick_params(labelsize=10)
+
+    if title is None:
+        title = f"Cross-Correlation 2D Histogram (r={corr_coef:.3f})"
+    else:
+        title = f"{title} (r={corr_coef:.3f})"
+    ax_to_use.set_title(title, fontsize=12)
+
+    ax_to_use.legend(loc="upper left", fontsize=10)
+    ax_to_use.set_aspect("equal", adjustable="box")
+
+    # Add text box with stats
+    n_points = len(firing_rates_trial1_flat)
+    stats_text = (
+        f"Windows: {n_windows}\n"
+        f"Cells: {n_neurons}\n"
+        f"Points: {n_points}\n"
+        f"Window: {window_size}s\n"
+        f"Bin: {bin_size} Hz"
+    )
+    ax_to_use.text(
+        0.98,
+        0.02,
+        stats_text,
+        transform=ax_to_use.transAxes,
+        fontsize=9,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
+
+    if return_fig:
+        plt.tight_layout()
+
+    return fig if return_fig else None
+
+
+def plot_cross_correlation_scatter(
+    spike_trains_trial1: NDArray[np.int32] | NDArray[np.float32],
+    spike_trains_trial2: NDArray[np.int32] | NDArray[np.float32],
+    window_size: float,
+    dt: float = 1.0,
+    cell_indices: NDArray[np.int32] | None = None,
+    ax: plt.Axes | None = None,
+    title: str | None = None,
+    x_label: str | None = None,
+    y_label: str | None = None,
+) -> Figure:
+    """
+    Create a scatter plot comparing binned firing rates between two trials.
+
+    For each neuron and each time window, computes the spike count and creates
+    a scatter plot of trial 1 vs trial 2 firing rates across all windows.
+
+    Args:
+        spike_trains_trial1 (NDArray[np.int32] | NDArray[np.float32]): Spike trains for trial 1 of shape (batch_size, n_steps, n_neurons).
+        spike_trains_trial2 (NDArray[np.int32] | NDArray[np.float32]): Spike trains for trial 2 of shape (batch_size, n_steps, n_neurons).
+        window_size (float): Window size for binning spikes in seconds.
+        dt (float): Time step duration in milliseconds. Defaults to 1.0.
+        cell_indices (NDArray[np.int32] | None): Indices of cells to include. If None, uses all cells.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        title (str | None): Optional custom title. If None, uses default title.
+        x_label (str | None): Custom label for x-axis. If None, uses default "Trial 1 Firing Rate (Hz)".
+        y_label (str | None): Custom label for y-axis. If None, uses default "Trial 2 Firing Rate (Hz)".
+
+    Returns:
+        Figure | None: Matplotlib figure object if ax is None, otherwise None.
+    """
+    batch_size1, n_steps, n_neurons = spike_trains_trial1.shape
+    batch_size2, n_steps2, n_neurons2 = spike_trains_trial2.shape
+
+    if n_steps != n_steps2 or n_neurons != n_neurons2:
+        raise ValueError(
+            f"Spike train dimensions must match. Got trial1: ({n_steps}, {n_neurons}), "
+            f"trial2: ({n_steps2}, {n_neurons2})"
+        )
+
+    # Filter cells if specified
+    if cell_indices is not None:
+        spike_trains_trial1 = spike_trains_trial1[:, :, cell_indices]
+        spike_trains_trial2 = spike_trains_trial2[:, :, cell_indices]
+        n_neurons = len(cell_indices)
+
+    # Average over batches
+    spike_trains_trial1 = spike_trains_trial1.mean(
+        axis=0
+    )  # Shape: (n_steps, n_neurons)
+    spike_trains_trial2 = spike_trains_trial2.mean(
+        axis=0
+    )  # Shape: (n_steps, n_neurons)
+
+    # Convert window size from seconds to steps
+    window_steps = int(window_size * 1000 / dt)  # Convert s to ms, then to steps
+
+    # Calculate number of windows
+    n_windows = n_steps // window_steps
+
+    if n_windows == 0:
+        raise ValueError(
+            f"Window size ({window_size}s = {window_steps} steps) is larger than "
+            f"simulation duration ({n_steps} steps = {n_steps * dt / 1000}s)"
+        )
+
+    # Reshape data into windows
+    # Truncate to fit complete windows
+    truncated_steps = n_windows * window_steps
+    spikes_trial1_windowed = spike_trains_trial1[:truncated_steps, :].reshape(
+        n_windows, window_steps, n_neurons
+    )
+    spikes_trial2_windowed = spike_trains_trial2[:truncated_steps, :].reshape(
+        n_windows, window_steps, n_neurons
+    )
+
+    # Sum spikes within each window for each neuron
+    # Shape: (n_windows, n_neurons)
+    spike_counts_trial1 = spikes_trial1_windowed.sum(axis=1)
+    spike_counts_trial2 = spikes_trial2_windowed.sum(axis=1)
+
+    # Convert to firing rates (Hz)
+    window_duration_s = window_steps * dt * 1e-3  # Convert to seconds
+    firing_rates_trial1 = spike_counts_trial1 / window_duration_s
+    firing_rates_trial2 = spike_counts_trial2 / window_duration_s
+
+    # Flatten to get all (neuron, window) pairs
+    firing_rates_trial1_flat = firing_rates_trial1.flatten()
+    firing_rates_trial2_flat = firing_rates_trial2.flatten()
+
+    # Debug info
+    print(
+        f"    Scatter plot: {n_windows} windows × {n_neurons} cells = {len(firing_rates_trial1_flat)} points"
+    )
+    print(
+        f"    Window size: {window_size}s ({window_steps} steps), Duration: {window_duration_s}s per window"
+    )
+
+    # Create figure
+    if ax is None:
+        fig, ax_to_use = plt.subplots(figsize=(8, 8))
+        return_fig = True
+    else:
+        fig = ax.get_figure()
+        ax_to_use = ax
+        return_fig = False
+
+    # Create scatter plot
+    ax_to_use.scatter(
+        firing_rates_trial1_flat,
+        firing_rates_trial2_flat,
+        alpha=0.3,
+        s=10,
+        color="steelblue",
+        edgecolors="none",
+    )
+
+    # Add diagonal line (perfect correlation)
+    max_rate = max(firing_rates_trial1_flat.max(), firing_rates_trial2_flat.max())
+    ax_to_use.plot(
+        [0, max_rate], [0, max_rate], "k--", alpha=0.5, linewidth=1.5, label="Unity"
+    )
+
+    # Calculate correlation coefficient
+    corr_coef = np.corrcoef(firing_rates_trial1_flat, firing_rates_trial2_flat)[0, 1]
+
+    # Set axis labels with custom or default values
+    x_axis_label = x_label if x_label is not None else "Trial 1 Firing Rate (Hz)"
+    y_axis_label = y_label if y_label is not None else "Trial 2 Firing Rate (Hz)"
+
+    ax_to_use.set_xlabel(x_axis_label, fontsize=11)
+    ax_to_use.set_ylabel(y_axis_label, fontsize=11)
+    ax_to_use.tick_params(labelsize=10)
+
+    if title is None:
+        title = f"Cross-Correlation Scatter Plot (r={corr_coef:.3f})"
+    else:
+        title = f"{title} (r={corr_coef:.3f})"
+    ax_to_use.set_title(title, fontsize=12)
+
+    ax_to_use.legend(loc="upper left", fontsize=10)
+    ax_to_use.grid(True, alpha=0.3)
+    ax_to_use.set_aspect("equal", adjustable="box")
+
+    # Add text box with stats
+    n_points = len(firing_rates_trial1_flat)
+    stats_text = (
+        f"Windows: {n_windows}\n"
+        f"Cells: {n_neurons}\n"
+        f"Points: {n_points}\n"
+        f"Window: {window_size}s"
+    )
+    ax_to_use.text(
+        0.98,
+        0.02,
+        stats_text,
+        transform=ax_to_use.transAxes,
+        fontsize=9,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
+
+    if return_fig:
+        plt.tight_layout()
+
+    return fig if return_fig else None

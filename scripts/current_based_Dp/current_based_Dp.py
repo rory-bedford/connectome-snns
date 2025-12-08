@@ -123,7 +123,7 @@ def main(input_dir, output_dir, params_file):
     )
 
     # Generate assembly-based connectivity graph
-    connectivity_graph = topology_generators.assembly_generator(
+    connectivity_graph, assembly_ids = topology_generators.assembly_generator(
         source_cell_types=cell_type_indices,
         target_cell_types=cell_type_indices,  # Same for recurrent connections
         num_assemblies=num_assemblies,

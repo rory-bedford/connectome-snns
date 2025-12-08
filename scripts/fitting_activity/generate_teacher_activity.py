@@ -24,6 +24,11 @@ from visualization.dashboards import (
     create_connectivity_dashboard,
     create_activity_dashboard,
 )
+from visualization.firing_statistics import (
+    plot_assembly_population_activity,
+    plot_cross_correlation_scatter,
+    plot_cross_correlation_histogram,
+)
 
 
 def main(input_dir, output_dir, params_file):
@@ -73,10 +78,14 @@ def main(input_dir, output_dir, params_file):
     feedforward_weights = network_structure["feedforward_weights"]
     cell_type_indices = network_structure["cell_type_indices"]
     input_source_indices = network_structure["feedforward_cell_type_indices"]
+    assembly_ids = network_structure["assembly_ids"]
 
     print(f"✓ Loaded network with {len(cell_type_indices)} neurons")
     print(f"✓ Loaded recurrent weights: {weights.shape}")
     print(f"✓ Loaded feedforward weights: {feedforward_weights.shape}")
+    print(
+        f"✓ Loaded assembly IDs: {len(assembly_ids)} neurons in {len(np.unique(assembly_ids[assembly_ids >= 0]))} assemblies"
+    )
 
     # =========================
     # Create Feedforward Inputs
@@ -235,6 +244,7 @@ def main(input_dir, output_dir, params_file):
     viz_chunks = int(np.ceil(viz_duration_s / simulation.chunk_duration_s))
     viz_start_chunk = max(0, simulation.num_chunks - viz_chunks)
 
+    # Store pattern 0 (first odour) for dashboards
     viz_voltages = []
     viz_currents = []
     viz_currents_FF = []
@@ -243,6 +253,10 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = []
     viz_output_spikes = []
     viz_input_spikes = []
+
+    # Also store control pattern spikes for assembly comparison
+    viz_output_spikes_control = []
+    viz_input_spikes_control = []
 
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
@@ -280,43 +294,32 @@ def main(input_dir, output_dir, params_file):
                 batch_size, n_patterns, n_steps_out, n_neurons
             )
 
-            # Store traces from last few chunks for visualization (control pattern, first batch only)
+            # Store traces from last few chunks for visualization
             if chunk_idx >= viz_start_chunk:
-                # Extract first batch, last pattern (control) for visualization
-                viz_voltages.append(
-                    output_voltages_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :
-                    ].clone()
-                )
-                viz_currents.append(
-                    output_currents_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :, :
-                    ].clone()
-                )
+                # Extract first batch, pattern 0 (first odour) for visualization
+                viz_voltages.append(output_voltages_chunk_flat[0:1, :, :].clone())
+                viz_currents.append(output_currents_chunk_flat[0:1, :, :, :].clone())
                 viz_currents_FF.append(
-                    output_currents_FF_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :, :
-                    ].clone()
+                    output_currents_FF_chunk_flat[0:1, :, :, :].clone()
                 )
                 viz_currents_leak.append(
-                    output_currents_leak_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :
-                    ].clone()
+                    output_currents_leak_chunk_flat[0:1, :, :].clone()
                 )
                 viz_conductances.append(
-                    output_conductances_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :, :
-                    ].clone()
+                    output_conductances_chunk_flat[0:1, :, :, :].clone()
                 )
                 viz_conductances_FF.append(
-                    output_conductances_FF_chunk_flat[
-                        n_patterns - 1 : n_patterns, :, :, :
-                    ].clone()
+                    output_conductances_FF_chunk_flat[0:1, :, :, :].clone()
                 )
-                viz_output_spikes.append(
+                viz_output_spikes.append(output_spikes_chunk_flat[0:1, :, :].clone())
+                viz_input_spikes.append(input_spikes_flat[0:1, :, :].clone())
+
+                # Also store control pattern (last) for assembly comparison
+                # Also store control pattern (last) for assembly comparison
+                viz_output_spikes_control.append(
                     output_spikes_chunk_flat[n_patterns - 1 : n_patterns, :, :].clone()
                 )
-                viz_input_spikes.append(
+                viz_input_spikes_control.append(
                     input_spikes_flat[n_patterns - 1 : n_patterns, :, :].clone()
                 )
 
@@ -459,6 +462,10 @@ def main(input_dir, output_dir, params_file):
     viz_output_spikes = torch.cat(viz_output_spikes, dim=1)
     viz_input_spikes = torch.cat(viz_input_spikes, dim=1)
 
+    # Concatenate control pattern data
+    viz_output_spikes_control = torch.cat(viz_output_spikes_control, dim=1)
+    viz_input_spikes_control = torch.cat(viz_input_spikes_control, dim=1)
+
     # Move to CPU and convert to numpy
     if device == "cuda":
         viz_voltages = viz_voltages.cpu()
@@ -469,6 +476,8 @@ def main(input_dir, output_dir, params_file):
         viz_conductances_FF = viz_conductances_FF.cpu()
         viz_output_spikes = viz_output_spikes.cpu()
         viz_input_spikes = viz_input_spikes.cpu()
+        viz_output_spikes_control = viz_output_spikes_control.cpu()
+        viz_input_spikes_control = viz_input_spikes_control.cpu()
 
     viz_voltages = viz_voltages.numpy().astype(np.float32)
     viz_currents = viz_currents.numpy().astype(np.float32)
@@ -478,6 +487,10 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = viz_conductances_FF.numpy().astype(np.float32)
     viz_output_spikes = viz_output_spikes.numpy().astype(np.int32)
     viz_input_spikes = viz_input_spikes.numpy().astype(np.int32)
+
+    # Convert control pattern to numpy
+    viz_output_spikes_control = viz_output_spikes_control.numpy().astype(np.int32)
+    viz_input_spikes_control = viz_input_spikes_control.numpy().astype(np.int32)
 
     print(
         f"✓ Prepared {viz_voltages.shape[1]} time steps for visualization (last ~{viz_duration_s:.1f}s)"
@@ -542,6 +555,79 @@ def main(input_dir, output_dir, params_file):
         figures_dir / "activity_dashboard.png", dpi=300, bbox_inches="tight"
     )
     plt.close(activity_fig)
+
+    # Generate assembly population activity plot (side-by-side comparison)
+    print("Generating assembly population activity plot...")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
+
+    # Plot pattern 0 (odour)
+    plot_assembly_population_activity(
+        spike_trains=viz_output_spikes,
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        window_size=200.0,  # Gaussian kernel std in ms
+        dt=simulation.dt,
+        excitatory_idx=0,  # Assuming excitatory neurons are type 0
+        title="Excitatory Assembly Activity (Pattern 0)",
+        ax=ax1,
+    )
+
+    # Plot control pattern
+    plot_assembly_population_activity(
+        spike_trains=viz_output_spikes_control,
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        window_size=200.0,  # Gaussian kernel std in ms
+        dt=simulation.dt,
+        excitatory_idx=0,  # Assuming excitatory neurons are type 0
+        title="Excitatory Assembly Activity (Control Pattern)",
+        ax=ax2,
+    )
+
+    plt.tight_layout()
+    fig.savefig(
+        figures_dir / "assembly_population_activity.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig)
+
+    # Generate cross-correlation scatter plot
+    print("Generating cross-correlation scatter plot...")
+    cross_corr_fig = plot_cross_correlation_scatter(
+        spike_trains_trial1=viz_output_spikes,
+        spike_trains_trial2=viz_output_spikes_control,
+        window_size=10.0,  # 10 second windows
+        dt=simulation.dt,
+        cell_indices=None,  # All cells in network
+        title="Pattern 0 vs Control",
+        x_label="Pattern 0 Firing Rate (Hz)",
+        y_label="Control Firing Rate (Hz)",
+    )
+
+    cross_corr_fig.savefig(
+        figures_dir / "cross_correlation_scatter.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(cross_corr_fig)
+
+    # Generate cross-correlation 2D histogram (assembly-pooled)
+    print("Generating cross-correlation 2D histogram (assembly-pooled)...")
+    cross_corr_hist_fig = plot_cross_correlation_histogram(
+        spike_trains_trial1=viz_output_spikes,
+        spike_trains_trial2=viz_output_spikes_control,
+        window_size=0.05,  # 50 ms windows
+        dt=simulation.dt,
+        bin_size=0.1,  # 0.1 Hz bins
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        excitatory_idx=0,  # Assuming excitatory neurons are type 0
+        title="Pattern 0 vs Control (Assembly 2D Histogram)",
+        x_label="Pattern 0 Assembly Rate (Hz)",
+        y_label="Control Assembly Rate (Hz)",
+    )
+
+    cross_corr_hist_fig.savefig(
+        figures_dir / "cross_correlation_histogram.png", dpi=300, bbox_inches="tight"
+    )
+    plt.close(cross_corr_hist_fig)
 
     print(f"✓ Saved dashboard plots to {figures_dir}")
     print("=" * len("GENERATING DASHBOARDS"))

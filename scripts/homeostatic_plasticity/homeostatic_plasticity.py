@@ -107,7 +107,7 @@ def main(
     )
 
     # Generate assembly-based connectivity graph
-    connectivity_graph = topology_generators.assembly_generator(
+    connectivity_graph, assembly_ids = topology_generators.assembly_generator(
         source_cell_types=cell_type_indices,
         target_cell_types=cell_type_indices,  # Same for recurrent connections
         num_assemblies=recurrent.topology.num_assemblies,
@@ -446,6 +446,7 @@ def main(
             feedforward_connectivity=feedforward_connectivity_graph,
             cell_type_indices=cell_type_indices,
             feedforward_cell_type_indices=input_source_indices,
+            assembly_ids=assembly_ids,
         )
         print(
             f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
@@ -650,6 +651,7 @@ def main(
         feedforward_connectivity=feedforward_connectivity_graph,
         cell_type_indices=cell_type_indices,
         feedforward_cell_type_indices=input_source_indices,
+        assembly_ids=assembly_ids,
     )
     print(
         f"✓ Final network structure saved to {final_state_dir / 'network_structure.npz'}"

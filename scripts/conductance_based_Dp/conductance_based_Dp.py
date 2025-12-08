@@ -83,7 +83,7 @@ def main(input_dir, output_dir, params_file):
     )
 
     # Generate assembly-based connectivity graph
-    connectivity_graph = topology_generators.assembly_generator(
+    connectivity_graph, assembly_ids = topology_generators.assembly_generator(
         source_cell_types=cell_type_indices,
         target_cell_types=cell_type_indices,  # Same for recurrent connections
         num_assemblies=recurrent.topology.num_assemblies,
@@ -308,6 +308,11 @@ def main(input_dir, output_dir, params_file):
         results_dir / "network_structure.npz",
         weights=weights.astype(np.float32),
         feedforward_weights=feedforward_weights.astype(np.float32),
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=input_source_indices,
+        assembly_ids=assembly_ids,
+        recurrent_connectivity=connectivity_graph,
+        feedforward_connectivity=feedforward_connectivity_graph,
     )
 
     print(f"✓ Saved data to {results_dir} (spikes + connectivity)")
