@@ -258,6 +258,9 @@ def main(input_dir, output_dir, params_file):
     viz_output_spikes_control = []
     viz_input_spikes_control = []
 
+    # Store pattern 0 from batch 1 (second repeat) for cross-correlation
+    viz_output_spikes_signal_repeat = []
+
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
         dataloader_iter = iter(spike_dataloader)
@@ -315,12 +318,16 @@ def main(input_dir, output_dir, params_file):
                 viz_input_spikes.append(input_spikes_flat[0:1, :, :].clone())
 
                 # Also store control pattern (last) for assembly comparison
-                # Also store control pattern (last) for assembly comparison
                 viz_output_spikes_control.append(
                     output_spikes_chunk_flat[n_patterns - 1 : n_patterns, :, :].clone()
                 )
                 viz_input_spikes_control.append(
                     input_spikes_flat[n_patterns - 1 : n_patterns, :, :].clone()
+                )
+
+                # Store pattern 0 from batch 1 (second repeat)
+                viz_output_spikes_signal_repeat.append(
+                    output_spikes_chunk_flat[n_patterns : n_patterns + 1, :, :].clone()
                 )
 
             # Store final states for next chunk: (batch_size*n_patterns, neurons) or (batch_size*n_patterns, neurons, syn_types)
@@ -356,7 +363,7 @@ def main(input_dir, output_dir, params_file):
     # =====================================
     # Save Output Data for Further Analysis
     # =====================================
-    print("Saving separated odour and control data...")
+    print("\nSaving separated odour and control data...")
 
     # Create separate arrays for odour patterns and control pattern
     # Odour patterns: indices 0 to num_odours-1
@@ -414,7 +421,7 @@ def main(input_dir, output_dir, params_file):
         data=input_firing_rates_baseline,
     )
 
-    print(f"✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
+    print(f"\n✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
     print(f"  - output_spikes (combined): {output_spikes_zarr.shape}")
     print(f"  - output_spikes_odour: {root['output_spikes_odour'].shape}")
     print(f"  - output_spikes_control: {root['output_spikes_control'].shape}")
@@ -428,7 +435,7 @@ def main(input_dir, output_dir, params_file):
     if device == "cuda":
         del model
         torch.cuda.empty_cache()
-        print("✓ Freed GPU memory")
+        print("\n✓ Freed GPU memory")
 
     # ========
     # Clean Up
@@ -466,6 +473,9 @@ def main(input_dir, output_dir, params_file):
     viz_output_spikes_control = torch.cat(viz_output_spikes_control, dim=1)
     viz_input_spikes_control = torch.cat(viz_input_spikes_control, dim=1)
 
+    # Concatenate signal repeat data (pattern 0 from batch 1)
+    viz_output_spikes_signal_repeat = torch.cat(viz_output_spikes_signal_repeat, dim=1)
+
     # Move to CPU and convert to numpy
     if device == "cuda":
         viz_voltages = viz_voltages.cpu()
@@ -478,6 +488,7 @@ def main(input_dir, output_dir, params_file):
         viz_input_spikes = viz_input_spikes.cpu()
         viz_output_spikes_control = viz_output_spikes_control.cpu()
         viz_input_spikes_control = viz_input_spikes_control.cpu()
+        viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.cpu()
 
     viz_voltages = viz_voltages.numpy().astype(np.float32)
     viz_currents = viz_currents.numpy().astype(np.float32)
@@ -491,6 +502,11 @@ def main(input_dir, output_dir, params_file):
     # Convert control pattern to numpy
     viz_output_spikes_control = viz_output_spikes_control.numpy().astype(np.int32)
     viz_input_spikes_control = viz_input_spikes_control.numpy().astype(np.int32)
+
+    # Convert signal repeat to numpy
+    viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.numpy().astype(
+        np.int32
+    )
 
     print(
         f"✓ Prepared {viz_voltages.shape[1]} time steps for visualization (last ~{viz_duration_s:.1f}s)"
@@ -590,27 +606,64 @@ def main(input_dir, output_dir, params_file):
     )
     plt.close(fig)
 
-    # Generate cross-correlation scatter plot
+    # Generate cross-correlation scatter plot subplot
     print("Generating cross-correlation scatter plot...")
-    cross_corr_fig = plot_cross_correlation_scatter(
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+
+    # Left: Pattern 0 (batch 0) vs Pattern 0 (batch 1) - signal repeatability
+    plot_cross_correlation_scatter(
+        spike_trains_trial1=viz_output_spikes,
+        spike_trains_trial2=viz_output_spikes_signal_repeat,
+        window_size=10.0,  # 10 second windows
+        dt=simulation.dt,
+        cell_indices=None,  # All cells in network
+        ax=ax1,
+        title="Pattern 0 vs Pattern 0 (Repeat)",
+        x_label="Pattern 0 (Trial 1) Rate (Hz)",
+        y_label="Pattern 0 (Trial 2) Rate (Hz)",
+    )
+
+    # Right: Pattern 0 vs Control - signal vs noise
+    plot_cross_correlation_scatter(
         spike_trains_trial1=viz_output_spikes,
         spike_trains_trial2=viz_output_spikes_control,
         window_size=10.0,  # 10 second windows
         dt=simulation.dt,
         cell_indices=None,  # All cells in network
+        ax=ax2,
         title="Pattern 0 vs Control",
-        x_label="Pattern 0 Firing Rate (Hz)",
-        y_label="Control Firing Rate (Hz)",
+        x_label="Pattern 0 Rate (Hz)",
+        y_label="Control Rate (Hz)",
     )
 
-    cross_corr_fig.savefig(
+    plt.tight_layout()
+    fig.savefig(
         figures_dir / "cross_correlation_scatter.png", dpi=300, bbox_inches="tight"
     )
-    plt.close(cross_corr_fig)
+    plt.close(fig)
 
-    # Generate cross-correlation 2D histogram (assembly-pooled)
+    # Generate cross-correlation 2D histogram subplot (assembly-pooled)
     print("Generating cross-correlation 2D histogram (assembly-pooled)...")
-    cross_corr_hist_fig = plot_cross_correlation_histogram(
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+
+    # Left: Pattern 0 (batch 0) vs Pattern 0 (batch 1) - signal repeatability
+    plot_cross_correlation_histogram(
+        spike_trains_trial1=viz_output_spikes,
+        spike_trains_trial2=viz_output_spikes_signal_repeat,
+        window_size=0.05,  # 50 ms windows
+        dt=simulation.dt,
+        bin_size=0.1,  # 0.1 Hz bins
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        excitatory_idx=0,  # Assuming excitatory neurons are type 0
+        ax=ax1,
+        title="Pattern 0 vs Pattern 0 (Repeat)",
+        x_label="Pattern 0 (Trial 1) Rate (Hz)",
+        y_label="Pattern 0 (Trial 2) Rate (Hz)",
+    )
+
+    # Right: Pattern 0 vs Control - signal vs noise
+    plot_cross_correlation_histogram(
         spike_trains_trial1=viz_output_spikes,
         spike_trains_trial2=viz_output_spikes_control,
         window_size=0.05,  # 50 ms windows
@@ -619,15 +672,17 @@ def main(input_dir, output_dir, params_file):
         cell_type_indices=cell_type_indices,
         assembly_ids=assembly_ids,
         excitatory_idx=0,  # Assuming excitatory neurons are type 0
-        title="Pattern 0 vs Control (Assembly 2D Histogram)",
-        x_label="Pattern 0 Assembly Rate (Hz)",
-        y_label="Control Assembly Rate (Hz)",
+        ax=ax2,
+        title="Pattern 0 vs Control",
+        x_label="Pattern 0 Rate (Hz)",
+        y_label="Control Rate (Hz)",
     )
 
-    cross_corr_hist_fig.savefig(
+    plt.tight_layout()
+    fig.savefig(
         figures_dir / "cross_correlation_histogram.png", dpi=300, bbox_inches="tight"
     )
-    plt.close(cross_corr_hist_fig)
+    plt.close(fig)
 
     print(f"✓ Saved dashboard plots to {figures_dir}")
     print("=" * len("GENERATING DASHBOARDS"))
