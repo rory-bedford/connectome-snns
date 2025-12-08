@@ -11,7 +11,6 @@ dt = 1.0                               # ms - Time resolution of the simulation
 duration = 60000.0                     # ms - Total duration of the simulation
 chunk_size = 100                       # Number of timesteps per chunk
 batch_size = 10                        # Number of batches (repeats of each odour)
-num_odours = 10                        # Distinct number of odour inputs
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY
@@ -26,8 +25,8 @@ names = [ "mitral",]                   # Cell type names
 
 [odours.mitral]
 baseline_rate = 6.0                    # Hz - Baseline firing rate of mitral cells (Poisson process)
-modulation_rate = 1.0                  # Hz - Amount cells get modulated from baseline (positive and negative)
-modulation_fraction = 0.1              # Proportion of cells that get modulated (half get modulated up, half down)
+modulation_rate = 1.0                  # Hz - Amount cells get modulated from baseline (positive direction)
+modulation_fraction = 0.1              # Proportion of cells that get modulated
 
 # ==========================
 # FEEDFORWARD LAYER SYNAPSES

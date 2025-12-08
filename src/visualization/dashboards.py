@@ -186,6 +186,7 @@ def create_activity_dashboard(
     n_neurons_plot: int = 20,
     fraction: float = 1.0,
     random_seed: int = 42,
+    assembly_ids: NDArray[np.int32] | None = None,
 ) -> plt.Figure:
     """Create a comprehensive activity dashboard with two columns: Activity and Spiking Statistics.
 
@@ -210,6 +211,8 @@ def create_activity_dashboard(
         n_neurons_plot (int): Number of neurons to plot in raster. Defaults to 20.
         fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
         random_seed (int): Random seed for shuffling neurons. Defaults to 42.
+        assembly_ids (NDArray[np.int32] | None): Optional array of assembly IDs for each neuron.
+            If provided, neuron selection for detailed plots is limited to the first assembly (index 0).
 
     Returns:
         plt.Figure: Matplotlib figure object containing the activity dashboard.
@@ -356,6 +359,13 @@ def create_activity_dashboard(
         cell_name = cell_type_names[cell_type_idx].lower()
         if "excit" in cell_name:
             exc_neuron_indices.append(i)
+
+    # If assembly_ids provided, filter to first assembly (index 0)
+    if assembly_ids is not None:
+        first_assembly_mask = assembly_ids == 0
+        exc_neuron_indices = [
+            idx for idx in exc_neuron_indices if first_assembly_mask[idx]
+        ]
 
     selected_neuron = None
 

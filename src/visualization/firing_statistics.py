@@ -982,10 +982,6 @@ def plot_cross_correlation_histogram(
         if n_assemblies == 0:
             raise ValueError("No assemblies found with assigned excitatory neurons")
 
-        print(
-            f"  Pooling {excitatory_mask.sum()} excitatory neurons into {n_assemblies} assemblies"
-        )
-
         # Pool spikes by assembly for both trials
         assembly_spikes_trial1 = np.zeros(
             (batch_size1, n_steps, n_assemblies), dtype=np.float32
@@ -1017,7 +1013,6 @@ def plot_cross_correlation_histogram(
         spike_trains_trial1 = assembly_spikes_trial1
         spike_trains_trial2 = assembly_spikes_trial2
         n_neurons = n_assemblies
-        print(f"  Using {n_assemblies} assemblies for histogram")
 
     # Average over batches
     spike_trains_trial1 = spike_trains_trial1.mean(
@@ -1062,14 +1057,6 @@ def plot_cross_correlation_histogram(
     # Flatten to get all (neuron, window) pairs
     firing_rates_trial1_flat = firing_rates_trial1.flatten()
     firing_rates_trial2_flat = firing_rates_trial2.flatten()
-
-    # Debug info
-    print(
-        f"    2D histogram: {n_windows} windows × {n_neurons} cells = {len(firing_rates_trial1_flat)} points"
-    )
-    print(
-        f"    Window size: {window_size}s ({window_steps} steps), Bin size: {bin_size} Hz"
-    )
 
     # Create figure
     if ax is None:
@@ -1245,14 +1232,6 @@ def plot_cross_correlation_scatter(
     # Flatten to get all (neuron, window) pairs
     firing_rates_trial1_flat = firing_rates_trial1.flatten()
     firing_rates_trial2_flat = firing_rates_trial2.flatten()
-
-    # Debug info
-    print(
-        f"    Scatter plot: {n_windows} windows × {n_neurons} cells = {len(firing_rates_trial1_flat)} points"
-    )
-    print(
-        f"    Window size: {window_size}s ({window_steps} steps), Duration: {window_duration_s}s per window"
-    )
 
     # Create figure
     if ax is None:

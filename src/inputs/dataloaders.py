@@ -110,7 +110,9 @@ class PoissonSpikeDataset(Dataset):
 def generate_odour_firing_rates(
     feedforward_weights: Union[np.ndarray, torch.Tensor],
     input_source_indices: Union[np.ndarray, torch.Tensor],
+    cell_type_indices: Union[np.ndarray, torch.Tensor],
     assembly_ids: Union[np.ndarray, torch.Tensor],
+    target_cell_type_idx: int,
     cell_type_names: list[str],
     odour_configs: dict[str, dict],
 ) -> np.ndarray:
@@ -118,14 +120,21 @@ def generate_odour_firing_rates(
     Generate firing rate patterns for odour-modulated Poisson inputs based on assembly connectivity.
 
     Creates one firing rate pattern per assembly, where input neurons are modulated based on
-    their summed connection strength to each assembly. For each assembly pattern, the input
-    neurons with the strongest connections are modulated up, the weakest are modulated down,
-    and the rest remain at baseline.
+    their summed connection strength to each assembly. Connection strengths are computed only
+    for the target cell type in the recurrent network - this allows targeting specific cell
+    types (e.g., only excitatory cells) when determining which input neurons to modulate.
+
+    For each assembly pattern, input neurons with the strongest connections to the target
+    cell type are modulated up, the weakest are modulated down, and the rest remain at baseline.
 
     Args:
         feedforward_weights: Feedforward weight matrix of shape (n_input_neurons, n_recurrent_neurons).
         input_source_indices: Array indicating cell type for each input neuron.
+        cell_type_indices: Array indicating cell type for each recurrent neuron.
         assembly_ids: Array of assembly IDs for each recurrent neuron (0-indexed, -1 for unassigned).
+        target_cell_type_idx: Index of the cell type in the recurrent network to target when
+            computing connection strengths (e.g., 0 for excitatory cells). This determines which
+            recurrent neurons' incoming weights are considered when selecting input neurons to modulate.
         cell_type_names: List of cell type names (e.g., ["mitral"]).
         odour_configs: Dict mapping cell type names to odour config dicts.
             Each config dict should have keys: 'baseline_rate', 'modulation_rate', 'modulation_fraction'.
@@ -141,11 +150,14 @@ def generate_odour_firing_rates(
         ...     "modulation_fraction": 0.1
         ... }
         >>> weights = np.random.randn(1000, 5000)
+        >>> cell_type_indices = np.zeros(5000, dtype=int)  # All excitatory
         >>> assembly_ids = np.random.randint(-1, 20, 5000)
         >>> firing_rates = generate_odour_firing_rates(
         ...     feedforward_weights=weights,
         ...     input_source_indices=np.zeros(1000, dtype=int),
+        ...     cell_type_indices=cell_type_indices,
         ...     assembly_ids=assembly_ids,
+        ...     target_cell_type_idx=0,  # Target excitatory cells
         ...     cell_type_names=["mitral"],
         ...     odour_configs={"mitral": odour_config},
         ... )
@@ -157,6 +169,8 @@ def generate_odour_firing_rates(
         feedforward_weights = feedforward_weights.cpu().numpy()
     if isinstance(input_source_indices, torch.Tensor):
         input_source_indices = input_source_indices.cpu().numpy()
+    if isinstance(cell_type_indices, torch.Tensor):
+        cell_type_indices = cell_type_indices.cpu().numpy()
     if isinstance(assembly_ids, torch.Tensor):
         assembly_ids = assembly_ids.cpu().numpy()
 
@@ -172,19 +186,23 @@ def generate_odour_firing_rates(
     # Initialize firing rates: (n_patterns, n_input_neurons)
     firing_rates = np.zeros((n_patterns, n_input_neurons))
 
+    # Create mask for target cell type
+    target_cell_mask = cell_type_indices == target_cell_type_idx
+
     # For each assembly, compute sum of input weights from each input neuron
+    # Only considering connections to the target cell type
     # Shape: (n_assemblies, n_input_neurons)
     assembly_input_weights = np.zeros((n_patterns, n_input_neurons))
 
     for assembly_idx, assembly_id in enumerate(unique_assemblies):
-        # Get mask for neurons in this assembly
-        assembly_mask = assembly_ids == assembly_id
+        # Get mask for neurons in this assembly AND of the target cell type
+        assembly_and_target_mask = (assembly_ids == assembly_id) & target_cell_mask
 
-        # Sum weights from each input neuron to neurons in this assembly
+        # Sum weights from each input neuron to target-type neurons in this assembly
         # feedforward_weights: (n_input, n_recurrent)
-        # assembly_mask: (n_recurrent,)
+        # assembly_and_target_mask: (n_recurrent,)
         assembly_input_weights[assembly_idx, :] = feedforward_weights[
-            :, assembly_mask
+            :, assembly_and_target_mask
         ].sum(axis=1)
 
     # Generate modulated firing rates for each cell type
@@ -203,11 +221,10 @@ def generate_odour_firing_rates(
         modulation_fraction = odour_config["modulation_fraction"]
 
         up_rate = baseline_rate + modulation_rate
-        down_rate = baseline_rate - modulation_rate
 
         # Number of neurons of this cell type
         n_neurons_this_type = np.sum(mask)
-        n_modulated = int(n_neurons_this_type * modulation_fraction / 2.0)
+        n_modulated_up = int(n_neurons_this_type * modulation_fraction)
 
         # Get indices of neurons of this cell type
         neuron_indices = np.where(mask)[0]
@@ -221,16 +238,26 @@ def generate_odour_firing_rates(
             sorted_indices = neuron_indices[np.argsort(-connection_strengths)]
 
             # Assign modulated up neurons (strongest connections)
-            up_indices = sorted_indices[:n_modulated]
+            up_indices = sorted_indices[:n_modulated_up]
             firing_rates[pattern_idx, up_indices] = up_rate
 
-            # Assign modulated down neurons (weakest connections)
-            down_indices = sorted_indices[-n_modulated:]
-            firing_rates[pattern_idx, down_indices] = down_rate
+            # Compute down-modulation rate to keep population average at baseline
+            # Total rate = n_up * up_rate + n_down * down_rate
+            # Want: Total rate = n_total * baseline_rate
+            # So: n_down * down_rate = n_total * baseline_rate - n_up * up_rate
+            # down_rate = (n_total * baseline_rate - n_up * up_rate) / n_down
+            n_down = n_neurons_this_type - n_modulated_up
+            if n_down > 0:
+                down_rate = (
+                    n_neurons_this_type * baseline_rate - n_modulated_up * up_rate
+                ) / n_down
+            else:
+                # Edge case: all neurons modulated up
+                down_rate = baseline_rate
 
-            # Assign baseline to remaining neurons
-            baseline_indices = sorted_indices[n_modulated:-n_modulated]
-            firing_rates[pattern_idx, baseline_indices] = baseline_rate
+            # Assign down-modulated rate to all other neurons
+            down_indices = sorted_indices[n_modulated_up:]
+            firing_rates[pattern_idx, down_indices] = down_rate
 
     return firing_rates
 

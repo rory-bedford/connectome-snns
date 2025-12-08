@@ -91,11 +91,17 @@ def main(input_dir, output_dir, params_file):
     # Create Feedforward Inputs
     # =========================
 
+    # Calculate number of odour patterns from assemblies
+    num_odours = len(np.unique(assembly_ids[assembly_ids >= 0]))
+
     # Generate odour-modulated firing rate patterns (one per assembly)
+    # Target excitatory cells (index 0) when computing connection strengths
     input_firing_rates_odour = generate_odour_firing_rates(
         feedforward_weights=feedforward_weights,
         input_source_indices=input_source_indices,
+        cell_type_indices=cell_type_indices,
         assembly_ids=assembly_ids,
+        target_cell_type_idx=0,
         cell_type_names=feedforward.cell_types.names,
         odour_configs=params.get_odour_configs_dict(),
     )
@@ -114,12 +120,10 @@ def main(input_dir, output_dir, params_file):
         [input_firing_rates_odour, input_firing_rates_baseline], axis=0
     )
 
-    print(
-        f"✓ Generated {simulation.num_odours} odour patterns + 1 baseline (control) pattern"
-    )
+    print(f"✓ Generated {num_odours} odour patterns + 1 baseline (control) pattern")
     print(f"  Total patterns: {input_firing_rates.shape[0]}")
 
-    n_patterns = simulation.num_odours + 1  # Include control pattern
+    n_patterns = num_odours + 1  # Include control pattern
     batch_size = simulation.batch_size
 
     # Create Poisson dataset for multiple patterns
@@ -227,7 +231,7 @@ def main(input_dir, output_dir, params_file):
     print("=" * len("STARTING CHUNKED NETWORK SIMULATION"))
 
     print(f"Running simulation with {n_patterns} patterns × {batch_size} repeats")
-    print(f"  ({simulation.num_odours} odour patterns + 1 baseline control)")
+    print(f"  ({num_odours} odour patterns + 1 baseline control)")
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
@@ -371,8 +375,8 @@ def main(input_dir, output_dir, params_file):
 
     root.create_dataset(
         "output_spikes_odour",
-        shape=(batch_size, simulation.num_odours, total_steps, n_neurons),
-        chunks=(batch_size, simulation.num_odours, simulation.chunk_size, n_neurons),
+        shape=(batch_size, num_odours, total_steps, n_neurons),
+        chunks=(batch_size, num_odours, simulation.chunk_size, n_neurons),
         dtype=np.bool_,
         data=output_spikes_zarr[:, :-1, :, :],  # All except last pattern
     )
@@ -387,10 +391,10 @@ def main(input_dir, output_dir, params_file):
 
     root.create_dataset(
         "input_spikes_odour",
-        shape=(batch_size, simulation.num_odours, total_steps, n_input_neurons),
+        shape=(batch_size, num_odours, total_steps, n_input_neurons),
         chunks=(
             batch_size,
-            simulation.num_odours,
+            num_odours,
             simulation.chunk_size,
             n_input_neurons,
         ),
@@ -556,6 +560,7 @@ def main(input_dir, output_dir, params_file):
         n_neurons_plot=20,
         fraction=1.0,
         random_seed=42,
+        assembly_ids=assembly_ids,
     )
 
     # Save dashboards
@@ -636,6 +641,16 @@ def main(input_dir, output_dir, params_file):
         y_label="Control Rate (Hz)",
     )
 
+    # Share axis limits across subplots
+    x_min = min(ax1.get_xlim()[0], ax2.get_xlim()[0])
+    x_max = max(ax1.get_xlim()[1], ax2.get_xlim()[1])
+    y_min = min(ax1.get_ylim()[0], ax2.get_ylim()[0])
+    y_max = max(ax1.get_ylim()[1], ax2.get_ylim()[1])
+    ax1.set_xlim(x_min, x_max)
+    ax1.set_ylim(y_min, y_max)
+    ax2.set_xlim(x_min, x_max)
+    ax2.set_ylim(y_min, y_max)
+
     plt.tight_layout()
     fig.savefig(
         figures_dir / "cross_correlation_scatter.png", dpi=300, bbox_inches="tight"
@@ -677,6 +692,16 @@ def main(input_dir, output_dir, params_file):
         x_label="Pattern 0 Rate (Hz)",
         y_label="Control Rate (Hz)",
     )
+
+    # Share axis limits across subplots
+    x_min = min(ax1.get_xlim()[0], ax2.get_xlim()[0])
+    x_max = max(ax1.get_xlim()[1], ax2.get_xlim()[1])
+    y_min = min(ax1.get_ylim()[0], ax2.get_ylim()[0])
+    y_max = max(ax1.get_ylim()[1], ax2.get_ylim()[1])
+    ax1.set_xlim(x_min, x_max)
+    ax1.set_ylim(y_min, y_max)
+    ax2.set_xlim(x_min, x_max)
+    ax2.set_ylim(y_min, y_max)
 
     plt.tight_layout()
     fig.savefig(
