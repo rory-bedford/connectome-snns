@@ -91,13 +91,13 @@ def main(input_dir, output_dir, params_file):
     # Create Feedforward Inputs
     # =========================
 
-    # Generate odour-modulated firing rate patterns
+    # Generate odour-modulated firing rate patterns (one per assembly)
     input_firing_rates_odour = generate_odour_firing_rates(
-        n_input_neurons=feedforward_weights.shape[0],
+        feedforward_weights=feedforward_weights,
         input_source_indices=input_source_indices,
+        assembly_ids=assembly_ids,
         cell_type_names=feedforward.cell_types.names,
-        odour_configs=params.odours,
-        n_patterns=simulation.num_odours,
+        odour_configs=params.get_odour_configs_dict(),
     )
 
     # Generate baseline (control) firing rate pattern
@@ -105,7 +105,7 @@ def main(input_dir, output_dir, params_file):
         n_input_neurons=feedforward_weights.shape[0],
         input_source_indices=input_source_indices,
         cell_type_names=feedforward.cell_types.names,
-        odour_configs=params.odours,
+        odour_configs=params.get_odour_configs_dict(),
     )
 
     # Concatenate odour patterns with baseline pattern

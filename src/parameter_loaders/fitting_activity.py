@@ -159,6 +159,18 @@ class OdourInputConfig(BaseModel):
         """
         return int(n_neurons * self.modulation_fraction / 2.0)
 
+    def to_dict(self) -> dict:
+        """Convert to a standard dictionary.
+
+        Returns:
+            Dictionary with baseline_rate, modulation_rate, and modulation_fraction.
+        """
+        return {
+            "baseline_rate": self.baseline_rate,
+            "modulation_rate": self.modulation_rate,
+            "modulation_fraction": self.modulation_fraction,
+        }
+
 
 # =============================================================================
 # TOP-LEVEL MODELS
@@ -176,6 +188,14 @@ class TeacherActivityParams(BaseModel):
     recurrent: BaseRecurrentLayerConfig
     feedforward: BaseFeedforwardLayerConfig
     odours: Dict[str, OdourInputConfig]
+
+    def get_odour_configs_dict(self) -> dict[str, dict]:
+        """Convert odour configurations to standard dictionaries.
+
+        Returns:
+            Dictionary mapping cell type names to odour config dictionaries.
+        """
+        return {name: config.to_dict() for name, config in self.odours.items()}
 
 
 class StudentTrainingParams(BaseModel):
