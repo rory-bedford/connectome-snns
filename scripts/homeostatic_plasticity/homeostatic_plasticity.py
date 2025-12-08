@@ -673,7 +673,7 @@ def main(
         shuffle=False,
         num_workers=0,
     )
-    final_inference_input_spikes = next(iter(final_inference_dataloader))
+    final_inference_input_spikes, _ = next(iter(final_inference_dataloader))
 
     # Run inference with tqdm progress bar
     model.use_tqdm = True

@@ -431,6 +431,8 @@ class AsyncPlotter:
         epoch: int,
         weights: np.ndarray,
         weights_ff: Optional[np.ndarray] = None,
+        block: bool = True,
+        timeout: Optional[float] = 90.0,
     ) -> bool:
         """Submit a plotting job to the background thread.
 
@@ -439,9 +441,11 @@ class AsyncPlotter:
             epoch (int): Current epoch number
             weights (np.ndarray): Current network weights as numpy array
             weights_ff (Optional[np.ndarray]): Current feedforward weights as numpy array
+            block (bool): If True, wait for space in queue. If False, skip if queue full.
+            timeout (Optional[float]): Maximum time to wait if blocking (None = wait forever)
 
         Returns:
-            bool: True if job was queued, False if queue is full
+            bool: True if job was queued, False if queue full and not blocking or timeout
         """
         # Create plot job with already-copied numpy data
         plot_job = {
@@ -453,11 +457,16 @@ class AsyncPlotter:
         }
 
         try:
-            # Submit to queue (non-blocking)
-            self.plot_queue.put_nowait(plot_job)
-            return True
+            if block:
+                # Block until queue has space (with timeout)
+                self.plot_queue.put(plot_job, block=True, timeout=timeout)
+                return True
+            else:
+                # Non-blocking: skip if queue is full
+                self.plot_queue.put_nowait(plot_job)
+                return True
         except Full:
-            # Queue is full - skip this plot
+            # Queue is full - either timed out or non-blocking skip
             return False
 
     def _plot_worker(self) -> None:
@@ -476,6 +485,17 @@ class AsyncPlotter:
             except Empty:
                 # Timeout - continue waiting
                 continue
+            except Exception as e:
+                # Catch any plotting errors to prevent thread crash
+                print(f"  ⚠ Plot generation failed: {e}")
+                import traceback
+
+                traceback.print_exc()
+                # Still mark task as done to prevent hanging
+                try:
+                    self.plot_queue.task_done()
+                except ValueError:
+                    pass  # task_done called too many times
 
     def _process_plot_job(self, job: Dict[str, Any]) -> None:
         """Process a single plotting job.
@@ -523,7 +543,42 @@ class AsyncPlotter:
         elapsed = time.time() - job["timestamp"]
         print(f"  ✓ Plots saved for epoch {epoch + 1} ({elapsed:.1f}s)")
 
-    def close(self, timeout: float = 30.0) -> None:
+    def has_pending(self) -> bool:
+        """Check if there are pending plots in the queue.
+
+        Returns:
+            bool: True if plots are pending, False otherwise
+        """
+        return not self.plot_queue.empty()
+
+    def flush(self, timeout: Optional[float] = None) -> bool:
+        """Wait for all pending plots to complete.
+
+        Args:
+            timeout (Optional[float]): Maximum time to wait in seconds (None = wait forever)
+
+        Returns:
+            bool: True if all plots completed, False if timeout
+        """
+        try:
+            if timeout is None:
+                self.plot_queue.join()
+                return True
+            else:
+                # Queue.join() doesn't support timeout, so we poll
+                start_time = time.time()
+                while not self.plot_queue.empty():
+                    if time.time() - start_time > timeout:
+                        return False
+                    time.sleep(0.1)
+                # Brief wait for last task to complete
+                time.sleep(0.5)
+                return True
+        except Exception as e:
+            print(f"  ⚠ Flush encountered error: {e}")
+            return False
+
+    def close(self, timeout: float = 120.0) -> None:
         """Gracefully shutdown the async plotter.
 
         Args:
@@ -533,8 +588,13 @@ class AsyncPlotter:
         self.shutdown_event.set()
 
         # Wait for remaining jobs to complete
+        pending = self.plot_queue.qsize()
+        if pending > 0:
+            print(f"  ⏳ Waiting for {pending} pending plot(s) to complete...")
+
         try:
             self.plot_queue.join()
             self.plot_thread.join(timeout=timeout)
+            print("  ✓ All plots completed")
         except Exception as e:
-            print(f"Warning: AsyncPlotter shutdown encountered an issue: {e}")
+            print(f"  ⚠ AsyncPlotter shutdown encountered an issue: {e}")

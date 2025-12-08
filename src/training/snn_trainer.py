@@ -202,6 +202,15 @@ class SNNTrainer:
                     epoch, losses, self.best_loss, output_dir
                 )
 
+            # Periodic flush for async plotter (safety check every 10 log intervals)
+            if (
+                self.async_plotter
+                and (epoch + 1) % (self.training.log_interval * 10) == 0
+            ):
+                if self.async_plotter.has_pending():
+                    print(f"  ⚠ Flushing pending plots at epoch {epoch + 1}...")
+                    self.async_plotter.flush()
+
             # Update progress bar postfix with losses
             self._update_progress_bar(losses)
 
@@ -582,16 +591,20 @@ class SNNTrainer:
             weights = copy_tensor_optimized(self.model.weights)
             weights_ff = copy_tensor_optimized(self.model.weights_FF)
 
+            # Submit plot with blocking to ensure it doesn't get skipped
+            print("  📊 Submitting plot (will wait if queue is full)...")
             success = self.async_plotter.submit_plot(
                 plot_data=plot_data,
                 epoch=epoch,
                 weights=weights,
                 weights_ff=weights_ff,
+                block=True,
+                timeout=90.0,
             )
             if success:
-                print("  ✓ Plot job submitted for async processing")
+                print("  ✓ Plot job submitted")
             else:
-                print("  ⚠ Plot queue full, skipping plots for this checkpoint")
+                print("  ⚠ Plot submission timed out after 90s")
         elif self.plot_generator:
             # Fallback to synchronous plotting if no async plotter
             self._generate_and_save_plots(plot_data, epoch, output_dir)
