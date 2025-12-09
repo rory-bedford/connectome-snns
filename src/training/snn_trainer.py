@@ -147,6 +147,7 @@ class SNNTrainer:
                 log_dir=output_dir,
                 flush_interval=120.0,
                 max_queue_size=1,
+                wandb_logger=self.wandb_logger,
             )
 
         # Initialize async plotter if conditions are met
@@ -476,6 +477,11 @@ class SNNTrainer:
                     "scaling_factors_FF": self.model.scaling_factors_FF.detach().numpy(),
                 }
 
+            # Compute gradient stats if wandb is enabled (lightweight operation)
+            gradient_stats = {}
+            if self.wandb_logger:
+                gradient_stats = self._compute_average_gradients()
+
             # Offload stats computation to AsyncLogger's worker thread (non-blocking)
             self.metrics_logger.log_with_stats(
                 epoch=epoch + 1,
@@ -483,6 +489,7 @@ class SNNTrainer:
                 spikes=spikes,
                 model_snapshot=model_snapshot,
                 stats_computer=self.stats_computer,
+                gradient_stats=gradient_stats,
             )
         else:
             # No stats computation needed, just log losses
@@ -491,11 +498,6 @@ class SNNTrainer:
                 for loss_name, loss_value in losses.items()
             }
             self.metrics_logger.log(epoch=epoch + 1, **csv_data)
-
-        # Compute statistics for wandb if needed (wandb logging is async anyway)
-        stats = {}
-        if self.stats_computer and self.wandb_logger:
-            stats = self.stats_computer(spikes, self.model)
 
         # Save weights to disk asynchronously (copy tensors to numpy first)
         def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:
@@ -512,27 +514,6 @@ class SNNTrainer:
             recurrent_weights=recurrent_weights_np,
             feedforward_weights=feedforward_weights_np,
         )
-
-        # Log to wandb
-        if self.wandb_logger:
-            import wandb
-
-            # Create loss dict with generic naming
-            wandb_losses = {}
-            for loss_name, loss_value in losses.items():
-                wandb_losses[f"loss/{loss_name}"] = loss_value
-
-            # Compute averaged gradient statistics
-            avg_grad_stats = self._compute_average_gradients()
-
-            wandb.log(
-                {
-                    **wandb_losses,
-                    **stats,
-                    **avg_grad_stats,
-                },
-                step=epoch + 1,
-            )
 
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
         """Save initial checkpoint before training begins."""

@@ -186,6 +186,7 @@ class AsyncLogger:
     Args:
         log_dir (str | Path): Directory where log files will be saved
         flush_interval (float): Time interval in seconds between automatic flushes
+        wandb_logger (Optional[Any]): Wandb run instance for logging to Weights & Biases
 
     Example:
         >>> logger = AsyncLogger(log_dir='training_logs')
@@ -200,6 +201,7 @@ class AsyncLogger:
         log_dir: str | Path = "logs",
         flush_interval: float = 30.0,
         max_queue_size: int = 1,
+        wandb_logger: Optional[Any] = None,
     ):
         """Initialize the async logger.
 
@@ -207,6 +209,7 @@ class AsyncLogger:
             log_dir (str | Path): Directory where log files will be saved
             flush_interval (float): Time interval in seconds between automatic flushes
             max_queue_size (int): Maximum queue size (blocks when full for backpressure)
+            wandb_logger (Optional[Any]): Wandb run instance for logging to Weights & Biases
         """
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +218,7 @@ class AsyncLogger:
         self.queue: Queue = Queue(maxsize=max_queue_size)
         self.csv_buffer: list[dict[str, Any]] = []
         self.flush_interval = flush_interval
+        self.wandb_logger = wandb_logger
         self._running = True
 
         # Initialize CSV file with header
@@ -254,13 +258,15 @@ class AsyncLogger:
         """Compute statistics and log them (runs in worker thread).
 
         Args:
-            data (dict): Contains epoch, losses, spikes, model_snapshot, and stats_computer callable
+            data (dict): Contains epoch, losses, spikes, model_snapshot, stats_computer callable,
+                        and optional gradient_stats
         """
         epoch = data["epoch"]
         losses = data["losses"]
         spikes = data["spikes"]
         model_snapshot = data["model_snapshot"]
         stats_computer = data["stats_computer"]
+        gradient_stats = data.get("gradient_stats", {})
 
         # Compute stats in background thread (this is the expensive operation)
         # model_snapshot is a dict of already-copied numpy arrays, not the live model
@@ -276,6 +282,24 @@ class AsyncLogger:
 
         # Buffer the complete row
         self._log_csv_row({"epoch": epoch, **csv_data})
+
+        # Log to wandb if available
+        if self.wandb_logger:
+            import wandb
+
+            # Create loss dict with generic naming
+            wandb_losses = {}
+            for loss_name, loss_value in losses.items():
+                wandb_losses[f"loss/{loss_name}"] = loss_value
+
+            wandb.log(
+                {
+                    **wandb_losses,
+                    **stats,
+                    **gradient_stats,
+                },
+                step=epoch,
+            )
 
     def _log_csv_row(self, data: dict[str, Any]):
         """Buffer a row for CSV output.
@@ -383,6 +407,7 @@ class AsyncLogger:
         spikes: np.ndarray,
         model_snapshot: dict[str, np.ndarray],
         stats_computer: Callable,
+        gradient_stats: Optional[dict[str, float]] = None,
     ):
         """Log losses and compute stats asynchronously.
 
@@ -396,6 +421,7 @@ class AsyncLogger:
             spikes (np.ndarray): Accumulated spike data as numpy array
             model_snapshot (dict): Dictionary of model parameters as numpy arrays
             stats_computer (Callable): Function that computes statistics from spikes and model_snapshot
+            gradient_stats (Optional[dict]): Pre-computed gradient statistics for wandb
         """
         data = {
             "epoch": epoch,
@@ -403,6 +429,7 @@ class AsyncLogger:
             "spikes": spikes.copy(),  # Copy to avoid data races
             "model_snapshot": model_snapshot,
             "stats_computer": stats_computer,
+            "gradient_stats": gradient_stats or {},
         }
         self.queue.put(("compute_stats", data), block=True)
 
