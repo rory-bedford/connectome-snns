@@ -68,7 +68,7 @@ class VanRossumLoss(nn.Module):
 
         Args:
             output_spikes (torch.Tensor): Output spike trains.
-                Shape: (batch, time, n_neurons).
+                Shape: (batch, time, n_neurons) or (batch, patterns, time, n_neurons).
                 Can be bool or float.
             target_spikes (torch.Tensor): Target spike trains (same shape as output_spikes).
                 Can be bool or float.
@@ -80,8 +80,15 @@ class VanRossumLoss(nn.Module):
         output_spikes = output_spikes.float()
         target_spikes = target_spikes.float()
 
-        # Get dimensions
-        batch, time, n_neurons = output_spikes.shape
+        # Handle both 3D (batch, time, neurons) and 4D (batch, patterns, time, neurons)
+        if output_spikes.ndim == 4:
+            # Flatten batch and patterns: (batch, patterns, time, neurons) -> (batch*patterns, time, neurons)
+            batch, patterns, time, n_neurons = output_spikes.shape
+            output_spikes = output_spikes.reshape(batch * patterns, time, n_neurons)
+            target_spikes = target_spikes.reshape(batch * patterns, time, n_neurons)
+            batch = batch * patterns
+        else:
+            batch, time, n_neurons = output_spikes.shape
 
         # Reshape for conv1d: (batch * n_neurons, 1, time)
         output_conv = output_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
@@ -165,12 +172,19 @@ class CVLoss(nn.Module):
         Compute CV loss for spike trains.
 
         Args:
-            output_spikes (torch.Tensor): Output spike trains (batch, time, n_neurons).
+            output_spikes (torch.Tensor): Output spike trains.
+                Shape: (batch, time, n_neurons) or (batch, patterns, time, n_neurons).
 
         Returns:
             torch.Tensor: Mean L2 loss between actual and target CVs (ignoring neurons with <3 spikes).
         """
-        batch, time, n_neurons = output_spikes.shape
+        # Handle both 3D and 4D inputs by flattening leading dimensions
+        if output_spikes.ndim == 4:
+            # Flatten batch and patterns: (batch, patterns, time, neurons) -> (batch*patterns, time, neurons)
+            batch, patterns, time, n_neurons = output_spikes.shape
+            output_spikes = output_spikes.reshape(batch * patterns, time, n_neurons)
+        else:
+            batch, time, n_neurons = output_spikes.shape
 
         # Pre-allocate tensor for CVs (one per neuron, not per batch)
         cvs_tensor = torch.zeros(n_neurons, device=output_spikes.device)
