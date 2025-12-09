@@ -14,27 +14,41 @@ def compute_spike_train_cv(
     divided by the mean ISI. CV is computed separately for each neuron in each batch.
 
     Args:
-        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
+        spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons)
+            or (batch_size, n_patterns, n_steps, n_neurons).
         dt (float): Time step duration in the desired time units (e.g., seconds or milliseconds).
             Since CV is dimensionless, the units cancel out, but consistent units should be used.
             Defaults to 1.0.
 
     Returns:
-        NDArray[np.float32]: CV values of shape (batch_size, n_neurons).
+        NDArray[np.float32]: CV values of shape (batch_size, n_neurons) or (batch_size, n_patterns, n_neurons).
             Returns NaN for neurons with fewer than 3 spikes.
     """
-    batch_size, n_steps, n_neurons = spike_trains.shape
+    # Handle both 3D and 4D inputs by flattening leading dimensions for processing
+    if spike_trains.ndim == 4:
+        batch_size, n_patterns, n_steps, n_neurons = spike_trains.shape
+        # Flatten batch and patterns: (batch, patterns, steps, neurons) -> (batch*patterns, steps, neurons)
+        spike_trains_flat = spike_trains.reshape(
+            batch_size * n_patterns, n_steps, n_neurons
+        )
+        output_shape = (batch_size, n_patterns, n_neurons)
+        batch_size_flat = batch_size * n_patterns
+    else:
+        batch_size, n_steps, n_neurons = spike_trains.shape
+        spike_trains_flat = spike_trains
+        output_shape = (batch_size, n_neurons)
+        batch_size_flat = batch_size
 
     # Initialize CV values with NaN
-    cv_values = np.full((batch_size, n_neurons), np.nan, dtype=np.float32)
+    cv_values = np.full((batch_size_flat, n_neurons), np.nan, dtype=np.float32)
 
     # Create time indices
     time_indices = np.arange(n_steps, dtype=np.float32) * dt
 
-    for batch_idx in range(batch_size):
+    for batch_idx in range(batch_size_flat):
         for neuron_idx in range(n_neurons):
             # Find time indices where spikes occur for this neuron
-            spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
+            spike_indices = np.where(spike_trains_flat[batch_idx, :, neuron_idx] > 0)[0]
 
             # Need at least 3 spikes to compute CV with unbiased std (at least 2 ISIs)
             if len(spike_indices) < 3:
@@ -51,6 +65,10 @@ def compute_spike_train_cv(
             if mean_isi > 0:
                 std_isi = isis.std(ddof=1)  # unbiased std
                 cv_values[batch_idx, neuron_idx] = std_isi / mean_isi
+
+    # Reshape back to original dimensions if 4D input
+    if spike_trains.ndim == 4:
+        cv_values = cv_values.reshape(output_shape)
 
     return cv_values
 
