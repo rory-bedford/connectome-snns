@@ -195,17 +195,24 @@ class AsyncLogger:
         >>> logger.close()
     """
 
-    def __init__(self, log_dir: str | Path = "logs", flush_interval: float = 5.0):
+    def __init__(
+        self,
+        log_dir: str | Path = "logs",
+        flush_interval: float = 30.0,
+        max_queue_size: int = 1,
+    ):
         """Initialize the async logger.
 
         Args:
             log_dir (str | Path): Directory where log files will be saved
             flush_interval (float): Time interval in seconds between automatic flushes
+            max_queue_size (int): Maximum queue size (blocks when full for backpressure)
         """
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        self.queue: Queue = Queue()
+        # Use bounded queue for aggressive flushing (blocks when full)
+        self.queue: Queue = Queue(maxsize=max_queue_size)
         self.csv_buffer: list[dict[str, Any]] = []
         self.flush_interval = flush_interval
         self._running = True
@@ -214,7 +221,7 @@ class AsyncLogger:
         self.csv_path = self.log_dir / "training_metrics.csv"
         self.csv_fieldnames: Optional[list[str]] = None
 
-        # Start worker thread
+        # Start worker thread immediately
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
 
@@ -238,8 +245,37 @@ class AsyncLogger:
                 self._save_weights(data)
             elif metric_type == "flush":
                 self._flush()
+            elif metric_type == "compute_stats":
+                self._compute_and_log_stats(data)
 
             self.queue.task_done()
+
+    def _compute_and_log_stats(self, data: dict[str, Any]):
+        """Compute statistics and log them (runs in worker thread).
+
+        Args:
+            data (dict): Contains epoch, losses, spikes, model_snapshot, and stats_computer callable
+        """
+        epoch = data["epoch"]
+        losses = data["losses"]
+        spikes = data["spikes"]
+        model_snapshot = data["model_snapshot"]
+        stats_computer = data["stats_computer"]
+
+        # Compute stats in background thread (this is the expensive operation)
+        # model_snapshot is a dict of already-copied numpy arrays, not the live model
+        stats = stats_computer(spikes, model_snapshot)
+
+        # Prepare CSV data with _loss suffix for loss names
+        csv_data = {}
+        for loss_name, loss_value in losses.items():
+            csv_data[f"{loss_name}_loss"] = loss_value
+
+        # Add stats
+        csv_data.update(stats)
+
+        # Buffer the complete row
+        self._log_csv_row({"epoch": epoch, **csv_data})
 
     def _log_csv_row(self, data: dict[str, Any]):
         """Buffer a row for CSV output.
@@ -326,17 +362,49 @@ class AsyncLogger:
         while self._running:
             time.sleep(self.flush_interval)
             if self._running:
-                self.queue.put(("flush", None))
+                self.queue.put(("flush", None), block=True)
 
     def log(self, epoch: int, **metrics: float):
-        """Log metrics for a given epoch (non-blocking).
+        """Log metrics for a given epoch.
+
+        Blocks if queue is full (provides backpressure when worker is busy).
 
         Args:
             epoch (int): Epoch/step number
             **metrics: Arbitrary keyword arguments for metric names and values
         """
         data = {"epoch": epoch, **metrics}
-        self.queue.put(("csv_row", data))
+        self.queue.put(("csv_row", data), block=True)
+
+    def log_with_stats(
+        self,
+        epoch: int,
+        losses: dict[str, float],
+        spikes: np.ndarray,
+        model_snapshot: dict[str, np.ndarray],
+        stats_computer: Callable,
+    ):
+        """Log losses and compute stats asynchronously.
+
+        This method offloads the expensive stats computation (CV, firing rates)
+        to the background worker thread. Blocks if queue is full, providing
+        backpressure when the worker thread is busy computing stats.
+
+        Args:
+            epoch (int): Epoch/step number
+            losses (dict): Dictionary of loss values
+            spikes (np.ndarray): Accumulated spike data as numpy array
+            model_snapshot (dict): Dictionary of model parameters as numpy arrays
+            stats_computer (Callable): Function that computes statistics from spikes and model_snapshot
+        """
+        data = {
+            "epoch": epoch,
+            "losses": losses,
+            "spikes": spikes.copy(),  # Copy to avoid data races
+            "model_snapshot": model_snapshot,
+            "stats_computer": stats_computer,
+        }
+        self.queue.put(("compute_stats", data), block=True)
 
     def save_weights(
         self,
@@ -345,6 +413,8 @@ class AsyncLogger:
         feedforward_weights: Optional[np.ndarray] = None,
     ):
         """Save network weights to disk asynchronously.
+
+        Blocks if queue is full (provides backpressure when worker is busy).
 
         Args:
             epoch (int): Epoch/step number
@@ -360,11 +430,11 @@ class AsyncLogger:
         if feedforward_weights is not None:
             weights_data["feedforward_weights"] = feedforward_weights.copy()
 
-        self.queue.put(("weights", weights_data))
+        self.queue.put(("weights", weights_data), block=True)
 
     def flush(self):
         """Force an immediate flush of all buffered data."""
-        self.queue.put(("flush", None))
+        self.queue.put(("flush", None), block=True)
         self.queue.join()
 
     def close(self):

@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any, Callable
 from collections import deque
 from matplotlib import pyplot as plt
 
-from optimisation.utils import save_checkpoint, AsyncPlotter
+from optimisation.utils import save_checkpoint, AsyncPlotter, AsyncLogger
 
 
 class SNNTrainer:
@@ -33,7 +33,6 @@ class SNNTrainer:
         loss_weights (Dict[str, float]): Dict with weights for each loss function
         params: Training parameters object
         device (str): Device string ('cpu' or 'cuda')
-        metrics_logger: Initialized async logger
         wandb_logger (Optional[Any]): Initialized wandb run object (optional)
         progress_bar (Optional[Any]): Initialized tqdm progress bar (optional)
         plot_generator (Optional[Callable]): Optional function for generating plots
@@ -52,7 +51,6 @@ class SNNTrainer:
         loss_weights: Dict[str, float],
         params: Any,
         device: str,
-        metrics_logger: Any,
         wandb_logger: Optional[Any] = None,
         progress_bar: Optional[Any] = None,
         plot_generator: Optional[Callable] = None,
@@ -69,7 +67,6 @@ class SNNTrainer:
         self.loss_weights = loss_weights
         self.params = params
         self.device = device
-        self.metrics_logger = metrics_logger
         self.wandb_logger = wandb_logger
         self.pbar = progress_bar
         self.plot_generator = plot_generator
@@ -87,6 +84,9 @@ class SNNTrainer:
         if self.plot_generator:
             # Will be initialized in train() method with output_dir
             pass
+
+        # Initialize async logger (will be initialized in train() method with output_dir)
+        self.metrics_logger = None
 
         # Training state
         self.initial_states = {"v": None, "g": None, "g_FF": None}
@@ -140,6 +140,14 @@ class SNNTrainer:
 
         # Initialize gradient accumulation
         self.optimizer.zero_grad(set_to_none=True)
+
+        # Initialize async logger if not already initialized
+        if output_dir and self.metrics_logger is None:
+            self.metrics_logger = AsyncLogger(
+                log_dir=output_dir,
+                flush_interval=120.0,
+                max_queue_size=1,
+            )
 
         # Initialize async plotter if conditions are met
         if self.plot_generator and output_dir and self.async_plotter is None:
@@ -450,21 +458,44 @@ class SNNTrainer:
             spikes: Accumulated spike data as numpy array (already on CPU)
             epoch: Current epoch number
         """
-        # Compute statistics if function provided
-        stats = {}
+        # Capture model parameters snapshot for async stats computation
         if self.stats_computer:
+            # Copy model parameters to numpy (on CPU) to avoid data races
+            if self.device == "cuda":
+                model_snapshot = {
+                    "scaling_factors": self.model.scaling_factors.detach()
+                    .cpu()
+                    .numpy(),
+                    "scaling_factors_FF": self.model.scaling_factors_FF.detach()
+                    .cpu()
+                    .numpy(),
+                }
+            else:
+                model_snapshot = {
+                    "scaling_factors": self.model.scaling_factors.detach().numpy(),
+                    "scaling_factors_FF": self.model.scaling_factors_FF.detach().numpy(),
+                }
+
+            # Offload stats computation to AsyncLogger's worker thread (non-blocking)
+            self.metrics_logger.log_with_stats(
+                epoch=epoch + 1,
+                losses=losses,
+                spikes=spikes,
+                model_snapshot=model_snapshot,
+                stats_computer=self.stats_computer,
+            )
+        else:
+            # No stats computation needed, just log losses
+            csv_data = {
+                f"{loss_name}_loss": loss_value
+                for loss_name, loss_value in losses.items()
+            }
+            self.metrics_logger.log(epoch=epoch + 1, **csv_data)
+
+        # Compute statistics for wandb if needed (wandb logging is async anyway)
+        stats = {}
+        if self.stats_computer and self.wandb_logger:
             stats = self.stats_computer(spikes, self.model)
-
-        # Prepare CSV data with _loss suffix for loss names
-        csv_data = {}
-        for loss_name, loss_value in losses.items():
-            csv_data[f"{loss_name}_loss"] = loss_value
-
-        # Add stats without modification
-        csv_data.update(stats)
-
-        # Log to CSV with modified loss names
-        self.metrics_logger.log(epoch=epoch + 1, **csv_data)
 
         # Save weights to disk asynchronously (copy tensors to numpy first)
         def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:

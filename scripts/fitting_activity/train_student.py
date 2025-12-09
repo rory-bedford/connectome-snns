@@ -18,7 +18,7 @@ from optimisation.loss_functions import (
     VanRossumLoss,
     SilentNeuronPenalty,
 )
-from optimisation.utils import load_checkpoint, AsyncLogger
+from optimisation.utils import load_checkpoint
 from parameter_loaders import StudentTrainingParams
 from training import SNNTrainer
 import toml
@@ -243,9 +243,6 @@ def main(
     # Setup Loggers
     # =============
 
-    # Initialize async logger for non-blocking metric logging
-    metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
-
     # Setup wandb if config provided (enabled flag already filtered by experiment_runners)
     wandb_run = None
     if wandb_config:
@@ -348,12 +345,14 @@ def main(
         }
 
     # Define stats computer function (captures model and target scaling factors in closure)
-    def stats_computer(spikes, model):
+    def stats_computer(spikes, model_snapshot):
         """Compute summary statistics from network activity.
 
         Args:
             spikes: Spike array of shape (batch, time, neurons) or (batch, patterns, time, neurons)
-            model: The network model (for accessing current scaling factors)
+            model_snapshot: Dictionary containing model parameters as numpy arrays
+                           (keys: "scaling_factors", "scaling_factors_FF")
+                           or the model object itself (for backward compatibility with wandb logging)
 
         Returns:
             Dictionary with keys: metric/stat/cell_type and scaling_factors/layer/metric/connection
@@ -421,8 +420,16 @@ def main(
 
         # Add scaling factor tracking
         # Scaling factors are 2D: (n_source_types, n_target_types)
-        current_recurrent_sf = model.scaling_factors.detach().cpu().numpy()
-        current_feedforward_sf = model.scaling_factors_FF.detach().cpu().numpy()
+        # Handle both dict (async logging) and model object (wandb sync logging)
+        if isinstance(model_snapshot, dict):
+            current_recurrent_sf = model_snapshot["scaling_factors"]
+            current_feedforward_sf = model_snapshot["scaling_factors_FF"]
+        else:
+            # Backward compatibility: model_snapshot is actually the model object
+            current_recurrent_sf = model_snapshot.scaling_factors.detach().cpu().numpy()
+            current_feedforward_sf = (
+                model_snapshot.scaling_factors_FF.detach().cpu().numpy()
+            )
 
         # Get cell type names
         target_cell_types = params.recurrent.cell_types.names
@@ -608,7 +615,6 @@ def main(
         loss_weights=loss_weights,
         params=params,
         device=device,
-        metrics_logger=metrics_logger,
         wandb_logger=wandb_run,
         progress_bar=pbar,
         plot_generator=plot_generator,
@@ -798,7 +804,7 @@ def main(
 
     # Close async logger and flush all remaining data
     print("Flushing metrics to disk...")
-    metrics_logger.close()
+    trainer.metrics_logger.close()
 
     # Finish wandb run
     if wandb_run is not None:
@@ -806,6 +812,6 @@ def main(
 
     print(f"\n✓ Checkpoints: {output_dir / 'checkpoints'}")
     print(f"✓ Figures: {output_dir / 'figures'}")
-    print(f"✓ Metrics: {metrics_logger.log_dir / 'training_metrics.csv'}")
+    print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
     print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")
