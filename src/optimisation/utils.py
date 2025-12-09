@@ -261,6 +261,10 @@ class AsyncLogger:
             data (dict): Contains epoch, losses, spikes, model_snapshot, stats_computer callable,
                         and optional gradient_stats
         """
+        import time
+
+        start_time = time.time()
+
         epoch = data["epoch"]
         losses = data["losses"]
         spikes = data["spikes"]
@@ -268,9 +272,11 @@ class AsyncLogger:
         stats_computer = data["stats_computer"]
         gradient_stats = data.get("gradient_stats", {})
 
+        print(f"[WORKER] Starting stats computation for epoch {epoch}")
         # Compute stats in background thread (this is the expensive operation)
         # model_snapshot is a dict of already-copied numpy arrays, not the live model
         stats = stats_computer(spikes, model_snapshot)
+        print(f"[WORKER] Stats computed in {time.time() - start_time:.2f}s")
 
         # Prepare CSV data with _loss suffix for loss names
         csv_data = {}
@@ -281,12 +287,14 @@ class AsyncLogger:
         csv_data.update(stats)
 
         # Buffer the complete row
+        print(f"[WORKER] Buffering CSV row for epoch {epoch}")
         self._log_csv_row({"epoch": epoch, **csv_data})
 
         # Log to wandb if available
         if self.wandb_logger:
             import wandb
 
+            print(f"[WORKER] Logging to wandb for epoch {epoch}")
             # Create loss dict with generic naming
             wandb_losses = {}
             for loss_name, loss_value in losses.items():
@@ -300,6 +308,9 @@ class AsyncLogger:
                 },
                 step=epoch,
             )
+            print(f"[WORKER] Wandb log completed for epoch {epoch}")
+
+        print(f"[WORKER] Total time: {time.time() - start_time:.2f}s")
 
     def _log_csv_row(self, data: dict[str, Any]):
         """Buffer a row for CSV output.

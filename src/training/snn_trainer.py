@@ -146,7 +146,7 @@ class SNNTrainer:
             self.metrics_logger = AsyncLogger(
                 log_dir=output_dir,
                 flush_interval=120.0,
-                max_queue_size=1,
+                max_queue_size=3,
                 wandb_logger=self.wandb_logger,
             )
 
