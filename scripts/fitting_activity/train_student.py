@@ -376,20 +376,22 @@ def main(
         duration_s = time * spike_dataset.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
-        # Vectorized CV computation (averages batches internally)
+        # CV computation (loops over all batch, pattern, neuron combinations)
         from analysis.firing_statistics import compute_spike_train_cv
 
         cv_values = compute_spike_train_cv(
             spikes, dt=spike_dataset.dt
-        )  # Shape: (neurons,) or (patterns, neurons)
+        )  # Shape: (batch, neurons) or (batch, patterns, neurons)
 
         # Suppress warning for neurons with no spikes (expected early in training)
         with np.errstate(invalid="ignore"):
-            # Average over pattern dimension if present
-            if cv_values.ndim == 2:
-                cv_per_neuron = np.nanmean(cv_values, axis=0)  # (neurons,)
+            # Average over batch and pattern dimensions
+            if cv_values.ndim == 3:
+                # (batch, patterns, neurons) -> (neurons,)
+                cv_per_neuron = np.nanmean(cv_values, axis=(0, 1))
             else:
-                cv_per_neuron = cv_values  # Already (neurons,)
+                # (batch, neurons) -> (neurons,)
+                cv_per_neuron = np.nanmean(cv_values, axis=0)
 
         # Compute statistics by cell type
         stats = {}
