@@ -148,6 +148,7 @@ class SNNTrainer:
                 output_dir=output_dir,
                 wandb_logger=self.wandb_logger,
                 max_queue_size=1,
+                blocking_mode=False,
             )
 
         # Save initial checkpoint at epoch 0 if starting from beginning
@@ -585,7 +586,11 @@ class SNNTrainer:
                     return tensor.detach().cpu().numpy()
 
             # Take only first batch (index 0) to reduce data size, keeping batch dimension
-            plot_data = {key: arr[0:1, ...] for key, arr in plot_data.items()}
+            # Only slice if array has data and is multi-dimensional
+            plot_data = {
+                key: arr[0:1, ...] if arr.size > 0 and arr.ndim > 1 else arr
+                for key, arr in plot_data.items()
+            }
 
             # Get weights as separate parameters
             weights = copy_tensor_optimized(self.model.weights)
@@ -777,9 +782,17 @@ class SNNTrainer:
 
     def _should_store_for_plot(self, epoch: int) -> bool:
         """Check if data should be stored for plotting."""
-        # Only store if plot generator exists and plot_size is configured
-        if not self.plot_generator or not hasattr(self.training, "plot_size"):
+        # Only store if plot generator exists
+        if not self.plot_generator:
             return False
+
+        # If plot_generator exists, plot_size must be configured
+        if not hasattr(self.training, "plot_size"):
+            raise AttributeError(
+                "plot_size must be configured in training parameters when using plot_generator. "
+                "Add 'plot_size = N' to the [training] section of your config file, "
+                "where N is the number of chunks to accumulate for plotting (must be <= checkpoint_interval)."
+            )
 
         epochs_until_checkpoint = self.training.checkpoint_interval - (
             (epoch + 1) % self.training.checkpoint_interval

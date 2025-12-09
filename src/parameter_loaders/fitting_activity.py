@@ -72,6 +72,7 @@ class StudentTrainingConfig(BaseModel):
     chunks_per_update: int
     log_interval: int
     checkpoint_interval: int
+    plot_size: int
     mixed_precision: bool
     weight_perturbation_variance: float
 

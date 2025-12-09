@@ -388,6 +388,7 @@ class AsyncPlotter:
         output_dir (str | Path): Base directory where plots will be saved
         wandb_logger (Optional[Any]): Wandb logger for uploading plots (optional)
         max_queue_size (int): Maximum number of pending plot jobs
+        blocking_mode (bool): If True, run plots synchronously for debugging (default: False)
 
     Example:
         >>> plotter = AsyncPlotter(my_plot_function, output_dir='./plots')
@@ -403,6 +404,7 @@ class AsyncPlotter:
         output_dir: str | Path,
         wandb_logger: Optional[Any] = None,
         max_queue_size: int = 3,
+        blocking_mode: bool = False,
     ):
         """Initialize the async plotter.
 
@@ -411,10 +413,17 @@ class AsyncPlotter:
             output_dir (str | Path): Base directory where plots will be saved
             wandb_logger (Optional[Any]): Wandb logger for uploading plots
             max_queue_size (int): Maximum number of pending plot jobs
+            blocking_mode (bool): If True, run plots synchronously for debugging
         """
         self.plot_generator = plot_generator
         self.output_dir = Path(output_dir)
         self.wandb_logger = wandb_logger
+        self.blocking_mode = blocking_mode
+
+        if self.blocking_mode:
+            print("⚠️  AsyncPlotter running in BLOCKING MODE for debugging")
+            # Don't initialize queue or thread in blocking mode
+            return
 
         # Thread-safe queue for plot jobs
         self.plot_queue: Queue = Queue(maxsize=max_queue_size)
@@ -456,6 +465,23 @@ class AsyncPlotter:
             "timestamp": time.time(),
         }
 
+        # In blocking mode, execute plot job immediately (synchronously)
+        if self.blocking_mode:
+            print(f"🔍 [DEBUG] Executing plot job synchronously for epoch {epoch}")
+            try:
+                self._process_plot_job(plot_job)
+                print(f"✓ [DEBUG] Plot job completed successfully for epoch {epoch}")
+                return True
+            except Exception as e:
+                print(f"❌ [DEBUG] Plot job FAILED for epoch {epoch}")
+                print(f"Error type: {type(e).__name__}")
+                print(f"Error message: {e}")
+                import traceback
+
+                traceback.print_exc()
+                return False
+
+        # Normal async mode
         try:
             if block:
                 # Block until queue has space (with timeout)
@@ -549,6 +575,8 @@ class AsyncPlotter:
         Returns:
             bool: True if plots are pending, False otherwise
         """
+        if self.blocking_mode:
+            return False
         return not self.plot_queue.empty()
 
     def flush(self, timeout: Optional[float] = None) -> bool:
@@ -560,6 +588,9 @@ class AsyncPlotter:
         Returns:
             bool: True if all plots completed, False if timeout
         """
+        if self.blocking_mode:
+            return True
+
         try:
             if timeout is None:
                 self.plot_queue.join()
@@ -584,6 +615,10 @@ class AsyncPlotter:
         Args:
             timeout (float): Maximum time to wait for shutdown in seconds
         """
+        if self.blocking_mode:
+            print("✓ [DEBUG] AsyncPlotter closed (blocking mode)")
+            return
+
         # Signal shutdown
         self.shutdown_event.set()
 

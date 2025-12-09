@@ -18,6 +18,7 @@ epochs = 100                           # Total number of loops through the train
 chunks_per_update = 20                 # Number of loss calculations per gradient step
 log_interval = 200                     # Log metrics to CSV and wandb every N chunks
 checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
+plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
 
