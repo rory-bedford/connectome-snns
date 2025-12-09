@@ -499,22 +499,6 @@ class SNNTrainer:
             }
             self.metrics_logger.log(epoch=epoch + 1, **csv_data)
 
-        # Save weights to disk asynchronously (copy tensors to numpy first)
-        def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:
-            if self.device == "cuda":
-                return tensor.detach().cpu().pin_memory().numpy()
-            else:
-                return tensor.detach().cpu().numpy()
-
-        recurrent_weights_np = copy_tensor_optimized(self.model.weights)
-        feedforward_weights_np = copy_tensor_optimized(self.model.weights_FF)
-
-        self.metrics_logger.save_weights(
-            epoch=epoch + 1,
-            recurrent_weights=recurrent_weights_np,
-            feedforward_weights=feedforward_weights_np,
-        )
-
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
         """Save initial checkpoint before training begins."""
         # Create initial losses with infinity values for all configured loss functions
