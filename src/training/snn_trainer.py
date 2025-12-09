@@ -145,7 +145,7 @@ class SNNTrainer:
         if output_dir and self.metrics_logger is None:
             self.metrics_logger = AsyncLogger(
                 log_dir=output_dir,
-                flush_interval=120.0,
+                flush_interval=30.0,
                 max_queue_size=1,
                 wandb_logger=self.wandb_logger,
             )
