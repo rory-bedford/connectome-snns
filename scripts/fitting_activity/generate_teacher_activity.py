@@ -373,12 +373,22 @@ def main(input_dir, output_dir, params_file):
     # Odour patterns: indices 0 to num_odours-1
     # Control pattern: index num_odours (last pattern)
 
+    # Save combined array as output_spikes_all for reference
     root.create_dataset(
-        "output_spikes_odour",
+        "output_spikes_all",
+        shape=(batch_size, n_patterns, total_steps, n_neurons),
+        chunks=(batch_size, n_patterns, simulation.chunk_size, n_neurons),
+        dtype=np.bool_,
+        data=output_spikes_zarr[:, :, :, :],  # All patterns
+    )
+
+    # Main output_spikes array = odour only (for training)
+    root.create_dataset(
+        "output_spikes",
         shape=(batch_size, num_odours, total_steps, n_neurons),
         chunks=(batch_size, num_odours, simulation.chunk_size, n_neurons),
         dtype=np.bool_,
-        data=output_spikes_zarr[:, :-1, :, :],  # All except last pattern
+        data=output_spikes_zarr[:, :-1, :, :],  # All except last pattern (odour only)
     )
 
     root.create_dataset(
@@ -386,11 +396,12 @@ def main(input_dir, output_dir, params_file):
         shape=(batch_size, 1, total_steps, n_neurons),
         chunks=(batch_size, 1, simulation.chunk_size, n_neurons),
         dtype=np.bool_,
-        data=output_spikes_zarr[:, -1:, :, :],  # Last pattern only
+        data=output_spikes_zarr[:, -1:, :, :],  # Last pattern only (control)
     )
 
+    # Main input_spikes array = odour only (for training)
     root.create_dataset(
-        "input_spikes_odour",
+        "input_spikes",
         shape=(batch_size, num_odours, total_steps, n_input_neurons),
         chunks=(
             batch_size,
@@ -399,7 +410,7 @@ def main(input_dir, output_dir, params_file):
             n_input_neurons,
         ),
         dtype=np.bool_,
-        data=input_spikes_zarr[:, :-1, :, :],  # All except last pattern
+        data=input_spikes_zarr[:, :-1, :, :],  # All except last pattern (odour only)
     )
 
     root.create_dataset(
@@ -407,12 +418,12 @@ def main(input_dir, output_dir, params_file):
         shape=(batch_size, 1, total_steps, n_input_neurons),
         chunks=(batch_size, 1, simulation.chunk_size, n_input_neurons),
         dtype=np.bool_,
-        data=input_spikes_zarr[:, -1:, :, :],  # Last pattern only
+        data=input_spikes_zarr[:, -1:, :, :],  # Last pattern only (control)
     )
 
     # Save input firing rates (separated)
     root.create_dataset(
-        "input_firing_rates_odour",
+        "input_firing_rates",
         shape=input_firing_rates_odour.shape,
         dtype=input_firing_rates_odour.dtype,
         data=input_firing_rates_odour,
@@ -426,13 +437,12 @@ def main(input_dir, output_dir, params_file):
     )
 
     print(f"\n✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
-    print(f"  - output_spikes (combined): {output_spikes_zarr.shape}")
-    print(f"  - output_spikes_odour: {root['output_spikes_odour'].shape}")
+    print(f"  - output_spikes_all (combined): {root['output_spikes_all'].shape}")
+    print(f"  - output_spikes (odour only): {root['output_spikes'].shape}")
     print(f"  - output_spikes_control: {root['output_spikes_control'].shape}")
-    print(f"  - input_spikes (combined): {input_spikes_zarr.shape}")
-    print(f"  - input_spikes_odour: {root['input_spikes_odour'].shape}")
+    print(f"  - input_spikes (odour only): {root['input_spikes'].shape}")
     print(f"  - input_spikes_control: {root['input_spikes_control'].shape}")
-    print(f"  - input_firing_rates_odour: {input_firing_rates_odour.shape}")
+    print(f"  - input_firing_rates (odour): {input_firing_rates_odour.shape}")
     print(f"  - input_firing_rates_control: {input_firing_rates_baseline.shape}")
 
     # Free GPU memory

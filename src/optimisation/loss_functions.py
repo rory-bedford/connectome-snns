@@ -213,24 +213,32 @@ class FiringRateLoss(nn.Module):
     required_inputs = ["output_spikes"]
     requires_target = False
 
-    def __init__(self, target_rate: torch.Tensor, dt: float):
+    def __init__(self, target_rate: torch.Tensor, dt: float, epsilon: float = 1.0):
         """
         Firing rate loss for spike trains.
 
-        Computes firing rate (Hz) for each batch independently and compares to
+        Pools spike data over batch dimension, computes firing rates, then compares to
         target values using normalized MSE loss. Each neuron's squared error is divided
-        by its target rate to give equal relative importance.
+        by its target rate (plus epsilon) to give equal relative importance.
 
-        Expects input shape: (batch, time, n_neurons).
+        Supports two modes:
+        - No patterns: (batch, time, neurons) input with (neurons,) target
+          → pools over batch, computes rates per neuron
+        - With patterns: (batch, patterns, time, neurons) input with (patterns, neurons) target
+          → pools over batch for each pattern separately, computes rates per pattern per neuron
 
         Args:
             target_rate (torch.Tensor): Target firing rates for each neuron in Hz.
-                Shape: (n_neurons,) - will be broadcast across batches.
+                Shape: (n_neurons,) for no-pattern mode, or (n_patterns, n_neurons) for pattern mode.
             dt (float): Simulation time step (ms).
+            epsilon (float): Regularization term added to target_rate in denominator to prevent
+                numerical instability. Default 1.0 Hz provides reasonable normalization even for
+                near-zero target rates.
         """
         super(FiringRateLoss, self).__init__()
         self.register_buffer("target_rate", target_rate)
         self.dt = dt
+        self.epsilon = epsilon
 
     def forward(self, output_spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -238,26 +246,43 @@ class FiringRateLoss(nn.Module):
 
         Args:
             output_spikes (torch.Tensor): Output spike trains.
-                Shape: (batch, time, n_neurons).
+                Shape: (batch, time, n_neurons) or (batch, patterns, time, n_neurons).
 
         Returns:
             torch.Tensor: Mean normalized MSE loss between actual and target firing rates.
         """
-        # Sum over time dimension (always second-to-last)
-        spike_counts = output_spikes.sum(dim=-2)  # (..., n_neurons)
+        # Sum over time dimension (always at position -2)
+        spike_counts = output_spikes.sum(
+            dim=-2
+        )  # (batch, neurons) or (batch, patterns, neurons)
+
+        # Average over batch dimension (always at position 0)
+        mean_spike_counts = spike_counts.mean(
+            dim=0
+        )  # (neurons,) or (patterns, neurons)
 
         # Compute time duration in seconds
         time_steps = output_spikes.shape[-2]
         total_time_s = time_steps * self.dt / 1000.0
 
         # Convert to firing rate in Hz
-        firing_rates = spike_counts / total_time_s  # (..., n_neurons)
+        firing_rates = (
+            mean_spike_counts / total_time_s
+        )  # (neurons,) or (patterns, neurons)
 
-        # Compute squared error (broadcasting handles shape differences)
+        # Validate target shape compatibility
+        if firing_rates.shape != self.target_rate.shape:
+            raise ValueError(
+                f"Firing rate shape {firing_rates.shape} does not match target shape {self.target_rate.shape}. "
+                f"Expected output_spikes with shape (batch, time, neurons) for target (neurons,), "
+                f"or (batch, patterns, time, neurons) for target (patterns, neurons)."
+            )
+
+        # Compute squared error
         squared_errors = (firing_rates - self.target_rate) ** 2
 
-        # Normalize by target rate
-        normalized_errors = squared_errors / (self.target_rate + 1e-6)
+        # Normalize by target rate with epsilon regularization
+        normalized_errors = squared_errors / (self.target_rate + self.epsilon)
 
         # Take mean across all dimensions
         loss = normalized_errors.mean()

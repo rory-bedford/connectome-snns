@@ -30,6 +30,7 @@ weight_perturbation_variance = 0.1     # Variance of log-normal distribution for
 surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
 learning_rate = 5e-4                   # Learning rate for ADAM optimiser
 van_rossum_tau = 100.0                 # ms - Exponential temporal kernel in van Rossum loss
+firing_rate_epsilon = 1.0              # Hz - Regularization for firing rate loss normalization (prevents division by zero)
 
 loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
 loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.01)

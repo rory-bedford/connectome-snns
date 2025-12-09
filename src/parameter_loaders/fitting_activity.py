@@ -124,6 +124,7 @@ class StudentHyperparameters(BaseModel):
     surrgrad_scale: float
     learning_rate: float
     van_rossum_tau: float
+    firing_rate_epsilon: float
     alpha: Dict[str, float]
     loss_weight: StudentLossWeights
 

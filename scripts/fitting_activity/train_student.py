@@ -220,8 +220,12 @@ def main(
     silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=spike_dataset.dt)
 
     firing_rate_loss_fn = FiringRateLoss(
-        target_rate=target_rate_tensor, dt=spike_dataset.dt
+        target_rate=target_rate_tensor,
+        dt=spike_dataset.dt,
+        epsilon=hyperparameters.firing_rate_epsilon,
     )
+    print(f"Target_rate_tensor shape: {target_rate_tensor.shape}")
+    print(f"{target_rate_tensor=}")
 
     van_rossum_loss_fn = VanRossumLoss(
         tau=hyperparameters.van_rossum_tau,
