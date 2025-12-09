@@ -216,13 +216,18 @@ def plot_cv_histogram(
         colors_map = base_colors + additional_colors
 
     # Compute CV for all neurons (convert dt from ms to s)
+    # Returns (neurons,) or (patterns, neurons) - no batch dimension
     cv_values = compute_spike_train_cv(spike_trains, dt=dt * 1e-3)
 
     # Collect all CV values to determine global x-axis range and shared bins
     all_cv_valid = []
     for i in range(n_cell_types):
         cell_type_mask = cell_type_indices == i
-        cv_cell_type = cv_values[:, cell_type_mask].flatten()
+        # Handle both 1D (neurons,) and 2D (patterns, neurons) shapes
+        if cv_values.ndim == 1:
+            cv_cell_type = cv_values[cell_type_mask]
+        else:
+            cv_cell_type = cv_values[:, cell_type_mask].flatten()
         cv_valid = cv_cell_type[~np.isnan(cv_cell_type)]
         if len(cv_valid) > 0:
             all_cv_valid.extend(cv_valid)
@@ -268,9 +273,13 @@ def plot_cv_histogram(
     for i in range(n_cell_types):
         ax_i = axes[i]
 
-        # Get CV values for this cell type across all batches
+        # Get CV values for this cell type
         cell_type_mask = cell_type_indices == i
-        cv_cell_type = cv_values[:, cell_type_mask].flatten()
+        # Handle both 1D (neurons,) and 2D (patterns, neurons) shapes
+        if cv_values.ndim == 1:
+            cv_cell_type = cv_values[cell_type_mask]
+        else:
+            cv_cell_type = cv_values[:, cell_type_mask].flatten()
         cv_valid = cv_cell_type[~np.isnan(cv_cell_type)]
 
         if len(cv_valid) > 0:
