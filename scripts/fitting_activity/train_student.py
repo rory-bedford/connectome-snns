@@ -224,8 +224,6 @@ def main(
         dt=spike_dataset.dt,
         epsilon=hyperparameters.firing_rate_epsilon,
     )
-    print(f"Target_rate_tensor shape: {target_rate_tensor.shape}")
-    print(f"{target_rate_tensor=}")
 
     van_rossum_loss_fn = VanRossumLoss(
         tau=hyperparameters.van_rossum_tau,
@@ -479,14 +477,15 @@ def main(
         inference_input_spikes_list = []
         for chunk_idx in range(chunks_needed):
             input_chunk, target_chunk = spike_dataset[chunk_idx]
-            # Extract batch 0, pattern 0
-            inference_input_spikes_list.append(input_chunk[0, :, :])
+            # Dataset returns (batch, patterns, time, neurons)
+            # Extract batch 0, pattern 0: (time, neurons)
+            inference_input_spikes_list.append(input_chunk[0, 0, :, :])
 
         # Concatenate chunks and truncate to exact duration
         inference_input_spikes = torch.cat(inference_input_spikes_list, dim=0)[
             :inference_timesteps, :
         ]
-        # Add batch dimension: (1, time, n_neurons)
+        # Add batch dimension for model: (1, time, n_neurons)
         inference_input_spikes = inference_input_spikes.unsqueeze(0)
 
         # Run inference with tqdm progress bar
@@ -691,18 +690,19 @@ def main(
     # Calculate number of chunks needed for 10s
     chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
 
-    # Collect input spikes from precomputed dataset (batch 0 only)
+    # Collect input spikes from precomputed dataset (batch 0, pattern 0)
     final_inference_input_spikes_list = []
     for chunk_idx in range(chunks_needed):
         input_chunk, target_chunk = spike_dataset[chunk_idx]
-        # Extract batch 0 (dataset now returns (batch, time, neurons) not (batch, patterns, time, neurons))
-        final_inference_input_spikes_list.append(input_chunk[0, :, :])
+        # Dataset returns (batch, patterns, time, neurons)
+        # Extract batch 0, pattern 0: (time, neurons)
+        final_inference_input_spikes_list.append(input_chunk[0, 0, :, :])
 
     # Concatenate chunks and truncate to exact duration
     final_inference_input_spikes = torch.cat(final_inference_input_spikes_list, dim=0)[
         :inference_timesteps, :
     ]
-    # Add batch dimension: (1, time, n_neurons)
+    # Add batch dimension for model: (1, time, n_neurons)
     final_inference_input_spikes = final_inference_input_spikes.unsqueeze(0)
 
     # Run inference with tqdm progress bar
