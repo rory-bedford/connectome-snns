@@ -28,6 +28,7 @@ from visualization.dashboards import (
     create_activity_dashboard,
 )
 from training.weight_perturbers import perturb_weights_scaling_factor
+from analysis.firing_statistics import compute_spike_train_cv
 
 
 def main(
@@ -352,7 +353,6 @@ def main(
             spikes: Spike array of shape (batch, time, neurons) or (batch, patterns, time, neurons)
             model_snapshot: Dictionary containing model parameters as numpy arrays
                            (keys: "scaling_factors", "scaling_factors_FF")
-                           or the model object itself (for backward compatibility with wandb logging)
 
         Returns:
             Dictionary with keys: metric/stat/cell_type and scaling_factors/layer/metric/connection
@@ -376,22 +376,12 @@ def main(
         duration_s = time * spike_dataset.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
-        # CV computation (loops over all batch, pattern, neuron combinations)
-        from analysis.firing_statistics import compute_spike_train_cv
-
+        # CV computation (only on batch 0, pattern 0 for efficiency)
+        # spikes_flat is already (batch*patterns, time, neurons), so just take first element
         cv_values = compute_spike_train_cv(
-            spikes, dt=spike_dataset.dt
-        )  # Shape: (batch, neurons) or (batch, patterns, neurons)
-
-        # Suppress warning for neurons with no spikes (expected early in training)
-        with np.errstate(invalid="ignore"):
-            # Average over batch and pattern dimensions
-            if cv_values.ndim == 3:
-                # (batch, patterns, neurons) -> (neurons,)
-                cv_per_neuron = np.nanmean(cv_values, axis=(0, 1))
-            else:
-                # (batch, neurons) -> (neurons,)
-                cv_per_neuron = np.nanmean(cv_values, axis=0)
+            spikes_flat[0:1, :, :], dt=spike_dataset.dt
+        )  # Shape: (1, neurons)
+        cv_per_neuron = cv_values[0, :]  # (neurons,)
 
         # Compute statistics by cell type
         stats = {}
@@ -422,16 +412,8 @@ def main(
 
         # Add scaling factor tracking
         # Scaling factors are 2D: (n_source_types, n_target_types)
-        # Handle both dict (async logging) and model object (wandb sync logging)
-        if isinstance(model_snapshot, dict):
-            current_recurrent_sf = model_snapshot["scaling_factors"]
-            current_feedforward_sf = model_snapshot["scaling_factors_FF"]
-        else:
-            # Backward compatibility: model_snapshot is actually the model object
-            current_recurrent_sf = model_snapshot.scaling_factors.detach().cpu().numpy()
-            current_feedforward_sf = (
-                model_snapshot.scaling_factors_FF.detach().cpu().numpy()
-            )
+        current_recurrent_sf = model_snapshot["scaling_factors"]
+        current_feedforward_sf = model_snapshot["scaling_factors_FF"]
 
         # Get cell type names
         target_cell_types = params.recurrent.cell_types.names
