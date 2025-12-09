@@ -196,29 +196,60 @@ def main(input_dir, output_dir, params_file):
     # Store dt as a metadata attribute
     root.attrs["dt"] = simulation.dt
 
-    # Create datasets with chunking optimized for both writing and reading
-    # Chunks span all (batch, pattern) combinations for one time slice
-    # This allows: 1) efficient writes (one chunk per simulation step)
-    #              2) efficient aggregations over time (all trials processed together)
-    output_spikes_zarr = root.create_dataset(
+    # Save input firing rates immediately
+    root.create_dataset(
+        "input_firing_rates",
+        shape=input_firing_rates_odour.shape,
+        dtype=input_firing_rates_odour.dtype,
+        data=input_firing_rates_odour,
+    )
+
+    root.create_dataset(
+        "input_firing_rates_control",
+        shape=input_firing_rates_baseline.shape,
+        dtype=input_firing_rates_baseline.dtype,
+        data=input_firing_rates_baseline,
+    )
+    print("✓ Saved input firing rates to zarr")
+    print(f"  - input_firing_rates (odour): {input_firing_rates_odour.shape}")
+    print(f"  - input_firing_rates_control: {input_firing_rates_baseline.shape}")
+
+    # Create separate datasets for odour patterns and control pattern
+    # Stream directly to final arrays during simulation - no temp storage!
+    # Odour patterns: indices 0 to num_odours-1
+    output_spikes_odour = root.create_dataset(
         "output_spikes",
-        shape=(batch_size, n_patterns, total_steps, n_neurons),
-        chunks=(batch_size, n_patterns, simulation.chunk_size, n_neurons),
+        shape=(batch_size, num_odours, total_steps, n_neurons),
+        chunks=(batch_size, num_odours, simulation.chunk_size, n_neurons),
         dtype=np.bool_,
     )
 
-    input_spikes_zarr = root.create_dataset(
+    output_spikes_control = root.create_dataset(
+        "output_spikes_control",
+        shape=(batch_size, 1, total_steps, n_neurons),
+        chunks=(batch_size, 1, simulation.chunk_size, n_neurons),
+        dtype=np.bool_,
+    )
+
+    input_spikes_odour = root.create_dataset(
         "input_spikes",
-        shape=(batch_size, n_patterns, total_steps, n_input_neurons),
-        chunks=(batch_size, n_patterns, simulation.chunk_size, n_input_neurons),
+        shape=(batch_size, num_odours, total_steps, n_input_neurons),
+        chunks=(batch_size, num_odours, simulation.chunk_size, n_input_neurons),
         dtype=np.bool_,
     )
 
-    chunk_size_mb = (batch_size * n_patterns * simulation.chunk_size * n_neurons) / (
+    input_spikes_control = root.create_dataset(
+        "input_spikes_control",
+        shape=(batch_size, 1, total_steps, n_input_neurons),
+        chunks=(batch_size, 1, simulation.chunk_size, n_input_neurons),
+        dtype=np.bool_,
+    )
+
+    chunk_size_mb = (batch_size * num_odours * simulation.chunk_size * n_neurons) / (
         1024**2
     )
     print(
-        f"Zarr chunk shape: ({batch_size}, {n_patterns}, {simulation.chunk_size}, {n_neurons})"
+        f"Zarr chunk shape (odour): ({batch_size}, {num_odours}, {simulation.chunk_size}, {n_neurons})"
     )
     print(f"  Chunk size: ~{chunk_size_mb:.1f} MB uncompressed")
 
@@ -339,111 +370,47 @@ def main(input_dir, output_dir, params_file):
             initial_g = output_conductances_chunk_flat[:, -1, :, :].clone()
             initial_g_FF = output_conductances_FF_chunk_flat[:, -1, :, :].clone()
 
-            # Write directly to disk using Zarr - NO RAM accumulation
+            # Write directly to separate zarr arrays - stream to disk, no RAM accumulation!
             start_idx = chunk_idx * simulation.chunk_size
             end_idx = start_idx + n_steps_out
 
             if device == "cuda":
-                output_spikes_zarr[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk.bool().cpu().numpy()
+                # Split and write odour patterns (all except last)
+                output_spikes_odour[:, :, start_idx:end_idx, :] = (
+                    output_spikes_chunk[:, :-1, :, :].bool().cpu().numpy()
                 )
-                input_spikes_zarr[:, :, start_idx:end_idx, :] = (
-                    input_spikes_chunk.cpu().numpy()
+                input_spikes_odour[:, :, start_idx:end_idx, :] = (
+                    input_spikes_chunk[:, :-1, :, :].cpu().numpy()
+                )
+                # Write control pattern (last pattern only)
+                output_spikes_control[:, :, start_idx:end_idx, :] = (
+                    output_spikes_chunk[:, -1:, :, :].bool().cpu().numpy()
+                )
+                input_spikes_control[:, :, start_idx:end_idx, :] = (
+                    input_spikes_chunk[:, -1:, :, :].cpu().numpy()
                 )
             else:
-                output_spikes_zarr[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk.bool().numpy()
+                # Split and write odour patterns (all except last)
+                output_spikes_odour[:, :, start_idx:end_idx, :] = (
+                    output_spikes_chunk[:, :-1, :, :].bool().numpy()
                 )
-                input_spikes_zarr[:, :, start_idx:end_idx, :] = (
-                    input_spikes_chunk.numpy()
+                input_spikes_odour[:, :, start_idx:end_idx, :] = input_spikes_chunk[
+                    :, :-1, :, :
+                ].numpy()
+                # Write control pattern (last pattern only)
+                output_spikes_control[:, :, start_idx:end_idx, :] = (
+                    output_spikes_chunk[:, -1:, :, :].bool().numpy()
                 )
+                input_spikes_control[:, :, start_idx:end_idx, :] = input_spikes_chunk[
+                    :, -1:, :, :
+                ].numpy()
 
     print("\n✓ Network simulation completed!")
-    print(f"Final output shape: {output_spikes_zarr.shape}")
-    print(
-        f"  (batch_size={output_spikes_zarr.shape[0]}, n_patterns={output_spikes_zarr.shape[1]}, time={output_spikes_zarr.shape[2]}, neurons={output_spikes_zarr.shape[3]})"
-    )
-
-    # =====================================
-    # Save Output Data for Further Analysis
-    # =====================================
-    print("\nSaving separated odour and control data...")
-
-    # Create separate arrays for odour patterns and control pattern
-    # Odour patterns: indices 0 to num_odours-1
-    # Control pattern: index num_odours (last pattern)
-
-    # Save combined array as output_spikes_all for reference
-    root.create_dataset(
-        "output_spikes_all",
-        shape=(batch_size, n_patterns, total_steps, n_neurons),
-        chunks=(batch_size, n_patterns, simulation.chunk_size, n_neurons),
-        dtype=np.bool_,
-        data=output_spikes_zarr[:, :, :, :],  # All patterns
-    )
-
-    # Main output_spikes array = odour only (for training)
-    root.create_dataset(
-        "output_spikes",
-        shape=(batch_size, num_odours, total_steps, n_neurons),
-        chunks=(batch_size, num_odours, simulation.chunk_size, n_neurons),
-        dtype=np.bool_,
-        data=output_spikes_zarr[:, :-1, :, :],  # All except last pattern (odour only)
-    )
-
-    root.create_dataset(
-        "output_spikes_control",
-        shape=(batch_size, 1, total_steps, n_neurons),
-        chunks=(batch_size, 1, simulation.chunk_size, n_neurons),
-        dtype=np.bool_,
-        data=output_spikes_zarr[:, -1:, :, :],  # Last pattern only (control)
-    )
-
-    # Main input_spikes array = odour only (for training)
-    root.create_dataset(
-        "input_spikes",
-        shape=(batch_size, num_odours, total_steps, n_input_neurons),
-        chunks=(
-            batch_size,
-            num_odours,
-            simulation.chunk_size,
-            n_input_neurons,
-        ),
-        dtype=np.bool_,
-        data=input_spikes_zarr[:, :-1, :, :],  # All except last pattern (odour only)
-    )
-
-    root.create_dataset(
-        "input_spikes_control",
-        shape=(batch_size, 1, total_steps, n_input_neurons),
-        chunks=(batch_size, 1, simulation.chunk_size, n_input_neurons),
-        dtype=np.bool_,
-        data=input_spikes_zarr[:, -1:, :, :],  # Last pattern only (control)
-    )
-
-    # Save input firing rates (separated)
-    root.create_dataset(
-        "input_firing_rates",
-        shape=input_firing_rates_odour.shape,
-        dtype=input_firing_rates_odour.dtype,
-        data=input_firing_rates_odour,
-    )
-
-    root.create_dataset(
-        "input_firing_rates_control",
-        shape=input_firing_rates_baseline.shape,
-        dtype=input_firing_rates_baseline.dtype,
-        data=input_firing_rates_baseline,
-    )
-
-    print(f"\n✓ Saved spike data to {results_dir / 'spike_data.zarr'}")
-    print(f"  - output_spikes_all (combined): {root['output_spikes_all'].shape}")
-    print(f"  - output_spikes (odour only): {root['output_spikes'].shape}")
-    print(f"  - output_spikes_control: {root['output_spikes_control'].shape}")
-    print(f"  - input_spikes (odour only): {root['input_spikes'].shape}")
-    print(f"  - input_spikes_control: {root['input_spikes_control'].shape}")
-    print(f"  - input_firing_rates (odour): {input_firing_rates_odour.shape}")
-    print(f"  - input_firing_rates_control: {input_firing_rates_baseline.shape}")
+    print(f"\n✓ All data saved to {results_dir / 'spike_data.zarr'}")
+    print(f"  - output_spikes (odour): {output_spikes_odour.shape}")
+    print(f"  - output_spikes_control: {output_spikes_control.shape}")
+    print(f"  - input_spikes (odour): {input_spikes_odour.shape}")
+    print(f"  - input_spikes_control: {input_spikes_control.shape}")
 
     # Free GPU memory
     if device == "cuda":
