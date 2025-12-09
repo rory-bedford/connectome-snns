@@ -352,28 +352,45 @@ def main(
         """Compute summary statistics from network activity.
 
         Args:
-            spikes: Spike array of shape (batch, time, neurons)
+            spikes: Spike array of shape (batch, time, neurons) or (batch, patterns, time, neurons)
             model: The network model (for accessing current scaling factors)
 
         Returns:
             Dictionary with keys: metric/stat/cell_type and scaling_factors/layer/metric/connection
         """
-        # Compute firing rates per neuron (Hz), averaged over batch
-        spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
-        spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
-        duration_s = spikes.shape[1] * spike_dataset.dt / 1000.0  # Convert ms to s
+        # Handle both 3D and 4D inputs by flattening batch×patterns
+        if spikes.ndim == 4:
+            batch, patterns, time, neurons = spikes.shape
+            spikes_flat = spikes.reshape(batch * patterns, time, neurons)
+        else:
+            spikes_flat = spikes
+            time = spikes.shape[1]
+            neurons = spikes.shape[2]
+
+        # Compute firing rates per neuron (Hz), averaged over batch×patterns
+        spike_counts = spikes_flat.sum(
+            axis=1
+        )  # Sum over time: (batch*patterns, neurons)
+        spike_counts_avg = spike_counts.mean(
+            axis=0
+        )  # Average over batch×patterns: (neurons,)
+        duration_s = time * spike_dataset.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
-        # Vectorized CV computation
+        # Vectorized CV computation (averages batches internally)
         from analysis.firing_statistics import compute_spike_train_cv
 
         cv_values = compute_spike_train_cv(
             spikes, dt=spike_dataset.dt
-        )  # Shape: (batch, neurons)
+        )  # Shape: (neurons,) or (patterns, neurons)
 
         # Suppress warning for neurons with no spikes (expected early in training)
         with np.errstate(invalid="ignore"):
-            cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
+            # Average over pattern dimension if present
+            if cv_values.ndim == 2:
+                cv_per_neuron = np.nanmean(cv_values, axis=0)  # (neurons,)
+            else:
+                cv_per_neuron = cv_values  # Already (neurons,)
 
         # Compute statistics by cell type
         stats = {}

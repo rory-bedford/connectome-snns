@@ -10,8 +10,9 @@ def compute_spike_train_cv(
     """
     Compute coefficient of variation (CV) for spike trains for each neuron.
 
-    The CV is computed as the standard deviation of inter-spike intervals (ISIs)
-    divided by the mean ISI. CV is computed separately for each neuron in each batch.
+    The CV is computed by first averaging spike trains across the batch dimension,
+    then computing ISI statistics on the averaged spike train. This treats the
+    batch-averaged activity as a single trial.
 
     Args:
         spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons)
@@ -21,34 +22,38 @@ def compute_spike_train_cv(
             Defaults to 1.0.
 
     Returns:
-        NDArray[np.float32]: CV values of shape (batch_size, n_neurons) or (batch_size, n_patterns, n_neurons).
+        NDArray[np.float32]: CV values of shape (n_neurons,) or (n_patterns, n_neurons).
             Returns NaN for neurons with fewer than 3 spikes.
     """
-    # Handle both 3D and 4D inputs by flattening leading dimensions for processing
+    # Average over batch dimension first (MASH BANANAS TOGETHER!)
     if spike_trains.ndim == 4:
         batch_size, n_patterns, n_steps, n_neurons = spike_trains.shape
-        # Flatten batch and patterns: (batch, patterns, steps, neurons) -> (batch*patterns, steps, neurons)
-        spike_trains_flat = spike_trains.reshape(
-            batch_size * n_patterns, n_steps, n_neurons
-        )
-        output_shape = (batch_size, n_patterns, n_neurons)
-        batch_size_flat = batch_size * n_patterns
+        # Average over batch: (batch, patterns, steps, neurons) -> (patterns, steps, neurons)
+        spike_trains_avg = spike_trains.mean(axis=0)
+        output_shape = (n_patterns, n_neurons)
+        loop_dim = n_patterns
     else:
         batch_size, n_steps, n_neurons = spike_trains.shape
-        spike_trains_flat = spike_trains
-        output_shape = (batch_size, n_neurons)
-        batch_size_flat = batch_size
+        # Average over batch: (batch, steps, neurons) -> (steps, neurons)
+        spike_trains_avg = spike_trains.mean(axis=0)
+        output_shape = (n_neurons,)
+        loop_dim = 1
+        # Add pattern dimension for uniform processing
+        spike_trains_avg = spike_trains_avg[np.newaxis, :, :]  # (1, steps, neurons)
 
     # Initialize CV values with NaN
-    cv_values = np.full((batch_size_flat, n_neurons), np.nan, dtype=np.float32)
+    cv_values = np.full(output_shape, np.nan, dtype=np.float32)
 
     # Create time indices
     time_indices = np.arange(n_steps, dtype=np.float32) * dt
 
-    for batch_idx in range(batch_size_flat):
+    # Loop over patterns (if 3D input, loop_dim=1) and neurons
+    for pattern_idx in range(loop_dim):
         for neuron_idx in range(n_neurons):
-            # Find time indices where spikes occur for this neuron
-            spike_indices = np.where(spike_trains_flat[batch_idx, :, neuron_idx] > 0)[0]
+            # Find time indices where spikes occur (threshold at 0.5 for averaged spikes)
+            spike_indices = np.where(
+                spike_trains_avg[pattern_idx, :, neuron_idx] > 0.5
+            )[0]
 
             # Need at least 3 spikes to compute CV with unbiased std (at least 2 ISIs)
             if len(spike_indices) < 3:
@@ -64,11 +69,10 @@ def compute_spike_train_cv(
             mean_isi = isis.mean()
             if mean_isi > 0:
                 std_isi = isis.std(ddof=1)  # unbiased std
-                cv_values[batch_idx, neuron_idx] = std_isi / mean_isi
-
-    # Reshape back to original dimensions if 4D input
-    if spike_trains.ndim == 4:
-        cv_values = cv_values.reshape(output_shape)
+                if spike_trains.ndim == 4:
+                    cv_values[pattern_idx, neuron_idx] = std_isi / mean_isi
+                else:
+                    cv_values[neuron_idx] = std_isi / mean_isi
 
     return cv_values
 
