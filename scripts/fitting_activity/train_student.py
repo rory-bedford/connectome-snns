@@ -109,15 +109,6 @@ def main(
     targets_dir = output_dir / "targets"
     targets_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save perturbed network structure
-    np.savez(
-        targets_dir / "perturbed_network_structure.npz",
-        recurrent_weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        feedforward_cell_type_indices=feedforward_cell_type_indices,
-    )
-
     # Save target scaling factors
     np.savez(
         targets_dir / "target_scaling_factors.npz",
