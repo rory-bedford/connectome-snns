@@ -419,15 +419,28 @@ class SNNTrainer:
 
         # Apply connectome masks to gradients before optimizer step
         with torch.no_grad():
-            # Mask recurrent weight gradients
-            if self.connectome_mask is not None and hasattr(self.model, "weights"):
-                if self.model.weights.grad is not None:
-                    self.model.weights.grad *= self.connectome_mask
+            # Check if we're optimizing log weights
+            if hasattr(self.model, "log_weights"):
+                # Mask log-space recurrent weight gradients
+                if self.connectome_mask is not None:
+                    if self.model.log_weights.grad is not None:
+                        self.model.log_weights.grad *= self.connectome_mask
 
-            # Mask feedforward weight gradients
-            if self.feedforward_mask is not None and hasattr(self.model, "weights_FF"):
-                if self.model.weights_FF.grad is not None:
-                    self.model.weights_FF.grad *= self.feedforward_mask
+                # Mask log-space feedforward weight gradients
+                if self.feedforward_mask is not None:
+                    if self.model.log_weights_FF.grad is not None:
+                        self.model.log_weights_FF.grad *= self.feedforward_mask
+            else:
+                # Legacy: Mask linear-space gradients (for non-weight optimization modes)
+                if self.connectome_mask is not None and hasattr(self.model, "weights"):
+                    if self.model.weights.grad is not None:
+                        self.model.weights.grad *= self.connectome_mask
+
+                if self.feedforward_mask is not None and hasattr(
+                    self.model, "weights_FF"
+                ):
+                    if self.model.weights_FF.grad is not None:
+                        self.model.weights_FF.grad *= self.feedforward_mask
 
         # Accumulate gradient statistics for online averaging
         self._accumulate_gradient_statistics()
@@ -437,12 +450,8 @@ class SNNTrainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        # Clamp weights to be non-negative for connectome-constrained positivity
-        with torch.no_grad():
-            if hasattr(self.model, "weights"):
-                self.model.weights.clamp_(min=0.0)
-            if hasattr(self.model, "weights_FF"):
-                self.model.weights_FF.clamp_(min=0.0)
+        # Remove weight clamping - no longer needed with log parameterization
+        # Weights are automatically positive through exp(log_weights)
 
         self.optimizer.zero_grad(set_to_none=True)
 

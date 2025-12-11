@@ -120,17 +120,27 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self.n_cell_types_FF = self.n_cell_types_FF
         self.n_synapse_types_FF = len(synapse_params_FF)
 
-        # Register weights and cell type indices for recurrent connections
-        self._register_parameter_or_buffer(
-            "weights", weights, trainable=(self.optimisable == "weights")
-        )
+        # Register weights with log parameterization if optimising
+        if self.optimisable == "weights":
+            # Store log-space parameters (automatically positive when exponentiated)
+            # Add small epsilon to avoid log(0)
+            eps = 1e-8
+            self._register_parameter_or_buffer(
+                "log_weights", np.log(weights + eps), trainable=True
+            )
+            self._register_parameter_or_buffer(
+                "log_weights_FF", np.log(weights_FF + eps), trainable=True
+            )
+        else:
+            # Store linear-space parameters
+            self._register_parameter_or_buffer("weights", weights, trainable=False)
+            self._register_parameter_or_buffer(
+                "weights_FF", weights_FF, trainable=False
+            )
+
+        # Register cell type indices (always non-trainable)
         self._register_parameter_or_buffer(
             "cell_type_indices", cell_type_indices, trainable=False
-        )
-
-        # Register feedforward weights and cell type indices
-        self._register_parameter_or_buffer(
-            "weights_FF", weights_FF, trainable=(self.optimisable == "weights")
         )
         self._register_parameter_or_buffer(
             "cell_type_indices_FF", cell_type_indices_FF, trainable=False
@@ -476,9 +486,28 @@ class ConductanceLIFNetwork_IO(nn.Module):
         return synapse_param_arrays
 
     @property
+    def weights(self) -> torch.Tensor:
+        """Get weights in linear space (converts from log if optimising weights)."""
+        if self.optimisable == "weights":
+            return torch.exp(self.log_weights)
+        else:
+            return self._buffers.get("weights") or self._parameters.get("weights")
+
+    @property
+    def weights_FF(self) -> torch.Tensor:
+        """Get feedforward weights in linear space (converts from log if optimising weights)."""
+        if self.optimisable == "weights":
+            return torch.exp(self.log_weights_FF)
+        else:
+            return self._buffers.get("weights_FF") or self._parameters.get("weights_FF")
+
+    @property
     def device(self):
         """Get the device the model is on"""
-        return self.weights.device
+        if self.optimisable == "weights":
+            return self.log_weights.device
+        else:
+            return self.weights.device
 
     def set_timestep(self, dt: float) -> None:
         """
