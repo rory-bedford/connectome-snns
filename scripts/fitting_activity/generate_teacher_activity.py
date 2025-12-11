@@ -10,7 +10,7 @@ import torch
 import toml
 import zarr
 import matplotlib.pyplot as plt
-from inputs.dataloaders import (
+from odourants.dataloaders import (
     PoissonSpikeDataset,
     collate_pattern_batches,
     generate_odour_firing_rates,

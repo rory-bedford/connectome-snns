@@ -3,7 +3,7 @@ Training student network to match a teacher's activity.
 """
 
 import numpy as np
-from inputs.dataloaders import (
+from odourants.dataloaders import (
     PrecomputedSpikeDataset,
     CyclicSampler,
 )

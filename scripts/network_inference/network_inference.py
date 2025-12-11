@@ -20,7 +20,7 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from inputs.dataloaders import PoissonSpikeDataset
+from odourants.dataloaders import PoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 import matplotlib.pyplot as plt
