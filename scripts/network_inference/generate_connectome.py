@@ -1,8 +1,8 @@
 """
 Generating spike trains from a synthetic connectome
 
-This script generates spiketrains from a recurrent E-I network with conductance-based
-LIF neurons, and assembly connectivity inspired by zebrafish Dp.
+This script generates a recurrent/feedforward synthetic connectome from a parameter file,
+then generates spiketrains using conductance-based LIF neurons.
 
 Overview:
 1. First we generate a biologically plausible recurrent weight matrix with a
@@ -20,7 +20,7 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from odourants.dataloaders import PoissonSpikeDataset
+from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 import matplotlib.pyplot as plt
@@ -134,11 +134,10 @@ def main(input_dir, output_dir, params_file):
         input_firing_rates[mask] = feedforward.activity[ct_name].firing_rate
 
     # Create Poisson spike generator dataset
-    spike_dataset = PoissonSpikeDataset(
+    spike_dataset = HomogeneousPoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
-        device=device,
     )
 
     # Generate feedforward connectivity graph

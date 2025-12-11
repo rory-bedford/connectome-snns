@@ -10,9 +10,11 @@ import torch
 import toml
 import zarr
 import matplotlib.pyplot as plt
-from odourants.dataloaders import (
-    PoissonSpikeDataset,
+from src.network_inputs.unsupervised import (
+    HomogeneousPoissonSpikeDataset,
     collate_pattern_batches,
+)
+from src.network_inputs.odourants import (
     generate_odour_firing_rates,
     generate_baseline_firing_rates,
 )
@@ -128,11 +130,10 @@ def main(input_dir, output_dir, params_file):
 
     # Create Poisson dataset for multiple patterns
     # Dataset cycles through patterns indefinitely
-    spike_dataset = PoissonSpikeDataset(
+    spike_dataset = HomogeneousPoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
-        device=device,
     )
 
     # DataLoader: batch_size * n_patterns items fetched per iteration

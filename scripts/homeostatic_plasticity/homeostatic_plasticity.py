@@ -23,7 +23,7 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from odourants.dataloaders import PoissonSpikeDataset
+from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 from torch.utils.data import DataLoader
@@ -201,11 +201,10 @@ def main(
         input_firing_rates[mask] = feedforward.activity[cell_type_name].firing_rate
 
     # Initialize Poisson spike generator dataset
-    spike_dataset = PoissonSpikeDataset(
+    spike_dataset = HomogeneousPoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
-        device=device,
     )
 
     # Create DataLoader with batch_size from parameters
@@ -458,11 +457,10 @@ def main(
         inference_timesteps = int(inference_duration_ms / simulation.dt)
 
         # Create a new dataset for 10s inference with batch_size=1
-        inference_dataset = PoissonSpikeDataset(
+        inference_dataset = HomogeneousPoissonSpikeDataset(
             firing_rates=input_firing_rates,
             chunk_size=inference_timesteps,  # Single chunk of 10s
             dt=simulation.dt,
-            device=device,
         )
         inference_dataloader = DataLoader(
             inference_dataset,
@@ -663,11 +661,10 @@ def main(
     inference_timesteps = int(inference_duration_ms / simulation.dt)
 
     # Create a new dataset for 10s inference with batch_size=1
-    final_inference_dataset = PoissonSpikeDataset(
+    final_inference_dataset = HomogeneousPoissonSpikeDataset(
         firing_rates=input_firing_rates,
         chunk_size=inference_timesteps,  # Single chunk of 10s
         dt=simulation.dt,
-        device=device,
     )
     final_inference_dataloader = DataLoader(
         final_inference_dataset,
