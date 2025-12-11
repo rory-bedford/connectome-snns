@@ -1,6 +1,29 @@
-# Fitting Activity Training
+# Student Network Training (Fitting Activity)
 
-This script trains a connectome-constrained conductance-based LIF network to fit target activity patterns in a teacher-student learning framework. The student network's connectome structure is constrained by biological connectivity, while learning to reproduce target firing statistics through gradient-based weight optimization.
+This workflow trains a connectome-constrained conductance-based LIF network (student) to reproduce target spike train activity from a pre-generated teacher network. The student network's connectivity structure is loaded from disk and kept fixed, while synaptic weights are optimized using gradient-based learning through backpropagation with surrogate gradients.
+
+**Workflow Position:** Stages 3-4 - After homeostatic_plasticity training. The optimized weights from Stage 2 are used to generate teacher activity (Stage 3), which the student then learns to match (Stage 4).
+
+## Complete Workflow Pipeline
+
+1. **network_inference** → Generate/explore connectome structures (grid search)
+2. **homeostatic_plasticity** → Optimize weights for target activity patterns  
+3. **generate_teacher_activity** → Generate target spike trains using optimized weights
+4. **train_student** → Train student network to match teacher patterns
+
+## Scripts
+
+### 1. `generate_teacher_activity.py` (Stage 3)
+Generates teacher network spike trains from a pre-existing connectome structure (typically from homeostatic plasticity training). Loads network connectivity from disk and simulates activity with odour-modulated input patterns.
+
+### 2. `train_student.py` (Stage 4)
+Trains a student network to match teacher spike patterns using gradient descent with multiple loss functions (firing rate matching, van Rossum distance, silent neuron penalty).
+
+### 3. `plot_trained_network_vs_target.py`
+Compares trained student network outputs with teacher targets using cross-correlation analysis.
+
+### 4. `resume_training.py`
+Resumes student training from a checkpoint after interruption.
 
 ## Features
 

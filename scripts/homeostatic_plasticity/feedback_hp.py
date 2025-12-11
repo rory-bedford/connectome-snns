@@ -1,20 +1,23 @@
 """
-Simulating Dp with homeostatic plasticity to achieve target activity regime.
+Homeostatic plasticity using feedback-based weight scaling (NOT YET IMPLEMENTED).
 
-This script sets up and runs a conductance-based leaky integrate-and-fire
-network model of the zebrafish dorsal pallium (Dp) with homeostatic plasticity
-mechanisms to regulate neuron firing rates and spike train statistics.
+This script is a placeholder for a feedback-based homeostatic plasticity approach
+that would achieve target firing rates by tweaking scaling factors up or down on
+the recurrent synaptic weights, based on the observed firing rates from the
+previous training chunk (similar to biological homeostatic mechanisms).
 
-Overview:
-1. First we generate a biologically plausible recurrent weight matrix with a
-   Dp-inspired assembly structure.
-2. Next we generate excitatory mitral cell inputs from the OB with Poisson
-   statistics and sparse projections.
-3. Then we initialise our network with parameters adapted from
-   Meissner-Bernard et al. (2025) https://doi.org/10.1016/j.celrep.2025.115330
-4. We then run our network simulation in a training loop, applying updates to
-   the connectome-constrained weights every so often to optimise the activity
-   towards target firing rates and spike train CVs.
+Intended to provide an alternative to backprop_hp.py that uses biologically-inspired
+feedback mechanisms instead of gradient descent. Would fit in the same workflow
+position (after network_inference grid search, before teacher network generation).
+
+Intended approach (not yet implemented):
+1. Load or generate initial connectome structure.
+2. Generate Poisson input spike trains.
+3. Apply feedback-based scaling adjustments to weights based on observed firing
+   rates (without backpropagation) - more biologically plausible than gradients.
+4. Save optimized weights for downstream use.
+
+Currently this script uses the same gradient-based approach as backprop_hp.py.
 """
 
 import numpy as np

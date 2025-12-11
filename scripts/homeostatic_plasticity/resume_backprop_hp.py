@@ -1,16 +1,20 @@
 #!/usr/bin/env python
 """
-Resume training from a checkpoint.
+Resume gradient-based homeostatic plasticity training from a checkpoint.
 
-NOTE: Since experiment tracking has already been initialized, this script should be called directly, outside of
-the usual experiment runner.
+This script resumes training of a network with homeostatic plasticity from a
+previously saved checkpoint. It loads the most recent checkpoint and continues
+the backpropagation-based training process from where it left off.
+
+NOTE: Since experiment tracking has already been initialized, this script
+should be called directly, outside of the usual experiment runner.
 
 Usage:
-    python resume_training.py <output_dir> [--no-wandb]
+    python resume_backprop_hp.py <output_dir> [--no-wandb]
 
 Example:
-    python resume_training.py workspace/my_experiment_2025-10-30_10-30-45
-    python resume_training.py workspace/my_experiment --no-wandb
+    python resume_backprop_hp.py workspace/my_experiment_2025-10-30_10-30-45
+    python resume_backprop_hp.py workspace/my_experiment --no-wandb
 """
 
 import sys
@@ -23,10 +27,10 @@ import toml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from homeostatic_plasticity import main
+from scripts.homeostatic_plasticity.backprop_hp import main
 
 
-def resume_training(output_dir, disable_wandb=False):
+def resume_backprop_hp(output_dir, disable_wandb=False):
     """Resume training from checkpoint in output directory.
 
     Args:
@@ -109,7 +113,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    resume_training(
+    resume_backprop_hp(
         output_dir=args.output_dir,
         disable_wandb=args.no_wandb,
     )

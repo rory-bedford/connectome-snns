@@ -1,8 +1,13 @@
 """
-Plot trained network activity against target (original) network activity.
+Compare trained student network activity against teacher network activity.
 
-This script compares the spike train outputs from a trained student network
-with those from the original target network to evaluate training success.
+This script loads a trained student network from a checkpoint and generates
+spike trains using the same input patterns as the teacher network. It then
+compares the student's output spike trains with the teacher's target spike trains
+using cross-correlation analysis and visualization to evaluate training success.
+
+The script generates comparison plots including cross-correlation histograms
+and scatter plots to quantify how well the student matches the teacher.
 """
 
 import numpy as np
@@ -21,14 +26,14 @@ from visualization.firing_statistics import (
 
 
 def main(experiment_dir, output_dir):
-    """Compare trained network activity with original target network.
+    """Generate comparison plots between student and teacher network activity.
 
     Args:
         experiment_dir (Path): Directory containing training run outputs
             Expected structure:
-                - input/ : Contains original network_structure.npz and spike_data.zarr
+                - input/ : Contains teacher network_structure.npz and spike_data.zarr
                 - checkpoints/ : Contains checkpoint_best.pt
-                - parameters/ : Contains train-student.toml
+                - parameters.toml : Training parameters
         output_dir (Path): Directory where comparison plots will be saved
     """
 

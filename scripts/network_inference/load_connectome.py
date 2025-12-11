@@ -4,14 +4,15 @@ Generating spike trains from a loaded connectome
 This script loads a predefined synthetic connectome from disk and generates
 spiketrains using conductance-based LIF neurons with Poisson inputs.
 
+Useful for running multiple simulations with the same connectivity structure
+but different input patterns, seeds, or simulation parameters.
+
 Overview:
-1. Load the pre-generated recurrent/feedforward weight matrices and network
-   structure from disk.
-2. Generate excitatory mitral cell inputs from the OB with Poisson
-   statistics and sparse projections.
-3. Initialize our network with parameters adapted from
-   Meissner-Bernard et al. (2025) https://doi.org/10.1016/j.celrep.2025.115330
-4. Run our network and examine the output dynamics.
+1. Load pre-generated connectome structure (weights, connectivity, cell types)
+   from disk.
+2. Generate Poisson input spike trains with specified firing rates.
+3. Run network simulation with loaded connectivity.
+4. Save outputs (spike trains, dynamics) for analysis.
 """
 
 import numpy as np

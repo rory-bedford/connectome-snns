@@ -1,6 +1,19 @@
 # Homeostatic Plasticity Training
 
-This script trains a connectome-constrained conductance-based LIF network using homeostatic plasticity mechanisms to regulate network activity toward target firing rates and spike train statistics. The network learns through gradient-based weight updates with multiple loss functions that encourage biologically plausible activity patterns across different cell types.
+This workflow trains a connectome-constrained conductance-based LIF network using homeostatic plasticity mechanisms to regulate network activity toward target firing rates and spike train statistics. The network generates its own connectivity structure and learns through gradient-based weight updates with multiple loss functions that encourage biologically plausible activity patterns.
+
+**Workflow Position:** Stage 2 - After network_inference (which can be used for grid search). Optimized weights from this stage serve as the teacher network for student training (Stage 3).
+
+## Scripts
+
+### 1. `backprop_hp.py` (Gradient-Based Approach) ⭐ MAIN IMPLEMENTATION
+Trains a network using backpropagation through time with multiple loss functions (firing rate, CV, silent penalty, membrane variance, recurrent-feedforward balance). Uses parameters identified from Stage 1 grid search to initialize connectivity, then optimizes weights for target activity patterns.
+
+### 2. `feedback_hp.py` (NOT YET IMPLEMENTED)
+Placeholder for a feedback-based approach that would adjust weights based on observed firing rates without backpropagation (similar to biological homeostatic mechanisms). Currently uses the same gradient-based approach as `backprop_hp.py`.
+
+### 3. `resume_backprop_hp.py`
+Resumes gradient-based homeostatic plasticity training from a checkpoint.
 
 ## Features
 

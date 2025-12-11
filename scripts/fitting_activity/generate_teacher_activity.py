@@ -1,8 +1,11 @@
 """
-Generating spike trains from a synthetic connectome
+Generating teacher activity from optimized connectome
 
-This script generates spiketrains from a predefined synthetic connectome
-to be used as teacher activity for fitting recurrent networks.
+This script loads a pre-trained connectome (typically from homeostatic_plasticity
+training) and generates teacher spike train patterns using odour-modulated inputs.
+These patterns serve as targets for student network training.
+
+Workflow position: Stage 3 (after network_inference → homeostatic_plasticity)
 """
 
 import numpy as np

@@ -1,6 +1,16 @@
-# Conductance-Based Dp Network Simulation
+# Network Inference and Simulation
 
-This script simulates a conductance-based LIF network with assembly structure inspired by zebrafish dorsal pallium (Dp), with feedforward inputs from mitral cells.
+These scripts simulate conductance-based LIF networks with assembly structure inspired by zebrafish dorsal pallium (Dp), with feedforward inputs from mitral cells.
+
+**Workflow Position:** Stage 1 - Initial connectome generation and exploration. Outputs can be used for grid search to identify good connectivity parameters.
+
+## Scripts
+
+### 1. `generate_connectome.py`
+Generates a new synthetic connectome with assembly structure, assigns synaptic weights, and runs network simulation to produce spike train outputs. Use this for initial connectome generation and parameter exploration.
+
+### 2. `load_connectome.py`
+Loads a pre-existing connectome structure from disk and runs network simulation with the same parameters. Useful for running multiple simulations with the same connectivity but different inputs or seeds.
 
 ## Overview
 

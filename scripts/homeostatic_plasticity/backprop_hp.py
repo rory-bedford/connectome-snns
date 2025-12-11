@@ -1,24 +1,31 @@
 """
-Training a student network to match teacher activity patterns.
+Homeostatic plasticity using gradient-based weight optimization.
 
-This script trains a connectome-constrained conductance-based LIF network to
-reproduce target spike train activity from a pre-generated teacher network.
-The student network's connectivity structure is loaded from disk and kept fixed,
-while synaptic weights are optimized using gradient-based learning with multiple
-loss functions (firing rate matching, van Rossum distance, silent neuron penalty).
+This script trains a conductance-based LIF network with assembly structure to
+achieve target firing rates and spike train statistics through gradient-based
+backpropagation. The network learns through multiple loss functions including
+firing rate loss, CV loss, silent neuron penalty, subthreshold variance loss,
+and recurrent-feedforward balance loss.
 
-Workflow position: Stage 4 (final stage after generate_teacher_activity)
+This is typically run after network_inference (which can be used for grid search
+to find good initial connectivity parameters). The optimized weights from this
+stage can then be used as the teacher network for student training.
 
-The script loads pre-computed teacher spike trains from zarr storage and trains
-the student network to match these target patterns through backpropagation with
-surrogate gradients.
+Overview:
+1. Generate initial connectome (or use parameters identified via grid search).
+2. Generate Poisson input spike trains.
+3. Train network using gradient-based optimization with multiple loss functions
+   (firing rate, CV, silent penalty, membrane variance, recurrent-feedforward balance).
+4. Save optimized weights and activity patterns for downstream use.
 """
 
 import numpy as np
-from src.network_inputs.supervised import (
-    PrecomputedSpikeDataset,
-    CyclicSampler,
+from synthetic_connectome import (
+    topology_generators,
+    weight_assigners,
+    cell_types,
 )
+from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
 from torch.utils.data import DataLoader
@@ -27,20 +34,21 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from optimisation.loss_functions import (
     FiringRateLoss,
-    VanRossumLoss,
+    CVLoss,
     SilentNeuronPenalty,
+    SubthresholdVarianceLoss,
+    RecurrentFeedforwardBalanceLoss,
 )
-from optimisation.utils import load_checkpoint
-from parameter_loaders import StudentTrainingParams
+from optimisation.utils import load_checkpoint, AsyncLogger
+from parameter_loaders import HomeostaticPlasticityParams
 from training import SNNTrainer
+from analysis.firing_statistics import compute_spike_train_cv
 import toml
 import wandb
 from visualization.dashboards import (
     create_connectivity_dashboard,
     create_activity_dashboard,
 )
-from training.weight_perturbers import perturb_weights_scaling_factor
-from analysis.firing_statistics import compute_spike_train_cv
 
 
 def main(
@@ -50,12 +58,12 @@ def main(
     wandb_config=None,
     resume_from=None,
 ):
-    """Train a student network to match teacher spike train activity.
+    """Main execution function for Dp network homeostatic training.
 
     Args:
-        input_dir (Path): Directory containing teacher data (network_structure.npz, spike_data.zarr)
-        output_dir (Path): Directory where training outputs will be saved
-        params_file (Path): Path to the file containing training parameters
+        input_dir (Path, optional): Directory containing input data files (may be None)
+        output_dir (Path): Directory where output files will be saved
+        params_file (Path): Path to the file containing network parameters
         wandb_config (dict, optional): W&B configuration from experiment.toml
         resume_from (Path, optional): Path to checkpoint to resume from
     """
@@ -71,11 +79,12 @@ def main(
     # Load all network parameters from TOML file
     with open(params_file, "r") as f:
         data = toml.load(f)
-    params = StudentTrainingParams(**data)
+    params = HomeostaticPlasticityParams(**data)
 
     # Extract commonly used parameter groups
     simulation = params.simulation
     training = params.training
+    targets = params.targets
     hyperparameters = params.hyperparameters
     recurrent = params.recurrent
     feedforward = params.feedforward
@@ -88,73 +97,70 @@ def main(
     else:
         print("No seed specified - using random initialization")
 
-    # ================================
-    # Load Network Structure from Disk
-    # ================================
+    # ===================================
+    # Create Recurrent Connectivity Graph
+    # ===================================
 
-    network_structure = np.load(input_dir / "network_structure.npz")
-
-    # Extract network components
-    weights = network_structure["recurrent_weights"]
-    feedforward_weights = network_structure["feedforward_weights"]
-    cell_type_indices = network_structure["cell_type_indices"]
-    feedforward_cell_type_indices = network_structure["feedforward_cell_type_indices"]
-
-    connectivity_graph = weights != 0.0
-    feedforward_connectivity_graph = feedforward_weights != 0.0
-
-    # Apply Weight Perturbations
-    (
-        weights,
-        feedforward_weights,
-        target_scaling_factors,
-        target_feedforward_scaling_factors,
-    ) = perturb_weights_scaling_factor(
-        weights=weights,
-        feedforward_weights=feedforward_weights,
-        cell_type_indices=cell_type_indices,
-        feedforward_cell_type_indices=feedforward_cell_type_indices,
-        variance=training.weight_perturbation_variance,
+    # Assign cell types to recurrent layer
+    cell_type_indices = cell_types.assign_cell_types(
+        num_neurons=recurrent.topology.num_neurons,
+        cell_type_proportions=recurrent.cell_types.proportion,
+        num_assemblies=recurrent.topology.num_assemblies,
     )
 
-    # Create targets directory if it doesn't exist
-    targets_dir = output_dir / "targets"
-    targets_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save target scaling factors
-    np.savez(
-        targets_dir / "target_scaling_factors.npz",
-        recurrent_scaling_factors=target_scaling_factors,
-        feedforward_scaling_factors=target_feedforward_scaling_factors,
+    # Generate assembly-based connectivity graph
+    connectivity_graph, assembly_ids = topology_generators.assembly_generator(
+        source_cell_types=cell_type_indices,
+        target_cell_types=cell_type_indices,  # Same for recurrent connections
+        num_assemblies=recurrent.topology.num_assemblies,
+        conn_within=recurrent.topology.conn_within,
+        conn_between=recurrent.topology.conn_between,
+        method="configuration",  # Ensures exact in-degree/out-degree distributions
     )
 
-    # ======================
-    # Load Dataset from Disk
-    # ======================
+    # =======================
+    # Assign Synaptic Weights
+    # =======================
 
-    # Load precomputed spike data from zarr
-    spike_dataset = PrecomputedSpikeDataset(
-        spike_data_path=input_dir / "spike_data.zarr",
-        chunk_size=simulation.chunk_size,
-        device=device,
+    # Assign log-normal weights to connectivity graph (no signs for conductance-based)
+    weights = weight_assigners.assign_weights_lognormal(
+        connectivity_graph=connectivity_graph,
+        source_cell_indices=cell_type_indices,
+        target_cell_indices=cell_type_indices,  # Same for recurrent connections
+        cell_type_signs=None,  # No signs for conductance-based model
+        w_mu_matrix=recurrent.weights.w_mu,
+        w_sigma_matrix=recurrent.weights.w_sigma,
+        parameter_space="linear",
     )
 
-    n_patterns = spike_dataset.n_patterns
-    batch_size = spike_dataset.batch_size
-    effective_batch_size = batch_size * n_patterns
+    # ==========================================
+    # Create Feedforward Connections and Weights
+    # ==========================================
 
-    print(
-        f"✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batches × {n_patterns} patterns = {effective_batch_size} effective batch size"
+    # Assign cell types to input layer
+    input_source_indices = cell_types.assign_cell_types(
+        num_neurons=feedforward.topology.num_neurons,
+        cell_type_proportions=feedforward.cell_types.proportion,
     )
-    # DataLoader without additional batching (data is already batched)
 
-    # Result shape per iteration: (batch_size, n_patterns, chunk_size, n_neurons)
-    # Use CyclicSampler to enable infinite iteration for multi-epoch training
-    spike_dataloader = DataLoader(
-        spike_dataset,
-        batch_size=None,  # No additional batching
-        sampler=CyclicSampler(spike_dataset),
-        num_workers=0,
+    # Generate feedforward connectivity graph
+    feedforward_connectivity_graph = topology_generators.sparse_graph_generator(
+        source_cell_types=input_source_indices,
+        target_cell_types=cell_type_indices,  # Connectome layer cell assignments
+        conn_matrix=feedforward.topology.conn_inputs,  # N_input_types x N_recurrent_types matrix
+        allow_self_loops=True,  # Allow for feedforward connections
+        method="configuration",  # Ensures exact in-degree/out-degree distributions
+    )
+
+    # Assign log-normal weights to feedforward connectivity (no signs for conductance-based)
+    feedforward_weights = weight_assigners.assign_weights_lognormal(
+        connectivity_graph=feedforward_connectivity_graph,
+        source_cell_indices=input_source_indices,
+        target_cell_indices=cell_type_indices,
+        cell_type_signs=None,  # No signs for conductance-based model
+        w_mu_matrix=feedforward.weights.w_mu,
+        w_sigma_matrix=feedforward.weights.w_sigma,
+        parameter_space="linear",
     )
 
     # ======================
@@ -163,39 +169,22 @@ def main(
 
     # Initialize conductance-based LIF network model
     model = ConductanceLIFNetwork(
-        dt=spike_dataset.dt,
+        dt=simulation.dt,
         weights=weights,
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=hyperparameters.surrgrad_scale,
         weights_FF=feedforward_weights,
-        cell_type_indices_FF=feedforward_cell_type_indices,
+        cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable="scaling_factors",
+        optimisable="weights",
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
     # Move model to device for GPU acceleration
     model.to(device)
-
-    # Print initial scaling factors and target values
-    section = "INITIAL SCALING FACTORS AND TARGETS"
-    print("\n" + "=" * len(section))
-    print(section)
-    print("=" * len(section))
-    print(
-        f"Initial recurrent scaling factors:\n{model.scaling_factors.detach().cpu().numpy()}"
-    )
-    print(
-        f"\nInitial feedforward scaling factors:\n{model.scaling_factors_FF.detach().cpu().numpy()}"
-    )
-    print(f"\nTarget recurrent scaling factors:\n{target_scaling_factors}")
-    print(
-        f"\nTarget feedforward scaling factors:\n{target_feedforward_scaling_factors}"
-    )
-    print("=" * len(section) + "\n")
 
     # ==============================
     # Setup Optimiser and DataLoader
@@ -206,46 +195,78 @@ def main(
     # Mixed precision training scaler (only used if enabled)
     scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
+    # Create firing rates array for input neurons
+    input_firing_rates = np.zeros(feedforward.topology.num_neurons)
+    for cell_type_name in feedforward.cell_types.names:
+        cell_type_idx = feedforward.cell_types.names.index(cell_type_name)
+        mask = input_source_indices == cell_type_idx
+        input_firing_rates[mask] = feedforward.activity[cell_type_name].firing_rate
+
+    # Initialize Poisson spike generator dataset
+    spike_dataset = HomogeneousPoissonSpikeDataset(
+        firing_rates=input_firing_rates,
+        chunk_size=simulation.chunk_size,
+        dt=simulation.dt,
+    )
+
+    # Create DataLoader with batch_size from parameters
+    spike_dataloader = DataLoader(
+        spike_dataset,
+        batch_size=params.training.batch_size,
+        shuffle=False,
+        num_workers=0,  # Keep 0 for GPU generation
+    )
+
     # =====================
     # Define Loss Functions
     # =====================
 
     # Initialize all target tensors
-    target_rate_tensor = spike_dataset.target_firing_rates
+    target_rate_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+    target_cv_tensor = torch.ones(recurrent.topology.num_neurons, device=device)
+    alpha_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+    v_threshold_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
+    threshold_ratio_tensor = torch.zeros(recurrent.topology.num_neurons, device=device)
 
-    # Build alpha tensor for silent neuron penalty (per-neuron)
-    alpha_tensor = torch.zeros(len(cell_type_indices), device=device)
+    # Populate all tensors in a single loop over cell types
     for cell_type_name in recurrent.cell_types.names:
         cell_type_idx = recurrent.cell_types.names.index(cell_type_name)
         mask = cell_type_indices == cell_type_idx
-        alpha_tensor[mask] = hyperparameters.alpha[cell_type_name]
+
+        # Set cell-type-specific values
+        target_rate_tensor[mask] = targets.firing_rate[cell_type_name]
+        alpha_tensor[mask] = targets.alpha[cell_type_name]
+        threshold_ratio_tensor[mask] = targets.threshold_ratio[cell_type_name]
+        v_threshold_tensor[mask] = recurrent.physiology[cell_type_name].theta
 
     # Initialize loss functions
-    silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=spike_dataset.dt)
-
     firing_rate_loss_fn = FiringRateLoss(
-        target_rate=target_rate_tensor,
-        dt=spike_dataset.dt,
-        epsilon=hyperparameters.firing_rate_epsilon,
+        target_rate=target_rate_tensor, dt=simulation.dt
     )
-
-    van_rossum_loss_fn = VanRossumLoss(
-        tau=hyperparameters.van_rossum_tau,
-        dt=spike_dataset.dt,
-        window_size=simulation.chunk_size,
-        device=device,
+    cv_loss_fn = CVLoss(target_cv=target_cv_tensor)
+    silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=simulation.dt)
+    membrane_variance_loss_fn = SubthresholdVarianceLoss(
+        v_threshold=v_threshold_tensor, target_ratio=threshold_ratio_tensor
+    )
+    weight_ratio_loss_fn = RecurrentFeedforwardBalanceLoss(
+        target_ratio=targets.weight_ratio
     )
 
     # Define loss weights from config
     loss_weights = {
         "firing_rate": hyperparameters.loss_weight.firing_rate,
-        "van_rossum": hyperparameters.loss_weight.van_rossum,
+        "cv": hyperparameters.loss_weight.cv,
         "silent_penalty": hyperparameters.loss_weight.silent_penalty,
+        "membrane_variance": hyperparameters.loss_weight.membrane_variance,
+        "weight_ratio": hyperparameters.loss_weight.weight_ratio,
     }
 
     # =============
     # Setup Loggers
     # =============
+
+    # Initialize async logger for non-blocking metric logging
+    metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
 
     # Setup wandb if config provided (enabled flag already filtered by experiment_runners)
     wandb_run = None
@@ -312,11 +333,10 @@ def main(
             weights=weights,
             feedforward_weights=feedforward_weights,
             cell_type_indices=cell_type_indices,
-            input_cell_type_indices=feedforward_cell_type_indices,
+            input_cell_type_indices=input_source_indices,
             cell_type_names=params.recurrent.cell_types.names,
             input_cell_type_names=params.feedforward.cell_types.names,
-            plot_fraction_recurrent=0.1,
-            plot_fraction_feedforward=0.1,
+            num_assemblies=params.recurrent.topology.num_assemblies,
         )
 
         # Generate activity dashboard
@@ -325,7 +345,7 @@ def main(
             input_spikes=input_spikes,
             cell_type_indices=cell_type_indices,
             cell_type_names=params.recurrent.cell_types.names,
-            dt=spike_dataset.dt,
+            dt=params.simulation.dt,
             voltages=voltages,
             neuron_types=cell_type_indices,
             neuron_params=neuron_params,
@@ -348,43 +368,31 @@ def main(
             "activity_dashboard": activity_fig,
         }
 
-    # Define stats computer function (captures model and target scaling factors in closure)
-    def stats_computer(spikes, model_snapshot):
+    # Define stats computer function
+    def stats_computer(spikes, model):
         """Compute summary statistics from network activity.
 
         Args:
-            spikes: Spike array of shape (batch, time, neurons) or (batch, patterns, time, neurons)
-            model_snapshot: Dictionary containing model parameters as numpy arrays
-                           (keys: "scaling_factors", "scaling_factors_FF")
+            spikes: Spike array of shape (batch, time, neurons)
+            model: The network model (unused in this script)
 
         Returns:
-            Dictionary with keys: metric/stat/cell_type and scaling_factors/layer/metric/connection
+            Dictionary with keys: metric/cell_type/stat
         """
-        # Handle both 3D and 4D inputs by flattening batch×patterns
-        if spikes.ndim == 4:
-            batch, patterns, time, neurons = spikes.shape
-            spikes_flat = spikes.reshape(batch * patterns, time, neurons)
-        else:
-            spikes_flat = spikes
-            time = spikes.shape[1]
-            neurons = spikes.shape[2]
-
-        # Compute firing rates per neuron (Hz), averaged over batch×patterns
-        spike_counts = spikes_flat.sum(
-            axis=1
-        )  # Sum over time: (batch*patterns, neurons)
-        spike_counts_avg = spike_counts.mean(
-            axis=0
-        )  # Average over batch×patterns: (neurons,)
-        duration_s = time * spike_dataset.dt / 1000.0  # Convert ms to s
+        # Compute firing rates per neuron (Hz), averaged over batch
+        spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
+        spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
+        duration_s = spikes.shape[1] * params.simulation.dt / 1000.0  # Convert ms to s
         firing_rates = spike_counts_avg / duration_s
 
-        # CV computation (only on batch 0, pattern 0 for efficiency)
-        # spikes_flat is already (batch*patterns, time, neurons), so just take first element
+        # Vectorized CV computation
         cv_values = compute_spike_train_cv(
-            spikes_flat[0:1, :, :], dt=spike_dataset.dt
-        )  # Shape: (1, neurons)
-        cv_per_neuron = cv_values[0, :]  # (neurons,)
+            spikes, dt=params.simulation.dt
+        )  # Shape: (batch, neurons)
+
+        # Suppress warning for neurons with no spikes (expected early in training)
+        with np.errstate(invalid="ignore"):
+            cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
 
         # Compute statistics by cell type
         stats = {}
@@ -393,18 +401,18 @@ def main(
             cell_type_name = params.recurrent.cell_types.names[int(cell_type)]
 
             # Firing rate statistics
-            stats[f"firing_rate/mean/{cell_type_name}"] = float(
+            stats[f"firing_rate/{cell_type_name}/mean"] = float(
                 firing_rates[mask].mean()
             )
-            stats[f"firing_rate/std/{cell_type_name}"] = float(firing_rates[mask].std())
+            stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
 
             # CV statistics (only for neurons with valid CVs)
             cell_cvs = cv_per_neuron[mask]
             valid_cvs = cell_cvs[~np.isnan(cell_cvs)]
-            stats[f"cv/mean/{cell_type_name}"] = (
+            stats[f"cv/{cell_type_name}/mean"] = (
                 float(np.mean(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
-            stats[f"cv/std/{cell_type_name}"] = (
+            stats[f"cv/{cell_type_name}/std"] = (
                 float(np.std(valid_cvs)) if len(valid_cvs) > 0 else float("nan")
             )
 
@@ -413,49 +421,17 @@ def main(
                 (firing_rates[mask] > 0).mean()
             )
 
-        # Add scaling factor tracking
-        # Scaling factors are 2D: (n_source_types, n_target_types)
-        current_recurrent_sf = model_snapshot["scaling_factors"]
-        current_feedforward_sf = model_snapshot["scaling_factors_FF"]
-
-        # Get cell type names
-        target_cell_types = params.recurrent.cell_types.names
-        source_ff_cell_types = params.feedforward.cell_types.names
-
-        # Log recurrent scaling factors: source -> target
-        for target_idx, target_type in enumerate(target_cell_types):
-            for source_idx, source_type in enumerate(target_cell_types):
-                synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/recurrent/{synapse_name}/value"] = float(
-                    current_recurrent_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
-                    target_scaling_factors[source_idx, target_idx]
-                )
-
-        # Log feedforward scaling factors: source_ff -> target
-        for target_idx, target_type in enumerate(target_cell_types):
-            for source_idx, source_type in enumerate(source_ff_cell_types):
-                synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/feedforward/{synapse_name}/value"] = float(
-                    current_feedforward_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
-                    target_feedforward_scaling_factors[source_idx, target_idx]
-                )
-
         return stats
 
-    # ====================================
+    # ===================================
     # Save Initial State and Run Inference
-    # ====================================
+    # ===================================
 
     # Only save initial state and run inference if starting from scratch
     if resume_from is None:
-        section = "Running 10s inference with initial scaling factors..."
-        print("\n" + "=" * len(section))
-        print(section)
-        print("=" * len(section))
+        print("\n" + "=" * 60)
+        print("SAVING INITIAL STATE AND RUNNING INFERENCE")
+        print("=" * 60)
 
         # Create initial_state directory
         initial_state_dir = output_dir / "initial_state"
@@ -470,34 +446,31 @@ def main(
             recurrent_connectivity=connectivity_graph,
             feedforward_connectivity=feedforward_connectivity_graph,
             cell_type_indices=cell_type_indices,
-            feedforward_cell_type_indices=feedforward_cell_type_indices,
+            feedforward_cell_type_indices=input_source_indices,
+            assembly_ids=assembly_ids,
         )
         print(
             f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
         )
 
-        # Run 10s inference on single batch
+        # Run 10s inference on single batch (batch_size=1)
         print("\nRunning 10s inference with initial weights...")
         inference_duration_ms = 10000.0  # 10 seconds
-        inference_timesteps = int(inference_duration_ms / spike_dataset.dt)
+        inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-        # Calculate number of chunks needed for 10s
-        chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
-
-        # Collect input and target spikes from precomputed dataset (batch=0, pattern=0)
-        inference_input_spikes_list = []
-        for chunk_idx in range(chunks_needed):
-            input_chunk, target_chunk = spike_dataset[chunk_idx]
-            # Dataset returns (batch, patterns, time, neurons)
-            # Extract batch 0, pattern 0: (time, neurons)
-            inference_input_spikes_list.append(input_chunk[0, 0, :, :])
-
-        # Concatenate chunks and truncate to exact duration
-        inference_input_spikes = torch.cat(inference_input_spikes_list, dim=0)[
-            :inference_timesteps, :
-        ]
-        # Add batch dimension for model: (1, time, n_neurons)
-        inference_input_spikes = inference_input_spikes.unsqueeze(0)
+        # Create a new dataset for 10s inference with batch_size=1
+        inference_dataset = HomogeneousPoissonSpikeDataset(
+            firing_rates=input_firing_rates,
+            chunk_size=inference_timesteps,  # Single chunk of 10s
+            dt=simulation.dt,
+        )
+        inference_dataloader = DataLoader(
+            inference_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+        )
+        inference_input_spikes, _ = next(iter(inference_dataloader))
 
         # Run inference with tqdm progress bar
         model.use_tqdm = True
@@ -526,7 +499,7 @@ def main(
             figures_dir = initial_state_dir / "figures"
             figures_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert to numpy and take only first batch (keep batch dimension)
+            # Convert to numpy and take only first batch
             plot_data = {
                 "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
                 "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
@@ -567,18 +540,9 @@ def main(
 
         print("=" * 60 + "\n")
 
-    resume_from = None
-
     # ===================
     # Setup Training Loop
     # ===================
-
-    # Initialize simulation config with dataset and training parameters
-    simulation.setup(
-        dt=spike_dataset.dt,
-        chunks_per_epoch=spike_dataset.num_chunks,
-        epochs=training.epochs,
-    )
 
     # Initialize progress bar for training loop
     pbar = tqdm(
@@ -596,12 +560,15 @@ def main(
         spike_dataloader=spike_dataloader,
         loss_functions={
             "firing_rate": firing_rate_loss_fn,
-            "van_rossum": van_rossum_loss_fn,
+            "cv": cv_loss_fn,
             "silent_penalty": silent_penalty_fn,
+            "membrane_variance": membrane_variance_loss_fn,
+            "weight_ratio": weight_ratio_loss_fn,
         },
         loss_weights=loss_weights,
         params=params,
         device=device,
+        metrics_logger=metrics_logger,
         wandb_logger=wandb_run,
         progress_bar=pbar,
         plot_generator=plot_generator,
@@ -642,15 +609,12 @@ def main(
     print(
         f"Total chunks: {simulation.num_chunks} ({simulation.total_duration_s:.1f}s total)"
     )
-    print(f"Epochs: {training.epochs}")
+    print(f"Batch size: {training.batch_size}")
     print(
-        f"Batch size: {batch_size} × {n_patterns} patterns = {effective_batch_size} effective"
+        f"Log interval: {training.log_interval} chunks ({params.log_interval_s:.1f}s)"
     )
     print(
-        f"Log interval: {training.log_interval} chunks ({training.log_interval_s(simulation.chunk_duration_s):.1f}s)"
-    )
-    print(
-        f"Checkpoint interval: {training.checkpoint_interval} chunks ({training.checkpoint_interval_s(simulation.chunk_duration_s):.1f}s)"
+        f"Checkpoint interval: {training.checkpoint_interval} chunks ({params.checkpoint_interval_s:.1f}s)"
     )
 
     # Run training with the trainer
@@ -686,34 +650,31 @@ def main(
         recurrent_connectivity=connectivity_graph,
         feedforward_connectivity=feedforward_connectivity_graph,
         cell_type_indices=cell_type_indices,
-        feedforward_cell_type_indices=feedforward_cell_type_indices,
+        feedforward_cell_type_indices=input_source_indices,
+        assembly_ids=assembly_ids,
     )
     print(
         f"✓ Final network structure saved to {final_state_dir / 'network_structure.npz'}"
     )
 
-    # Run 10s inference on single batch
+    # Run 10s inference on single batch (batch_size=1)
     print("\nRunning 10s inference with final weights...")
     inference_duration_ms = 10000.0  # 10 seconds
-    inference_timesteps = int(inference_duration_ms / spike_dataset.dt)
+    inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-    # Calculate number of chunks needed for 10s
-    chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
-
-    # Collect input spikes from precomputed dataset (batch 0, pattern 0)
-    final_inference_input_spikes_list = []
-    for chunk_idx in range(chunks_needed):
-        input_chunk, target_chunk = spike_dataset[chunk_idx]
-        # Dataset returns (batch, patterns, time, neurons)
-        # Extract batch 0, pattern 0: (time, neurons)
-        final_inference_input_spikes_list.append(input_chunk[0, 0, :, :])
-
-    # Concatenate chunks and truncate to exact duration
-    final_inference_input_spikes = torch.cat(final_inference_input_spikes_list, dim=0)[
-        :inference_timesteps, :
-    ]
-    # Add batch dimension for model: (1, time, n_neurons)
-    final_inference_input_spikes = final_inference_input_spikes.unsqueeze(0)
+    # Create a new dataset for 10s inference with batch_size=1
+    final_inference_dataset = HomogeneousPoissonSpikeDataset(
+        firing_rates=input_firing_rates,
+        chunk_size=inference_timesteps,  # Single chunk of 10s
+        dt=simulation.dt,
+    )
+    final_inference_dataloader = DataLoader(
+        final_inference_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+    final_inference_input_spikes, _ = next(iter(final_inference_dataloader))
 
     # Run inference with tqdm progress bar
     model.use_tqdm = True
@@ -742,7 +703,7 @@ def main(
         figures_dir = final_state_dir / "figures"
         figures_dir.mkdir(parents=True, exist_ok=True)
 
-        # Convert to numpy and take only first batch (keep batch dimension)
+        # Convert to numpy and take only first batch
         plot_data = {
             "spikes": final_inf_spikes[0:1, ...].detach().cpu().numpy(),
             "voltages": final_inf_voltages[0:1, ...].detach().cpu().numpy(),
@@ -791,7 +752,7 @@ def main(
 
     # Close async logger and flush all remaining data
     print("Flushing metrics to disk...")
-    trainer.metrics_logger.close()
+    metrics_logger.close()
 
     # Finish wandb run
     if wandb_run is not None:
@@ -799,6 +760,6 @@ def main(
 
     print(f"\n✓ Checkpoints: {output_dir / 'checkpoints'}")
     print(f"✓ Figures: {output_dir / 'figures'}")
-    print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
+    print(f"✓ Metrics: {metrics_logger.log_dir / 'training_metrics.csv'}")
     print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")

@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 """
-Resume training from a checkpoint.
+Resume student network training from a checkpoint.
 
-NOTE: Since experiment tracking has already been initialized, this script should be called directly, outside of
-the usual experiment runner.
+This script resumes training of a student network from a previously saved
+checkpoint. It loads the most recent checkpoint and continues the training
+process from where it left off.
+
+NOTE: Since experiment tracking has already been initialized, this script
+should be called directly, outside of the usual experiment runner.
 
 Usage:
     python resume_training.py <output_dir> [--no-wandb]

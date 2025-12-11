@@ -4,14 +4,18 @@ Generating spike trains from a synthetic connectome
 This script generates a recurrent/feedforward synthetic connectome from a parameter file,
 then generates spiketrains using conductance-based LIF neurons.
 
+This is typically the first step in the workflow, used to generate and save
+connectome structures that can be reused in subsequent stages (homeostatic
+plasticity training, teacher network generation).
+
 Overview:
-1. First we generate a biologically plausible recurrent weight matrix with a
+1. Generate a biologically plausible recurrent weight matrix with a
    Dp-inspired assembly structure.
-2. Next we generate excitatory mitral cell inputs from the OB with Poisson
+2. Generate excitatory mitral cell inputs from the OB with Poisson
    statistics and sparse projections.
-3. Then we initialise our network with parameters adapted from
+3. Initialize network with parameters adapted from
    Meissner-Bernard et al. (2025) https://doi.org/10.1016/j.celrep.2025.115330
-4. Finally we run our network and examine the output dynamics.
+4. Run network simulation and save outputs (connectivity, weights, spike trains).
 """
 
 import numpy as np
