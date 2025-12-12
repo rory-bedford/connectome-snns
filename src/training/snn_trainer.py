@@ -24,6 +24,9 @@ class SNNTrainer:
     All components (model, optimizer, dataloaders, loss functions, loggers)
     should be initialized beforehand and passed to this trainer.
 
+    AsyncLogger for metrics CSV logging and wandb are automatically initialized
+    when output_dir and wandb_config are provided to the train() method.
+
     Args:
         model (torch.nn.Module): The initialized SNN model
         optimizer (torch.optim.Optimizer): The initialized optimizer
@@ -33,7 +36,7 @@ class SNNTrainer:
         loss_weights (Dict[str, float]): Dict with weights for each loss function
         params: Training parameters object
         device (str): Device string ('cpu' or 'cuda')
-        wandb_logger (Optional[Any]): Initialized wandb run object (optional)
+        wandb_config (Optional[Dict[str, Any]]): Wandb configuration dict (optional)
         progress_bar (Optional[Any]): Initialized tqdm progress bar (optional)
         plot_generator (Optional[Callable]): Optional function for generating plots
         stats_computer (Optional[Callable]): Optional function for computing network stats
@@ -51,7 +54,7 @@ class SNNTrainer:
         loss_weights: Dict[str, float],
         params: Any,
         device: str,
-        wandb_logger: Optional[Any] = None,
+        wandb_config: Optional[Dict[str, Any]] = None,
         progress_bar: Optional[Any] = None,
         plot_generator: Optional[Callable] = None,
         stats_computer: Optional[Callable] = None,
@@ -67,7 +70,13 @@ class SNNTrainer:
         self.loss_weights = loss_weights
         self.params = params
         self.device = device
-        self.wandb_logger = wandb_logger
+        self.wandb_config = wandb_config
+        self.metrics_logger = (
+            None  # Will be initialized in train() if output_dir provided
+        )
+        self.wandb_logger = (
+            None  # Will be initialized in train() if wandb_config provided
+        )
         self.pbar = progress_bar
         self.plot_generator = plot_generator
         self.stats_computer = stats_computer
@@ -85,9 +94,6 @@ class SNNTrainer:
             # Will be initialized in train() method with output_dir
             pass
 
-        # Initialize async logger (will be initialized in train() method with output_dir)
-        self.metrics_logger = None
-
         # Training state
         self.initial_states = {"v": None, "g": None, "g_FF": None}
         self.plot_accumulators = self._init_plot_accumulators()
@@ -96,12 +102,14 @@ class SNNTrainer:
         # maxlen automatically handles rolling window
         self.loss_history = deque(maxlen=self.training.log_interval)
 
-        # Spike accumulator for computing statistics over log_interval chunks
-        # This ensures CV and other stats are computed on longer recordings
-        self.spike_accumulator = deque(maxlen=self.training.log_interval)
+        # Debug mode flag (can be enabled externally)
+        self.debug_gradients = False
 
         # Gradient statistics accumulator for online averaging over log_interval
         self.gradient_accumulator = deque(maxlen=self.training.log_interval)
+
+        # Track how many chunks have been accumulated for stats/plotting
+        self.accumulated_chunks = 0
 
         # Track training state
         self.current_epoch = 0
@@ -141,13 +149,37 @@ class SNNTrainer:
         # Initialize gradient accumulation
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Initialize async logger if not already initialized
+        # Initialize wandb if config provided and not already initialized
+        if self.wandb_config and self.wandb_logger is None:
+            import wandb
+
+            # Build wandb config from network parameters
+            wandb_config_dict = {
+                **self.params.model_dump(),  # Convert all params to dict
+                "output_dir": str(output_dir) if output_dir else None,
+                "device": self.device,
+            }
+
+            # Build init kwargs with only non-None optional parameters
+            wandb_init_kwargs = {
+                "name": output_dir.name if output_dir else "snn_training",
+                "config": wandb_config_dict,
+                "dir": str(output_dir) if output_dir else None,
+                **self.wandb_config,
+            }
+
+            print("\n" + "=" * 60)
+            self.wandb_logger = wandb.init(**wandb_init_kwargs)
+            wandb.watch(
+                self.model, log="parameters", log_freq=self.training.log_interval
+            )
+            print("=" * 60 + "\n")
+
+        # Initialize async logger if output_dir provided and not already initialized
         if output_dir and self.metrics_logger is None:
             self.metrics_logger = AsyncLogger(
                 log_dir=output_dir,
-                flush_interval=120.0,
-                max_queue_size=3,
-                wandb_logger=self.wandb_logger,
+                max_queue_size=10,
             )
 
         # Initialize async plotter if conditions are met
@@ -188,23 +220,16 @@ class SNNTrainer:
             detached_losses = {name: value for name, value in losses.items()}
             self.loss_history.append(detached_losses)
 
-            # Accumulate spikes for statistics computation (only batch 0, as boolean for memory efficiency)
-            self.spike_accumulator.append(
-                chunk_outputs["spikes"][0:1, ...].detach().cpu().numpy().astype(bool)
-            )
-
             # Update weights if needed
             if self._should_update_weights(epoch):
                 self._update_weights()
 
-            # Log metrics (using running average of losses and accumulated spikes)
+            # Log metrics (using running average of losses and accumulated data)
             if self._should_log(epoch):
                 avg_losses = self._compute_average_losses()
-                # Concatenate accumulated spikes along time axis (axis=1)
-                accumulated_spikes = np.concatenate(
-                    list(self.spike_accumulator), axis=1
-                )
-                self._log_metrics(avg_losses, accumulated_spikes, epoch)
+                # Use concatenated plot data (spikes) for stats computation
+                plot_data = self._concatenate_plot_data()
+                self._log_metrics(avg_losses, plot_data["spikes"], epoch)
 
             # Checkpoint and plot
             if self._should_checkpoint(epoch) and output_dir:
@@ -244,6 +269,10 @@ class SNNTrainer:
 
     def _forward_pass(self) -> Dict[str, torch.Tensor]:
         """Run forward pass through the model."""
+        # Enable debug mode for first few iterations
+        if self.debug_gradients:
+            self.model._debug_weights = True
+
         # Get next data from dataloader
         # With batch_size=None, DataLoader returns items directly without batching
         data = next(self.spike_iter)
@@ -320,34 +349,75 @@ class SNNTrainer:
     def _accumulate_data(
         self, chunk_outputs: Dict[str, torch.Tensor], epoch: int
     ) -> None:
-        """Accumulate detached data for plotting only."""
-        # Accumulate for plotting only when approaching checkpoint
-        if self._should_store_for_plot(epoch):
-            for key in self.plot_accumulators.keys():
-                if key == "input_spikes":
-                    tensor = chunk_outputs["input_spikes"]
-                else:
-                    tensor = chunk_outputs[key]
+        """Accumulate detached data for both plotting and stats computation."""
+        # Always accumulate data (used for both stats and plotting)
+        # Accumulate up to plot_size, then start dropping oldest
+        for key in self.plot_accumulators.keys():
+            if key == "input_spikes":
+                tensor = chunk_outputs["input_spikes"]
+            else:
+                tensor = chunk_outputs[key]
 
-                # Convert spikes to bool for storage efficiency
-                if key == "spikes":
-                    tensor = tensor.bool()
+            # Convert spikes to bool for storage efficiency
+            if key == "spikes":
+                tensor = tensor.bool()
 
-                # Only store batch 0 to reduce memory usage 100x
-                tensor = tensor[0:1, ...]
+            # Only store batch 0 to reduce memory usage 100x
+            tensor = tensor[0:1, ...]
 
-                if self.device == "cuda":
-                    numpy_array = tensor.detach().cpu().pin_memory().numpy()
-                else:
-                    numpy_array = tensor.detach().numpy()
+            if self.device == "cuda":
+                numpy_array = tensor.detach().cpu().pin_memory().numpy()
+            else:
+                numpy_array = tensor.detach().numpy()
 
-                self.plot_accumulators[key].append(numpy_array)
+            self.plot_accumulators[key].append(numpy_array)
+
+            # Maintain rolling window of plot_size chunks
+            if len(self.plot_accumulators[key]) > self.training.plot_size:
+                self.plot_accumulators[key].pop(0)
+
+        # Update accumulated chunks counter (saturates at plot_size)
+        self.accumulated_chunks = min(
+            self.accumulated_chunks + 1, self.training.plot_size
+        )
 
     def _compute_losses(
         self, chunk_outputs: Dict[str, torch.Tensor]
     ) -> Dict[str, float]:
         """Compute losses and perform backward pass for a single chunk."""
         spikes = chunk_outputs["spikes"]
+
+        # Check if any loss function needs weights
+        needs_weights = any(
+            hasattr(loss_fn, "required_inputs")
+            and (
+                "recurrent_weights" in loss_fn.required_inputs
+                or "feedforward_weights" in loss_fn.required_inputs
+            )
+            for loss_fn in self.loss_functions.values()
+        )
+
+        # Get weights OUTSIDE autocast to avoid float16 overflow in exp()
+        # When optimisable="weights", this computes exp(log_weights) in full precision
+        if needs_weights:
+            if (
+                hasattr(self.model, "log_weights")
+                and self.model.optimisable == "weights"
+            ):
+                # Compute exp once in full precision for loss functions
+                weights_for_loss = torch.exp(self.model.log_weights)
+                weights_FF_for_loss = torch.exp(self.model.log_weights_FF)
+            else:
+                # Non-weight optimization mode - get weights from buffers/parameters
+                weights_for_loss = self.model._buffers.get(
+                    "weights"
+                ) or self.model._parameters.get("weights")
+                weights_FF_for_loss = self.model._buffers.get(
+                    "weights_FF"
+                ) or self.model._parameters.get("weights_FF")
+        else:
+            weights_for_loss = None
+            weights_FF_for_loss = None
 
         # Compute losses with mixed precision
         with autocast(
@@ -368,9 +438,9 @@ class SNNTrainer:
                         elif req_input == "dt":
                             inputs["dt"] = self.simulation.dt
                         elif req_input == "recurrent_weights":
-                            inputs["recurrent_weights"] = self.model.weights
+                            inputs["recurrent_weights"] = weights_for_loss
                         elif req_input == "feedforward_weights":
-                            inputs["feedforward_weights"] = self.model.weights_FF
+                            inputs["feedforward_weights"] = weights_FF_for_loss
                 else:
                     # For losses without metadata, assume they take output_spikes
                     inputs["output_spikes"] = spikes
@@ -386,7 +456,29 @@ class SNNTrainer:
                             "Ensure your dataset returns (input_spikes, target_spikes)."
                         )
 
-                individual_losses[loss_name] = loss_fn(**inputs)
+                # Compute loss
+                loss_value = loss_fn(**inputs)
+                individual_losses[loss_name] = loss_value
+
+                # Debug: Check if this specific loss has NaN/Inf
+                if self.debug_gradients:
+                    has_nan = (
+                        torch.isnan(loss_value).any().item()
+                        if isinstance(loss_value, torch.Tensor)
+                        else False
+                    )
+                    has_inf = (
+                        torch.isinf(loss_value).any().item()
+                        if isinstance(loss_value, torch.Tensor)
+                        else False
+                    )
+                    if has_nan or has_inf:
+                        print(
+                            f"\n⚠️  WARNING: {loss_name} loss has NaN={has_nan} Inf={has_inf}"
+                        )
+                        print(
+                            f"    Loss value: {loss_value.item() if isinstance(loss_value, torch.Tensor) else loss_value}"
+                        )
 
             # Compute weighted total loss for optimization
             total_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
@@ -397,16 +489,38 @@ class SNNTrainer:
             # Scale by number of loss computations per update
             total_loss = total_loss / self.training.chunks_per_update
 
-        # Backward pass with weighted total loss (accumulates gradients)
+        # Backward pass
         self.scaler.scale(total_loss).backward()
+
+        # Debug: Print masked gradients on optimizable parameters
+        if self.debug_gradients:
+            with torch.no_grad():
+                # Apply masks inline for debugging (without modifying actual gradients yet)
+                for name, param in self.model.named_parameters():
+                    if param.requires_grad and param.grad is not None:
+                        # Get masked gradient for display
+                        masked_grad = param.grad.clone()
+                        if name == "log_weights" and self.connectome_mask is not None:
+                            masked_grad *= self.connectome_mask
+                        elif (
+                            name == "log_weights_FF"
+                            and self.feedforward_mask is not None
+                        ):
+                            masked_grad *= self.feedforward_mask
+
+                        has_nan = torch.isnan(masked_grad).any().item()
+                        has_inf = torch.isinf(masked_grad).any().item()
+                        if not has_nan and not has_inf:
+                            grad_norm = masked_grad.norm().item()
+                            print(f"  {name}.grad: norm={grad_norm:.6f}")
+                        else:
+                            print(f"  {name}.grad: NaN={has_nan} Inf={has_inf}")
 
         # Convert to detached scalars for logging
         losses = {"total": total_loss.detach().cpu().item()}
-        # Add individual loss values for logging
         for loss_name, loss_value in individual_losses.items():
             losses[loss_name] = loss_value.detach().cpu().item()
 
-        # Cleanup
         del total_loss
         for loss_value in individual_losses.values():
             del loss_value
@@ -445,7 +559,7 @@ class SNNTrainer:
         # Accumulate gradient statistics for online averaging
         self._accumulate_gradient_statistics()
 
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -468,9 +582,11 @@ class SNNTrainer:
             spikes: Accumulated spike data as numpy array (already on CPU)
             epoch: Current epoch number
         """
-        # Capture model parameters snapshot for async stats computation
+
+        # Compute stats if stats_computer is provided
+        stats = {}
         if self.stats_computer:
-            # Copy model parameters to numpy (on CPU) to avoid data races
+            # Copy model parameters to numpy (on CPU) for stats computation
             if self.device == "cuda":
                 model_snapshot = {
                     "scaling_factors": self.model.scaling_factors.detach()
@@ -486,27 +602,40 @@ class SNNTrainer:
                     "scaling_factors_FF": self.model.scaling_factors_FF.detach().numpy(),
                 }
 
-            # Compute gradient stats if wandb is enabled (lightweight operation)
-            gradient_stats = {}
-            if self.wandb_logger:
-                gradient_stats = self._compute_average_gradients()
+            # Compute stats synchronously
+            stats = self.stats_computer(spikes, model_snapshot)
 
-            # Offload stats computation to AsyncLogger's worker thread (non-blocking)
-            self.metrics_logger.log_with_stats(
-                epoch=epoch + 1,
-                losses=losses,
-                spikes=spikes,
-                model_snapshot=model_snapshot,
-                stats_computer=self.stats_computer,
-                gradient_stats=gradient_stats,
-            )
-        else:
-            # No stats computation needed, just log losses
-            csv_data = {
-                f"{loss_name}_loss": loss_value
+        # Prepare CSV data
+        csv_data = {
+            f"{loss_name}_loss": loss_value for loss_name, loss_value in losses.items()
+        }
+        csv_data.update(stats)
+
+        # Log to CSV asynchronously
+        if self.metrics_logger:
+            self.metrics_logger.log(epoch=epoch + 1, **csv_data)
+
+        # Log to wandb directly (synchronous but fast)
+        if self.wandb_logger:
+            import wandb
+
+            # Compute gradient stats for wandb
+            gradient_stats = self._compute_average_gradients()
+
+            # Create loss dict with wandb naming convention
+            wandb_losses = {
+                f"loss/{loss_name}": loss_value
                 for loss_name, loss_value in losses.items()
             }
-            self.metrics_logger.log(epoch=epoch + 1, **csv_data)
+
+            wandb.log(
+                {
+                    **wandb_losses,
+                    **stats,
+                    **gradient_stats,
+                },
+                step=epoch + 1,
+            )
 
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
         """Save initial checkpoint before training begins."""
@@ -680,6 +809,9 @@ class SNNTrainer:
         """Clear plot data and force garbage collection."""
         for key in self.plot_accumulators:
             self.plot_accumulators[key].clear()
+
+        # Don't reset accumulated_chunks - it tracks total progress, not queue size
+        # The plot_accumulators themselves maintain a rolling window via pop(0)
 
         import gc
 

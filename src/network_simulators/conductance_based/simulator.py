@@ -120,6 +120,15 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Run simulation
         # ==============
 
+        # Compute weights once at the start if optimizing weights
+        # This creates a single tensor in the computation graph instead of calling property multiple times
+        if self.optimisable == "weights":
+            weights_for_forward = torch.exp(self.log_weights)
+            weights_FF_for_forward = torch.exp(self.log_weights_FF)
+        else:
+            weights_for_forward = None
+            weights_FF_for_forward = None
+
         # Gather cached weight tensors into lists once (outside the loop)
         cached_rec = [
             getattr(self, f"cached_rec_{i}")
@@ -171,8 +180,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     self.E_L,
                     self.C_m,
                     self.U_reset,
-                    self.weights,
-                    self.weights_FF,
+                    weights_for_forward,
+                    weights_FF_for_forward,
                     self.cached_weights_rec_masks,
                     self.cached_weights_rec_syn_masks,
                     self.cached_weights_rec_indices,

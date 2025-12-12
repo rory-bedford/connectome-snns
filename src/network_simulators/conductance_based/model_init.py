@@ -123,13 +123,17 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # Register weights with log parameterization if optimising
         if self.optimisable == "weights":
             # Store log-space parameters (automatically positive when exponentiated)
-            # Add small epsilon to avoid log(0)
+            # For zero weights (masked connections), keep log_weights = 0 instead of -inf
+            # since they'll be masked out anyway - this avoids numerical issues
             eps = 1e-8
+            log_weights = np.where(weights > 0, np.log(weights + eps), 0.0)
+            log_weights_FF = np.where(weights_FF > 0, np.log(weights_FF + eps), 0.0)
+
             self._register_parameter_or_buffer(
-                "log_weights", np.log(weights + eps), trainable=True
+                "log_weights", log_weights, trainable=True
             )
             self._register_parameter_or_buffer(
-                "log_weights_FF", np.log(weights_FF + eps), trainable=True
+                "log_weights_FF", log_weights_FF, trainable=True
             )
         else:
             # Store linear-space parameters
@@ -486,28 +490,16 @@ class ConductanceLIFNetwork_IO(nn.Module):
         return synapse_param_arrays
 
     @property
-    def weights(self) -> torch.Tensor:
-        """Get weights in linear space (converts from log if optimising weights)."""
-        if self.optimisable == "weights":
-            return torch.exp(self.log_weights)
-        else:
-            return self._buffers.get("weights") or self._parameters.get("weights")
-
-    @property
-    def weights_FF(self) -> torch.Tensor:
-        """Get feedforward weights in linear space (converts from log if optimising weights)."""
-        if self.optimisable == "weights":
-            return torch.exp(self.log_weights_FF)
-        else:
-            return self._buffers.get("weights_FF") or self._parameters.get("weights_FF")
-
-    @property
     def device(self):
         """Get the device the model is on"""
         if self.optimisable == "weights":
             return self.log_weights.device
+        elif self.optimisable == "scaling_factors":
+            return self.scaling_factors.device
         else:
-            return self.weights.device
+            # Get device from weights buffer/parameter
+            weights = self._buffers.get("weights") or self._parameters.get("weights")
+            return weights.device
 
     def set_timestep(self, dt: float) -> None:
         """

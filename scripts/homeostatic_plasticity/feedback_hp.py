@@ -26,10 +26,11 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataset
+from src.network_inputs.unsupervised import (
+    HomogeneousPoissonSpikeDataLoader,
+)
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
-from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -203,17 +204,13 @@ def main(
         mask = input_source_indices == cell_type_idx
         input_firing_rates[mask] = feedforward.activity[cell_type_name].firing_rate
 
-    # Initialize Poisson spike generator dataset
-    spike_dataset = HomogeneousPoissonSpikeDataset(
-        firing_rates=input_firing_rates,
-        chunk_size=simulation.chunk_size,
-        dt=simulation.dt,
-    )
-
     # Create DataLoader with batch_size from parameters
-    spike_dataloader = DataLoader(
-        spike_dataset,
+    spike_dataloader = HomogeneousPoissonSpikeDataLoader(
+        firing_rates=input_firing_rates,
+        chunk_size=training.chunk_size,
+        dt=simulation.dt,
         batch_size=params.training.batch_size,
+        device=device,
         shuffle=False,
         num_workers=0,  # Keep 0 for GPU generation
     )
@@ -459,15 +456,13 @@ def main(
         inference_duration_ms = 10000.0  # 10 seconds
         inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-        # Create a new dataset for 10s inference with batch_size=1
-        inference_dataset = HomogeneousPoissonSpikeDataset(
+        # Create a new dataloader for 10s inference with batch_size=1
+        inference_dataloader = HomogeneousPoissonSpikeDataLoader(
             firing_rates=input_firing_rates,
             chunk_size=inference_timesteps,  # Single chunk of 10s
             dt=simulation.dt,
-        )
-        inference_dataloader = DataLoader(
-            inference_dataset,
             batch_size=1,
+            device=device,
             shuffle=False,
             num_workers=0,
         )
@@ -663,15 +658,13 @@ def main(
     inference_duration_ms = 10000.0  # 10 seconds
     inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-    # Create a new dataset for 10s inference with batch_size=1
-    final_inference_dataset = HomogeneousPoissonSpikeDataset(
+    # Create a new dataloader for 10s inference with batch_size=1
+    final_inference_dataloader = HomogeneousPoissonSpikeDataLoader(
         firing_rates=input_firing_rates,
         chunk_size=inference_timesteps,  # Single chunk of 10s
         dt=simulation.dt,
-    )
-    final_inference_dataloader = DataLoader(
-        final_inference_dataset,
         batch_size=1,
+        device=device,
         shuffle=False,
         num_workers=0,
     )

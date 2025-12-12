@@ -25,10 +25,9 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataset
+from src.network_inputs.unsupervised import HomogeneousPoissonSpikeDataLoader
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 import torch
-from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -39,7 +38,7 @@ from optimisation.loss_functions import (
     SubthresholdVarianceLoss,
     RecurrentFeedforwardBalanceLoss,
 )
-from optimisation.utils import load_checkpoint, AsyncLogger
+from optimisation.utils import load_checkpoint
 from parameter_loaders import HomeostaticPlasticityParams
 from training import SNNTrainer
 from analysis.firing_statistics import compute_spike_train_cv
@@ -202,17 +201,13 @@ def main(
         mask = input_source_indices == cell_type_idx
         input_firing_rates[mask] = feedforward.activity[cell_type_name].firing_rate
 
-    # Initialize Poisson spike generator dataset
-    spike_dataset = HomogeneousPoissonSpikeDataset(
+    # Create DataLoader with batch_size from parameters
+    spike_dataloader = HomogeneousPoissonSpikeDataLoader(
         firing_rates=input_firing_rates,
         chunk_size=simulation.chunk_size,
         dt=simulation.dt,
-    )
-
-    # Create DataLoader with batch_size from parameters
-    spike_dataloader = DataLoader(
-        spike_dataset,
         batch_size=params.training.batch_size,
+        device=device,
         shuffle=False,
         num_workers=0,  # Keep 0 for GPU generation
     )
@@ -260,36 +255,6 @@ def main(
         "membrane_variance": hyperparameters.loss_weight.membrane_variance,
         "weight_ratio": hyperparameters.loss_weight.weight_ratio,
     }
-
-    # =============
-    # Setup Loggers
-    # =============
-
-    # Initialize async logger for non-blocking metric logging
-    metrics_logger = AsyncLogger(log_dir=output_dir, flush_interval=120.0)
-
-    # Setup wandb if config provided (enabled flag already filtered by experiment_runners)
-    wandb_run = None
-    if wandb_config:
-        # Build wandb config from network parameters
-        wandb_config_dict = {
-            **params.model_dump(),  # Convert all params to dict
-            "output_dir": str(output_dir),
-            "device": device,
-        }
-
-        # Build init kwargs with only non-None optional parameters
-        wandb_init_kwargs = {
-            "name": output_dir.name,
-            "config": wandb_config_dict,
-            "dir": str(output_dir),
-            **wandb_config,
-        }
-
-        print("\n" + "=" * 60)
-        wandb_run = wandb.init(**wandb_init_kwargs)
-        wandb.watch(model, log="parameters", log_freq=training.log_interval)
-        print("=" * 60 + "\n")
 
     # ================================================
     # Create Functions for Plotting and Tracking Stats
@@ -373,26 +338,26 @@ def main(
         """Compute summary statistics from network activity.
 
         Args:
-            spikes: Spike array of shape (batch, time, neurons)
+            spikes: Spike array of shape (1, time, neurons) - single batch accumulated over plot_size chunks
             model: The network model (unused in this script)
 
         Returns:
             Dictionary with keys: metric/cell_type/stat
         """
-        # Compute firing rates per neuron (Hz), averaged over batch
-        spike_counts = spikes.sum(axis=1)  # Sum over time: (batch, neurons)
-        spike_counts_avg = spike_counts.mean(axis=0)  # Average over batch: (neurons,)
-        duration_s = spikes.shape[1] * params.simulation.dt / 1000.0  # Convert ms to s
-        firing_rates = spike_counts_avg / duration_s
+        # Remove batch dimension since we only have 1 batch
+        # spikes shape: (1, time, neurons) -> (time, neurons)
+        spikes = spikes[0]
 
-        # Vectorized CV computation
+        # Compute firing rates per neuron (Hz)
+        spike_counts = spikes.sum(axis=0)  # Sum over time: (neurons,)
+        duration_s = spikes.shape[0] * params.simulation.dt / 1000.0  # Convert ms to s
+        firing_rates = spike_counts / duration_s
+
+        # CV computation on single batch
         cv_values = compute_spike_train_cv(
-            spikes, dt=params.simulation.dt
-        )  # Shape: (batch, neurons)
-
-        # Suppress warning for neurons with no spikes (expected early in training)
-        with np.errstate(invalid="ignore"):
-            cv_per_neuron = np.nanmean(cv_values, axis=0)  # Average over batches
+            spikes[np.newaxis, :, :], dt=params.simulation.dt
+        )  # Shape: (1, neurons)
+        cv_per_neuron = cv_values[0]  # (neurons,)
 
         # Compute statistics by cell type
         stats = {}
@@ -427,118 +392,116 @@ def main(
     # Save Initial State and Run Inference
     # ===================================
 
-    # Only save initial state and run inference if starting from scratch
-    if resume_from is None:
-        print("\n" + "=" * 60)
-        print("SAVING INITIAL STATE AND RUNNING INFERENCE")
-        print("=" * 60)
+    # # Only save initial state and run inference if starting from scratch
+    # if resume_from is None:
+    #     print("\n" + "=" * 60)
+    #     print("SAVING INITIAL STATE AND RUNNING INFERENCE")
+    #     print("=" * 60)
 
-        # Create initial_state directory
-        initial_state_dir = output_dir / "initial_state"
-        initial_state_dir.mkdir(parents=True, exist_ok=True)
+    #     # Create initial_state directory
+    #     initial_state_dir = output_dir / "initial_state"
+    #     initial_state_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save initial network structure as single npz file
-        print("Saving initial network structure...")
-        np.savez(
-            initial_state_dir / "network_structure.npz",
-            recurrent_weights=model.weights.detach().cpu().numpy(),
-            feedforward_weights=model.weights_FF.detach().cpu().numpy(),
-            recurrent_connectivity=connectivity_graph,
-            feedforward_connectivity=feedforward_connectivity_graph,
-            cell_type_indices=cell_type_indices,
-            feedforward_cell_type_indices=input_source_indices,
-            assembly_ids=assembly_ids,
-        )
-        print(
-            f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
-        )
+    #     # Save initial network structure as single npz file
+    #     print("Saving initial network structure...")
+    #     np.savez(
+    #         initial_state_dir / "network_structure.npz",
+    #         recurrent_weights=model.weights.detach().cpu().numpy(),
+    #         feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+    #         recurrent_connectivity=connectivity_graph,
+    #         feedforward_connectivity=feedforward_connectivity_graph,
+    #         cell_type_indices=cell_type_indices,
+    #         feedforward_cell_type_indices=input_source_indices,
+    #         assembly_ids=assembly_ids,
+    #     )
+    #     print(
+    #         f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
+    #     )
 
-        # Run 10s inference on single batch (batch_size=1)
-        print("\nRunning 10s inference with initial weights...")
-        inference_duration_ms = 10000.0  # 10 seconds
-        inference_timesteps = int(inference_duration_ms / simulation.dt)
+    #     # Run 10s inference on single batch (batch_size=1)
+    #     print("\nRunning 10s inference with initial weights...")
+    #     inference_duration_ms = 10000.0  # 10 seconds
+    #     inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-        # Create a new dataset for 10s inference with batch_size=1
-        inference_dataset = HomogeneousPoissonSpikeDataset(
-            firing_rates=input_firing_rates,
-            chunk_size=inference_timesteps,  # Single chunk of 10s
-            dt=simulation.dt,
-        )
-        inference_dataloader = DataLoader(
-            inference_dataset,
-            batch_size=1,
-            shuffle=False,
-            num_workers=0,
-        )
-        inference_input_spikes, _ = next(iter(inference_dataloader))
+    #     # Create a new dataloader for 10s inference with batch_size=1
+    #     inference_dataloader = HomogeneousPoissonSpikeDataLoader(
+    #         firing_rates=input_firing_rates,
+    #         chunk_size=inference_timesteps,  # Single chunk of 10s
+    #         dt=simulation.dt,
+    #         batch_size=1,
+    #         device=device,
+    #         shuffle=False,
+    #         num_workers=0,
+    #     )
+    #     inference_input_spikes, _ = next(iter(inference_dataloader))
 
-        # Run inference with tqdm progress bar
-        model.use_tqdm = True
-        with torch.inference_mode():
-            (
-                inf_spikes,
-                inf_voltages,
-                inf_currents,
-                inf_currents_FF,
-                inf_currents_leak,
-                inf_conductances,
-                inf_conductances_FF,
-            ) = model.forward(
-                input_spikes=inference_input_spikes,
-                initial_v=None,
-                initial_g=None,
-                initial_g_FF=None,
-            )
-        model.use_tqdm = False
+    #     # Run inference with tqdm progress bar
+    #     model.use_tqdm = True
+    #     with torch.inference_mode():
+    #         (
+    #             inf_spikes,
+    #             inf_voltages,
+    #             inf_currents,
+    #             inf_currents_FF,
+    #             inf_currents_leak,
+    #             inf_conductances,
+    #             inf_conductances_FF,
+    #         ) = model.forward(
+    #             input_spikes=inference_input_spikes,
+    #             initial_v=None,
+    #             initial_g=None,
+    #             initial_g_FF=None,
+    #         )
+    #     model.use_tqdm = False
 
-        print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
+    #     print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
 
-        # Generate plots for initial state
-        if plot_generator:
-            print("Generating initial state plots...")
-            figures_dir = initial_state_dir / "figures"
-            figures_dir.mkdir(parents=True, exist_ok=True)
+    #     # Generate plots for initial state
+    #     if plot_generator:
+    #         print("Generating initial state plots...")
+    #         figures_dir = initial_state_dir / "figures"
+    #         figures_dir.mkdir(parents=True, exist_ok=True)
 
-            # Convert to numpy and take only first batch
-            plot_data = {
-                "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
-                "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
-                "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
-                "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
-                "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
-                "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
-                "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
-                "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
-                "weights": model.weights.detach().cpu().numpy(),
-                "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
-            }
+    #         # Convert to numpy and take only first batch
+    #         plot_data = {
+    #             "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
+    #             "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
+    #             "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
+    #             "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
+    #             "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
+    #             "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+    #             "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
+    #             "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+    #             "weights": model.weights.detach().cpu().numpy(),
+    #             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+    #         }
 
-            # Generate plots
-            figures = plot_generator(**plot_data)
+    #         # Generate plots
+    #         figures = plot_generator(**plot_data)
 
-            # Save plots to disk
-            for plot_name, fig in figures.items():
-                fig_path = figures_dir / f"{plot_name}.png"
-                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-                plt.close(fig)
+    #         # Save plots to disk
+    #         for plot_name, fig in figures.items():
+    #             fig_path = figures_dir / f"{plot_name}.png"
+    #             fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+    #             plt.close(fig)
 
-            print(f"✓ Initial state plots saved to {figures_dir}")
+    #         print(f"✓ Initial state plots saved to {figures_dir}")
 
-        # Clean up inference data
-        del (
-            inference_input_spikes,
-            inf_spikes,
-            inf_voltages,
-            inf_currents,
-            inf_currents_FF,
-            inf_currents_leak,
-            inf_conductances,
-            inf_conductances_FF,
-        )
-        if device == "cuda":
-            torch.cuda.empty_cache()
+    #     # Clean up inference data
+    #     del (
+    #         inference_input_spikes,
+    #         inf_spikes,
+    #         inf_voltages,
+    #         inf_currents,
+    #         inf_currents_FF,
+    #         inf_currents_leak,
+    #         inf_conductances,
+    #         inf_conductances_FF,
+    #     )
+    #     if device == "cuda":
+    #         torch.cuda.empty_cache()
 
-        print("=" * 60 + "\n")
+    #     print("=" * 60 + "\n")
 
     # ===================
     # Setup Training Loop
@@ -568,8 +531,7 @@ def main(
         loss_weights=loss_weights,
         params=params,
         device=device,
-        metrics_logger=metrics_logger,
-        wandb_logger=wandb_run,
+        wandb_config=wandb_config,
         progress_bar=pbar,
         plot_generator=plot_generator,
         stats_computer=stats_computer,
@@ -580,6 +542,8 @@ def main(
             feedforward_connectivity_graph.astype(np.float32)
         ).to(device),
     )
+
+    trainer.debug_gradients = True
 
     # Handle checkpoint resuming
     if resume_from is not None:
@@ -662,15 +626,13 @@ def main(
     inference_duration_ms = 10000.0  # 10 seconds
     inference_timesteps = int(inference_duration_ms / simulation.dt)
 
-    # Create a new dataset for 10s inference with batch_size=1
-    final_inference_dataset = HomogeneousPoissonSpikeDataset(
+    # Create a new dataloader for 10s inference with batch_size=1
+    final_inference_dataloader = HomogeneousPoissonSpikeDataLoader(
         firing_rates=input_firing_rates,
         chunk_size=inference_timesteps,  # Single chunk of 10s
         dt=simulation.dt,
-    )
-    final_inference_dataloader = DataLoader(
-        final_inference_dataset,
         batch_size=1,
+        device=device,
         shuffle=False,
         num_workers=0,
     )
@@ -751,15 +713,16 @@ def main(
     print("=" * 60 + "\n")
 
     # Close async logger and flush all remaining data
-    print("Flushing metrics to disk...")
-    metrics_logger.close()
+    if trainer.metrics_logger:
+        print("Flushing metrics to disk...")
+        trainer.metrics_logger.close()
 
     # Finish wandb run
-    if wandb_run is not None:
+    if trainer.wandb_logger is not None:
         wandb.finish()
 
     print(f"\n✓ Checkpoints: {output_dir / 'checkpoints'}")
     print(f"✓ Figures: {output_dir / 'figures'}")
-    print(f"✓ Metrics: {metrics_logger.log_dir / 'training_metrics.csv'}")
-    print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
+    print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
+    # print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")

@@ -180,13 +180,12 @@ def load_checkpoint(
 class AsyncLogger:
     """Asynchronous logger for training metrics.
 
-    This logger uses background threads to handle I/O operations without blocking
-    the training loop. Metrics are buffered and periodically flushed to a CSV file.
+    This logger uses a background thread to handle CSV I/O operations without blocking
+    the training loop. Each metric entry is written to disk immediately when processed.
 
     Args:
         log_dir (str | Path): Directory where log files will be saved
-        flush_interval (float): Time interval in seconds between automatic flushes
-        wandb_logger (Optional[Any]): Wandb run instance for logging to Weights & Biases
+        max_queue_size (int): Maximum queue size (blocks when full for backpressure)
 
     Example:
         >>> logger = AsyncLogger(log_dir='training_logs')
@@ -199,239 +198,106 @@ class AsyncLogger:
     def __init__(
         self,
         log_dir: str | Path = "logs",
-        flush_interval: float = 30.0,
         max_queue_size: int = 1,
-        wandb_logger: Optional[Any] = None,
     ):
-        """Initialize the async logger.
-
-        Args:
-            log_dir (str | Path): Directory where log files will be saved
-            flush_interval (float): Time interval in seconds between automatic flushes
-            max_queue_size (int): Maximum queue size (blocks when full for backpressure)
-            wandb_logger (Optional[Any]): Wandb run instance for logging to Weights & Biases
-        """
+        """Initialize the async logger."""
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use bounded queue for aggressive flushing (blocks when full)
         self.queue: Queue = Queue(maxsize=max_queue_size)
-        self.csv_buffer: list[dict[str, Any]] = []
-        self.flush_interval = flush_interval
-        self.wandb_logger = wandb_logger
         self._running = True
 
-        # Initialize CSV file with header
+        # CSV file tracking
         self.csv_path = self.log_dir / "training_metrics.csv"
         self.csv_fieldnames: Optional[list[str]] = None
 
-        # Start worker thread immediately
+        # Start worker thread
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
 
-        # Start periodic flush thread
-        self.flusher = threading.Thread(target=self._periodic_flush, daemon=True)
-        self.flusher.start()
-
     def _worker(self):
-        """Background worker thread that processes the queue."""
+        """Background worker thread that writes data to disk."""
         while True:
-            item = self.queue.get()
-            if item is None:
-                self._flush()
-                break
+            try:
+                item = self.queue.get()
+                if item is None:
+                    break
 
-            metric_type, data = item
+                item_type, data = item
 
-            if metric_type == "csv_row":
-                self._log_csv_row(data)
-            elif metric_type == "weights":
-                self._save_weights(data)
-            elif metric_type == "flush":
-                self._flush()
-            elif metric_type == "compute_stats":
-                self._compute_and_log_stats(data)
+                if item_type == "csv_row":
+                    self._write_csv_row(data)
+                elif item_type == "weights":
+                    self._save_weights(data)
 
-            self.queue.task_done()
+                self.queue.task_done()
+            except Exception:
+                # Daemon threads fail silently, so we need to handle errors gracefully
+                import traceback
 
-    def _compute_and_log_stats(self, data: dict[str, Any]):
-        """Compute statistics and log them (runs in worker thread).
+                traceback.print_exc()
+                self.queue.task_done()
 
-        Args:
-            data (dict): Contains epoch, losses, spikes, model_snapshot, stats_computer callable,
-                        and optional gradient_stats
-        """
-        epoch = data["epoch"]
-        losses = data["losses"]
-        spikes = data["spikes"]
-        model_snapshot = data["model_snapshot"]
-        stats_computer = data["stats_computer"]
-        gradient_stats = data.get("gradient_stats", {})
+    def _write_csv_row(self, data: dict[str, Any]):
+        """Write a single row to CSV file immediately."""
+        # Update fieldnames if new fields are present
+        all_fieldnames = set(data.keys())
+        if self.csv_fieldnames:
+            all_fieldnames.update(self.csv_fieldnames)
 
-        # Compute stats in background thread (this is the expensive operation)
-        # model_snapshot is a dict of already-copied numpy arrays, not the live model
-        stats = stats_computer(spikes, model_snapshot)
+        # Sort fieldnames (epoch first)
+        sorted_fieldnames = sorted(all_fieldnames)
+        if "epoch" in sorted_fieldnames:
+            sorted_fieldnames.remove("epoch")
+            sorted_fieldnames = ["epoch"] + sorted_fieldnames
 
-        # Prepare CSV data with _loss suffix for loss names
-        csv_data = {}
-        for loss_name, loss_value in losses.items():
-            csv_data[f"{loss_name}_loss"] = loss_value
+        fieldnames_changed = self.csv_fieldnames != sorted_fieldnames
+        file_exists = self.csv_path.exists()
 
-        # Add stats
-        csv_data.update(stats)
+        if fieldnames_changed:
+            self.csv_fieldnames = sorted_fieldnames
 
-        # Buffer the complete row
-        self._log_csv_row({"epoch": epoch, **csv_data})
+            if file_exists:
+                # Rewrite file with new header
+                with open(self.csv_path, "r") as read_f:
+                    reader = csv.DictReader(read_f)
+                    existing_data = list(reader)
 
-        # Log to wandb if available
-        if self.wandb_logger:
-            import wandb
-
-            # Create loss dict with generic naming
-            wandb_losses = {}
-            for loss_name, loss_value in losses.items():
-                wandb_losses[f"loss/{loss_name}"] = loss_value
-
-            wandb.log(
-                {
-                    **wandb_losses,
-                    **stats,
-                    **gradient_stats,
-                },
-                step=epoch,
-            )
-
-    def _log_csv_row(self, data: dict[str, Any]):
-        """Buffer a row for CSV output.
-
-        Args:
-            data (dict): Dictionary containing all fields for the CSV row
-        """
-        self.csv_buffer.append(data)
+                with open(self.csv_path, "w", newline="") as write_f:
+                    writer = csv.DictWriter(write_f, fieldnames=self.csv_fieldnames)
+                    writer.writeheader()
+                    for row in existing_data:
+                        writer.writerow(row)
+                    writer.writerow(data)
+            else:
+                # New file
+                with open(self.csv_path, "w", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
+                    writer.writeheader()
+                    writer.writerow(data)
+        else:
+            # Append to existing file
+            with open(self.csv_path, "a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
+                writer.writerow(data)
 
     def _save_weights(self, data: dict[str, Any]):
-        """Save weights to disk as compressed numpy arrays.
-
-        Args:
-            data (dict): Dictionary containing epoch and weight arrays
-        """
+        """Save weights to disk as compressed numpy arrays."""
         epoch = data["epoch"]
         weights_dir = self.log_dir / "weights"
         weights_dir.mkdir(exist_ok=True)
 
-        # Save recurrent weights
         recurrent_path = weights_dir / f"recurrent_weights_epoch_{epoch:06d}.npz"
         np.savez_compressed(recurrent_path, weights=data["recurrent_weights"])
 
-        # Save feedforward weights if present
         if "feedforward_weights" in data:
             ff_path = weights_dir / f"feedforward_weights_epoch_{epoch:06d}.npz"
             np.savez_compressed(ff_path, weights=data["feedforward_weights"])
 
-    def _flush(self):
-        """Write buffered metrics to disk."""
-        # Flush CSV rows
-        if self.csv_buffer:
-            # Update fieldnames to include all fields from all rows
-            all_fieldnames = set()
-            for row in self.csv_buffer:
-                all_fieldnames.update(row.keys())
-
-            # Sort fieldnames for consistent ordering (epoch first if present)
-            sorted_fieldnames = sorted(all_fieldnames)
-            if "epoch" in sorted_fieldnames:
-                sorted_fieldnames.remove("epoch")
-                sorted_fieldnames = ["epoch"] + sorted_fieldnames
-
-            # Check if file exists and if fieldnames have changed
-            file_exists = self.csv_path.exists()
-            fieldnames_changed = self.csv_fieldnames != sorted_fieldnames
-
-            self.csv_fieldnames = sorted_fieldnames
-
-            with open(self.csv_path, "a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
-
-                # Write header if this is a new file or if fieldnames changed
-                if not file_exists or (file_exists and fieldnames_changed):
-                    # If file exists and fieldnames changed, we need to rewrite the whole file
-                    if file_exists and fieldnames_changed:
-                        # Read existing data
-                        existing_data = []
-                        if self.csv_path.exists():
-                            with open(self.csv_path, "r") as read_f:
-                                reader = csv.DictReader(read_f)
-                                existing_data = list(reader)
-
-                        # Rewrite file with new fieldnames
-                        with open(self.csv_path, "w", newline="") as write_f:
-                            new_writer = csv.DictWriter(
-                                write_f, fieldnames=self.csv_fieldnames
-                            )
-                            new_writer.writeheader()
-                            # Write existing data (missing fields will be empty)
-                            for row in existing_data:
-                                new_writer.writerow(row)
-                    else:
-                        # New file, just write header
-                        writer.writeheader()
-
-                # Write all buffered rows
-                writer.writerows(self.csv_buffer)
-
-            self.csv_buffer.clear()
-
-    def _periodic_flush(self):
-        """Periodically flush buffered data to avoid data loss."""
-        while self._running:
-            time.sleep(self.flush_interval)
-            if self._running:
-                self.queue.put(("flush", None), block=True)
-
     def log(self, epoch: int, **metrics: float):
-        """Log metrics for a given epoch.
-
-        Blocks if queue is full (provides backpressure when worker is busy).
-
-        Args:
-            epoch (int): Epoch/step number
-            **metrics: Arbitrary keyword arguments for metric names and values
-        """
+        """Log metrics for a given epoch."""
         data = {"epoch": epoch, **metrics}
         self.queue.put(("csv_row", data), block=True)
-
-    def log_with_stats(
-        self,
-        epoch: int,
-        losses: dict[str, float],
-        spikes: np.ndarray,
-        model_snapshot: dict[str, np.ndarray],
-        stats_computer: Callable,
-        gradient_stats: Optional[dict[str, float]] = None,
-    ):
-        """Log losses and compute stats asynchronously.
-
-        This method offloads the expensive stats computation (CV, firing rates)
-        to the background worker thread. Blocks if queue is full, providing
-        backpressure when the worker thread is busy computing stats.
-
-        Args:
-            epoch (int): Epoch/step number
-            losses (dict): Dictionary of loss values
-            spikes (np.ndarray): Accumulated spike data as numpy array
-            model_snapshot (dict): Dictionary of model parameters as numpy arrays
-            stats_computer (Callable): Function that computes statistics from spikes and model_snapshot
-            gradient_stats (Optional[dict]): Pre-computed gradient statistics for wandb
-        """
-        data = {
-            "epoch": epoch,
-            "losses": losses,
-            "spikes": spikes.copy(),  # Copy to avoid data races
-            "model_snapshot": model_snapshot,
-            "stats_computer": stats_computer,
-            "gradient_stats": gradient_stats or {},
-        }
-        self.queue.put(("compute_stats", data), block=True)
 
     def save_weights(
         self,
@@ -439,38 +305,17 @@ class AsyncLogger:
         recurrent_weights: np.ndarray,
         feedforward_weights: Optional[np.ndarray] = None,
     ):
-        """Save network weights to disk asynchronously.
-
-        Blocks if queue is full (provides backpressure when worker is busy).
-
-        Args:
-            epoch (int): Epoch/step number
-            recurrent_weights (np.ndarray): Recurrent weights as numpy array
-            feedforward_weights (Optional[np.ndarray]): Feedforward weights as numpy array
-        """
-        # Create weights data with already-copied numpy arrays
-        weights_data = {
-            "epoch": epoch,
-            "recurrent_weights": recurrent_weights.copy(),  # Copy numpy array
-        }
-
+        """Save network weights to disk asynchronously."""
+        data = {"epoch": epoch, "recurrent_weights": recurrent_weights}
         if feedforward_weights is not None:
-            weights_data["feedforward_weights"] = feedforward_weights.copy()
-
-        self.queue.put(("weights", weights_data), block=True)
-
-    def flush(self):
-        """Force an immediate flush of all buffered data."""
-        self.queue.put(("flush", None), block=True)
-        self.queue.join()
+            data["feedforward_weights"] = feedforward_weights
+        self.queue.put(("weights", data), block=True)
 
     def close(self):
-        """Shutdown the logger gracefully, flushing all remaining data."""
+        """Close the logger and wait for all pending writes."""
         self._running = False
-        self.queue.put(None)
-        self.worker.join(timeout=10)
-        if self.flusher.is_alive():
-            self.flusher.join(timeout=1)
+        self.queue.put(None, block=True)
+        self.worker.join(timeout=10.0)
 
 
 class AsyncPlotter:
@@ -518,7 +363,6 @@ class AsyncPlotter:
         self.blocking_mode = blocking_mode
 
         if self.blocking_mode:
-            print("⚠️  AsyncPlotter running in BLOCKING MODE for debugging")
             # Don't initialize queue or thread in blocking mode
             return
 
@@ -564,15 +408,10 @@ class AsyncPlotter:
 
         # In blocking mode, execute plot job immediately (synchronously)
         if self.blocking_mode:
-            print(f"🔍 [DEBUG] Executing plot job synchronously for epoch {epoch}")
             try:
                 self._process_plot_job(plot_job)
-                print(f"✓ [DEBUG] Plot job completed successfully for epoch {epoch}")
                 return True
-            except Exception as e:
-                print(f"❌ [DEBUG] Plot job FAILED for epoch {epoch}")
-                print(f"Error type: {type(e).__name__}")
-                print(f"Error message: {e}")
+            except Exception:
                 import traceback
 
                 traceback.print_exc()
@@ -608,9 +447,8 @@ class AsyncPlotter:
             except Empty:
                 # Timeout - continue waiting
                 continue
-            except Exception as e:
+            except Exception:
                 # Catch any plotting errors to prevent thread crash
-                print(f"  ⚠ Plot generation failed: {e}")
                 import traceback
 
                 traceback.print_exc()
@@ -663,9 +501,6 @@ class AsyncPlotter:
         for fig in figures.values():
             plt.close(fig)
 
-        elapsed = time.time() - job["timestamp"]
-        print(f"  ✓ Plots saved for epoch {epoch + 1} ({elapsed:.1f}s)")
-
     def has_pending(self) -> bool:
         """Check if there are pending plots in the queue.
 
@@ -702,8 +537,7 @@ class AsyncPlotter:
                 # Brief wait for last task to complete
                 time.sleep(0.5)
                 return True
-        except Exception as e:
-            print(f"  ⚠ Flush encountered error: {e}")
+        except Exception:
             return False
 
     def close(self, timeout: float = 120.0) -> None:
@@ -713,20 +547,14 @@ class AsyncPlotter:
             timeout (float): Maximum time to wait for shutdown in seconds
         """
         if self.blocking_mode:
-            print("✓ [DEBUG] AsyncPlotter closed (blocking mode)")
             return
 
         # Signal shutdown
         self.shutdown_event.set()
 
         # Wait for remaining jobs to complete
-        pending = self.plot_queue.qsize()
-        if pending > 0:
-            print(f"  ⏳ Waiting for {pending} pending plot(s) to complete...")
-
         try:
             self.plot_queue.join()
             self.plot_thread.join(timeout=timeout)
-            print("  ✓ All plots completed")
-        except Exception as e:
-            print(f"  ⚠ AsyncPlotter shutdown encountered an issue: {e}")
+        except Exception:
+            pass

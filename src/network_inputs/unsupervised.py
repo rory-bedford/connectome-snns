@@ -31,16 +31,17 @@ class HomogeneousPoissonSpikeDataset(Dataset):
             1D inputs are automatically reshaped to (1, n_neurons).
         chunk_size (float): Duration of each chunk in milliseconds.
         dt (float): Simulation time step in milliseconds.
+        device (Union[str, torch.device]): Device to generate spikes on. Default: "cpu".
 
     Example:
         >>> # Single pattern (homogeneous)
         >>> firing_rates = np.array([10.0, 10.0, 20.0, 20.0])
-        >>> dataset = HomogeneousPoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0)
+        >>> dataset = HomogeneousPoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0, device="cuda")
         >>> spikes, pattern_idx = dataset[0]  # pattern_idx always 0
         >>>
         >>> # Multiple patterns (e.g., odours)
         >>> firing_rates = np.random.uniform(5, 20, (10, 100))
-        >>> dataset = HomogeneousPoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0)
+        >>> dataset = HomogeneousPoissonSpikeDataset(firing_rates, chunk_size=100.0, dt=1.0, device="cuda")
         >>> spikes, pattern_idx = dataset[15]  # pattern_idx = 15 % 10 = 5
     """
 
@@ -49,12 +50,15 @@ class HomogeneousPoissonSpikeDataset(Dataset):
         firing_rates: Union[np.ndarray, torch.Tensor],
         chunk_size: float,
         dt: float,
+        device: Union[str, torch.device] = "cpu",
     ):
-        # Convert firing rates to torch tensor (CPU)
+        # Convert firing rates to torch tensor on specified device
+        self.device = torch.device(device)
+
         if isinstance(firing_rates, np.ndarray):
-            firing_rates = torch.from_numpy(firing_rates).float()
+            firing_rates = torch.from_numpy(firing_rates).float().to(self.device)
         elif isinstance(firing_rates, torch.Tensor):
-            firing_rates = firing_rates.float().cpu()
+            firing_rates = firing_rates.float().to(self.device)
         else:
             raise TypeError("firing_rates must be a numpy array or torch tensor")
 
@@ -98,8 +102,8 @@ class HomogeneousPoissonSpikeDataset(Dataset):
         # Select spike probabilities for this pattern
         spike_probs = self.spike_probs[pattern_idx]
 
-        # Generate Poisson spikes: (n_steps, n_neurons)
-        random_vals = torch.rand(self.n_steps, self.n_neurons)
+        # Generate Poisson spikes on the same device as firing_rates: (n_steps, n_neurons)
+        random_vals = torch.rand(self.n_steps, self.n_neurons, device=self.device)
         spikes = random_vals < spike_probs
 
         return spikes, pattern_idx
@@ -259,11 +263,12 @@ class HomogeneousPoissonSpikeDataLoader(DataLoader):
         # Store device for later use
         self.device = torch.device(device)
 
-        # Create dataset (no device handling in dataset)
+        # Create dataset with device parameter
         dataset = HomogeneousPoissonSpikeDataset(
             firing_rates=firing_rates,
             chunk_size=chunk_size,
             dt=dt,
+            device=device,
         )
 
         # Get number of patterns from dataset
@@ -302,6 +307,7 @@ class InhomogeneousPoissonSpikeDataset(Dataset):
 
     Args:
         rate_process: OrnsteinUhlenbeckRateProcess that generates time-varying rates.
+        device (Union[str, torch.device]): Device to generate spikes on. Default: "cpu".
         return_rates: If True, __getitem__ returns tuple (spikes, rates, weights)
             for diagnostic/visualization purposes. If False, returns only spikes. Default: False.
             Note: This requires the underlying rate_process to have return_rates=True.
@@ -351,9 +357,11 @@ class InhomogeneousPoissonSpikeDataset(Dataset):
     def __init__(
         self,
         rate_process: OrnsteinUhlenbeckRateProcess,
+        device: Union[str, torch.device] = "cpu",
         return_rates: bool = False,
     ):
         self.rate_process = rate_process
+        self.device = torch.device(device)
         self.return_rates = return_rates
         self.dt = rate_process.dt
         self.n_neurons = rate_process.n_neurons
@@ -387,14 +395,17 @@ class InhomogeneousPoissonSpikeDataset(Dataset):
         if self.return_rates:
             # Unpack diagnostics from rate process
             rates, weights = rate_output
+            # Move to device
+            rates = rates.to(self.device)
+            weights = weights.to(self.device)
         else:
-            rates = rate_output
+            rates = rate_output.to(self.device)
 
         # Convert rates to probabilities: p = rate * dt / 1000 (dt in ms, rate in Hz)
         spike_probs = rates * self.dt / 1000.0
 
-        # Sample spikes
-        spikes = torch.rand_like(spike_probs) < spike_probs
+        # Sample spikes on device
+        spikes = torch.rand_like(spike_probs, device=self.device) < spike_probs
 
         if self.return_rates:
             return spikes, rates, weights
@@ -476,7 +487,7 @@ class InhomogeneousPoissonSpikeDataLoader:
         return_rates: bool = False,
     ):
         self.dataset = InhomogeneousPoissonSpikeDataset(
-            rate_process=rate_process, return_rates=return_rates
+            rate_process=rate_process, device=device, return_rates=return_rates
         )
         self.batch_size = batch_size
         self.device = torch.device(device)
@@ -505,9 +516,9 @@ class InhomogeneousPoissonSpikeDataLoader:
                     idx += 1
 
                 # Stack into (batch_size, chunk_size, n_neurons) and (batch_size, chunk_size, n_patterns)
-                spikes_tensor = torch.stack(spikes_batch, dim=0).to(self.device)
-                rates_tensor = torch.stack(rates_batch, dim=0).to(self.device)
-                weights_tensor = torch.stack(weights_batch, dim=0).to(self.device)
+                spikes_tensor = torch.stack(spikes_batch, dim=0)
+                rates_tensor = torch.stack(rates_batch, dim=0)
+                weights_tensor = torch.stack(weights_batch, dim=0)
 
                 yield spikes_tensor, rates_tensor, weights_tensor
             else:
@@ -519,7 +530,7 @@ class InhomogeneousPoissonSpikeDataLoader:
                     idx += 1
 
                 # Stack into (batch_size, chunk_size, n_neurons)
-                batch_tensor = torch.stack(batch, dim=0).to(self.device)
+                batch_tensor = torch.stack(batch, dim=0)
                 yield batch_tensor
 
     def __len__(self) -> int:

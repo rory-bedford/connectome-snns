@@ -217,8 +217,16 @@ class CVLoss(nn.Module):
         # Compute squared errors
         squared_errors = (cvs_tensor - self.target_cv) ** 2
 
-        # Use nanmean to ignore NaN values (silent neurons)
-        loss = torch.nanmean(squared_errors)
+        # Use masked mean to ignore NaN values (silent neurons)
+        # This is gradient-safe unlike nanmean
+        valid_mask = ~torch.isnan(squared_errors)
+        if valid_mask.sum() > 0:
+            loss = squared_errors[valid_mask].mean()
+        else:
+            # All neurons are silent - return zero loss with no gradient
+            loss = torch.tensor(
+                0.0, device=output_spikes.device, dtype=squared_errors.dtype
+            )
 
         return loss
 
