@@ -421,44 +421,69 @@ class RecurrentFeedforwardBalanceLoss(nn.Module):
     Loss to encourage recurrent weights to be larger than feedforward weights.
 
     Computes the ratio of mean recurrent weights to mean feedforward weights
-    and penalizes deviations from a target ratio.
+    and penalizes deviations from a target ratio. Only applies to excitatory
+    recurrent connections.
 
     Args:
         target_ratio (float): Target ratio of recurrent/feedforward mean weights.
             For example, 2.0 means recurrent weights should be 2x larger on average.
+        excitatory_cell_type (int): Cell type index for excitatory neurons (default: 0).
     """
 
-    required_inputs = ["recurrent_weights", "feedforward_weights"]
+    required_inputs = [
+        "recurrent_weights",
+        "feedforward_weights",
+        "cell_type_indices",
+        "connectome_mask",
+        "feedforward_mask",
+    ]
     requires_target = False
 
-    def __init__(self, target_ratio: float):
+    def __init__(self, target_ratio: float, excitatory_cell_type: int):
         """
         Initialize the recurrent-feedforward balance loss.
 
         Args:
             target_ratio (float): Target ratio of mean(recurrent_weights) / mean(feedforward_weights).
+            excitatory_cell_type (int): Cell type index for excitatory neurons (default: 0).
         """
         super(RecurrentFeedforwardBalanceLoss, self).__init__()
         self.target_ratio = target_ratio
+        self.excitatory_cell_type = excitatory_cell_type
 
     def forward(
         self,
         recurrent_weights: torch.Tensor,
         feedforward_weights: torch.Tensor,
+        cell_type_indices: torch.Tensor,
+        connectome_mask: torch.Tensor,
+        feedforward_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute recurrent-feedforward balance loss.
+        Compute recurrent-feedforward balance loss for excitatory recurrent connections.
 
         Args:
-            recurrent_weights (torch.Tensor): Recurrent weight matrix.
-            feedforward_weights (torch.Tensor): Feedforward weight matrix.
+            recurrent_weights (torch.Tensor): Recurrent weight matrix (n_neurons, n_neurons).
+            feedforward_weights (torch.Tensor): Feedforward weight matrix (n_inputs, n_neurons).
+            cell_type_indices (torch.Tensor): Cell type indices for recurrent neurons (n_neurons,).
+            connectome_mask (torch.Tensor): Binary mask for valid recurrent connections (n_neurons, n_neurons).
+            feedforward_mask (torch.Tensor): Binary mask for valid feedforward connections (n_inputs, n_neurons).
 
         Returns:
             torch.Tensor: Scalar loss value.
         """
-        # Compute mean weights (only over non-zero connections)
-        rec_mean = recurrent_weights[recurrent_weights > 0].mean()
-        ff_mean = feedforward_weights[feedforward_weights > 0].mean()
+        # Get mask for excitatory neurons
+        exc_mask = cell_type_indices == self.excitatory_cell_type
+
+        # Extract excitatory-to-all recurrent weights (excitatory sources) and apply connectome mask
+        exc_rec_weights = recurrent_weights[exc_mask, :] * connectome_mask[exc_mask, :]
+
+        # Compute mean of non-zero excitatory recurrent weights
+        rec_mean = exc_rec_weights[exc_rec_weights > 0].mean()
+
+        # Apply feedforward mask and compute mean of non-zero feedforward weights
+        masked_ff_weights = feedforward_weights * feedforward_mask
+        ff_mean = masked_ff_weights[masked_ff_weights > 0].mean()
 
         # Compute actual ratio
         actual_ratio = rec_mean / (ff_mean + 1e-8)

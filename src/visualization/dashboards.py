@@ -44,6 +44,8 @@ def create_connectivity_dashboard(
     input_cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     input_cell_type_names: list[str],
+    connectome_mask: NDArray[np.bool_],
+    feedforward_mask: NDArray[np.bool_],
     num_assemblies: int | None = None,
     heatmap_inches: float = 6.0,
     plot_fraction_feedforward: float = 0.1,
@@ -58,6 +60,8 @@ def create_connectivity_dashboard(
         input_cell_type_indices (NDArray[np.int32]): Array of cell type indices for input neurons.
         cell_type_names (list[str]): Names of recurrent cell types.
         input_cell_type_names (list[str]): Names of input cell types.
+        connectome_mask (NDArray[np.bool_]): Binary mask for valid recurrent connections.
+        feedforward_mask (NDArray[np.bool_]): Binary mask for valid feedforward connections.
         num_assemblies (int | None): Number of assemblies in the network. If provided, uses this
             to determine plotting size instead of plot_fraction_recurrent. Defaults to None.
         heatmap_inches (float): Size of heatmaps in inches. Defaults to 6.0.
@@ -141,6 +145,8 @@ def create_connectivity_dashboard(
         input_cell_type_indices,
         cell_type_names,
         input_cell_type_names,
+        connectome_mask,
+        feedforward_mask,
         ax_violin,
     )
 

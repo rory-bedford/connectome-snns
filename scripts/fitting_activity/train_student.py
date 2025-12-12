@@ -268,6 +268,8 @@ def main(
         input_spikes,
         weights,
         feedforward_weights,
+        connectome_mask,
+        feedforward_mask,
     ):
         """Generate connectivity and activity dashboards."""
         # Calculate mean membrane potential by cell type from voltage traces
@@ -288,6 +290,8 @@ def main(
             input_cell_type_indices=feedforward_cell_type_indices,
             cell_type_names=params.recurrent.cell_types.names,
             input_cell_type_names=params.feedforward.cell_types.names,
+            connectome_mask=connectome_mask,
+            feedforward_mask=feedforward_mask,
             plot_fraction_recurrent=0.1,
             plot_fraction_feedforward=0.1,
         )

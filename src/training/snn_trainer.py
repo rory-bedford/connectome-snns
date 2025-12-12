@@ -398,23 +398,10 @@ class SNNTrainer:
         )
 
         # Get weights OUTSIDE autocast to avoid float16 overflow in exp()
-        # When optimisable="weights", this computes exp(log_weights) in full precision
+        # Use the @property which handles both log-space and linear-space weights
         if needs_weights:
-            if (
-                hasattr(self.model, "log_weights")
-                and self.model.optimisable == "weights"
-            ):
-                # Compute exp once in full precision for loss functions
-                weights_for_loss = torch.exp(self.model.log_weights)
-                weights_FF_for_loss = torch.exp(self.model.log_weights_FF)
-            else:
-                # Non-weight optimization mode - get weights from buffers/parameters
-                weights_for_loss = self.model._buffers.get(
-                    "weights"
-                ) or self.model._parameters.get("weights")
-                weights_FF_for_loss = self.model._buffers.get(
-                    "weights_FF"
-                ) or self.model._parameters.get("weights_FF")
+            weights_for_loss = self.model.weights
+            weights_FF_for_loss = self.model.weights_FF
         else:
             weights_for_loss = None
             weights_FF_for_loss = None
@@ -441,6 +428,12 @@ class SNNTrainer:
                             inputs["recurrent_weights"] = weights_for_loss
                         elif req_input == "feedforward_weights":
                             inputs["feedforward_weights"] = weights_FF_for_loss
+                        elif req_input == "cell_type_indices":
+                            inputs["cell_type_indices"] = self.model.cell_type_indices
+                        elif req_input == "connectome_mask":
+                            inputs["connectome_mask"] = self.connectome_mask
+                        elif req_input == "feedforward_mask":
+                            inputs["feedforward_mask"] = self.feedforward_mask
                 else:
                     # For losses without metadata, assume they take output_spikes
                     inputs["output_spikes"] = spikes
@@ -779,6 +772,12 @@ class SNNTrainer:
             input_spikes=plot_data["input_spikes"],
             weights=self.model.weights.detach().cpu().numpy(),
             feedforward_weights=self.model.weights_FF.detach().cpu().numpy(),
+            connectome_mask=self.connectome_mask.detach().cpu().numpy()
+            if self.connectome_mask is not None
+            else None,
+            feedforward_mask=self.feedforward_mask.detach().cpu().numpy()
+            if self.feedforward_mask is not None
+            else None,
         )
 
         # Log to wandb if logger provided

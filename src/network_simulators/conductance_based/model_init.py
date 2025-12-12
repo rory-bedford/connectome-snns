@@ -136,10 +136,12 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 "log_weights_FF", log_weights_FF, trainable=True
             )
         else:
-            # Store linear-space parameters
-            self._register_parameter_or_buffer("weights", weights, trainable=False)
+            # Store linear-space parameters with internal names to avoid conflict with @property
             self._register_parameter_or_buffer(
-                "weights_FF", weights_FF, trainable=False
+                "_weights_buffer", weights, trainable=False
+            )
+            self._register_parameter_or_buffer(
+                "_weights_FF_buffer", weights_FF, trainable=False
             )
 
         # Register cell type indices (always non-trainable)
@@ -490,6 +492,22 @@ class ConductanceLIFNetwork_IO(nn.Module):
         return synapse_param_arrays
 
     @property
+    def weights(self) -> torch.Tensor:
+        """Get weights in linear space (converts from log if optimising weights)."""
+        if self.optimisable == "weights":
+            return torch.exp(self.log_weights)
+        else:
+            return self._buffers["_weights_buffer"]
+
+    @property
+    def weights_FF(self) -> torch.Tensor:
+        """Get feedforward weights in linear space (converts from log if optimising weights)."""
+        if self.optimisable == "weights":
+            return torch.exp(self.log_weights_FF)
+        else:
+            return self._buffers["_weights_FF_buffer"]
+
+    @property
     def device(self):
         """Get the device the model is on"""
         if self.optimisable == "weights":
@@ -497,9 +515,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
         elif self.optimisable == "scaling_factors":
             return self.scaling_factors.device
         else:
-            # Get device from weights buffer/parameter
-            weights = self._buffers.get("weights") or self._parameters.get("weights")
-            return weights.device
+            # Get device from weights buffer
+            return self._buffers["_weights_buffer"].device
 
     def set_timestep(self, dt: float) -> None:
         """

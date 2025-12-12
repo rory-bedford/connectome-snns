@@ -283,6 +283,10 @@ def main(input_dir, output_dir, params_file):
                 output_voltages[:, :, cell_mask].mean()
             )
 
+    # Derive connectivity masks from weight matrices
+    connectome_mask = (weights != 0).astype(np.bool_)
+    feedforward_mask = (feedforward_weights != 0).astype(np.bool_)
+
     # Generate connectivity dashboard
     connectivity_fig = create_connectivity_dashboard(
         weights=weights,
@@ -291,6 +295,8 @@ def main(input_dir, output_dir, params_file):
         input_cell_type_indices=input_source_indices,
         cell_type_names=params.recurrent.cell_types.names,
         input_cell_type_names=params.feedforward.cell_types.names,
+        connectome_mask=connectome_mask,
+        feedforward_mask=feedforward_mask,
         num_assemblies=params.recurrent.topology.num_assemblies,
     )
 

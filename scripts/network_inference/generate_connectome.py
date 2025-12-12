@@ -344,6 +344,8 @@ def main(input_dir, output_dir, params_file):
         input_cell_type_indices=input_source_indices,
         cell_type_names=params.recurrent.cell_types.names,
         input_cell_type_names=params.feedforward.cell_types.names,
+        connectome_mask=connectivity_graph,
+        feedforward_mask=feedforward_connectivity_graph,
         num_assemblies=params.recurrent.topology.num_assemblies,
     )
 

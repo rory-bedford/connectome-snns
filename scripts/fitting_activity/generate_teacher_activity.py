@@ -92,6 +92,10 @@ def main(input_dir, output_dir, params_file):
         f"✓ Loaded assembly IDs: {len(assembly_ids)} neurons in {len(np.unique(assembly_ids[assembly_ids >= 0]))} assemblies"
     )
 
+    # Derive connectivity masks from weight matrices
+    connectome_mask = (weights != 0).astype(np.bool_)
+    feedforward_mask = (feedforward_weights != 0).astype(np.bool_)
+
     # =========================
     # Create Feedforward Inputs
     # =========================
@@ -516,6 +520,8 @@ def main(input_dir, output_dir, params_file):
         input_cell_type_indices=input_source_indices,
         cell_type_names=recurrent.cell_types.names,
         input_cell_type_names=feedforward.cell_types.names,
+        connectome_mask=connectome_mask,
+        feedforward_mask=feedforward_mask,
     )
 
     # Generate activity dashboard

@@ -1069,6 +1069,8 @@ def plot_weight_distribution_by_input_type(
     input_cell_type_indices: NDArray[np.int32],
     cell_type_names: list[str],
     input_cell_type_names: list[str],
+    connectome_mask: NDArray[np.bool_],
+    feedforward_mask: NDArray[np.bool_],
     ax: plt.Axes | None = None,
 ) -> plt.Figure | None:
     """Plot violin plot showing distribution of weight values by input cell type.
@@ -1080,6 +1082,8 @@ def plot_weight_distribution_by_input_type(
         input_cell_type_indices (NDArray[np.int32]): Array of cell type indices for input neurons.
         cell_type_names (list[str]): Names of recurrent cell types.
         input_cell_type_names (list[str]): Names of input cell types.
+        connectome_mask (NDArray[np.bool_]): Binary mask for valid recurrent connections.
+        feedforward_mask (NDArray[np.bool_]): Binary mask for valid feedforward connections.
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
 
     Returns:
@@ -1106,10 +1110,11 @@ def plot_weight_distribution_by_input_type(
 
     # Process feedforward input types
     for i, cell_type_name in enumerate(input_cell_type_names):
-        # Get weights from this input type (non-zero only)
+        # Get weights from this input type and apply mask
         type_mask = input_cell_type_indices == i
         type_weights = feedforward_weights[type_mask, :]
-        non_zero_weights = type_weights[type_weights != 0]
+        masked_weights = type_weights * feedforward_mask[type_mask, :]
+        non_zero_weights = masked_weights[masked_weights > 0]
 
         if len(non_zero_weights) > 0:
             weight_data.append(non_zero_weights)
@@ -1125,10 +1130,11 @@ def plot_weight_distribution_by_input_type(
 
     # Process recurrent cell types (as input sources)
     for i, cell_type_name in enumerate(cell_type_names):
-        # Get weights from this recurrent cell type (non-zero only)
+        # Get weights from this recurrent cell type and apply mask
         type_mask = cell_type_indices == i
         type_weights = recurrent_weights[type_mask, :]
-        non_zero_weights = type_weights[type_weights != 0]
+        masked_weights = type_weights * connectome_mask[type_mask, :]
+        non_zero_weights = masked_weights[masked_weights > 0]
 
         if len(non_zero_weights) > 0:
             weight_data.append(non_zero_weights)
