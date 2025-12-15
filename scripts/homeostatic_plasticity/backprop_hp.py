@@ -36,7 +36,7 @@ from optimisation.loss_functions import (
     CVLoss,
     SilentNeuronPenalty,
     SubthresholdVarianceLoss,
-    RecurrentFeedforwardBalanceLoss,
+    ScalingFactorBalanceLoss,
 )
 from optimisation.utils import load_checkpoint
 from parameter_loaders import HomeostaticPlasticityParams
@@ -245,7 +245,7 @@ def main(
     membrane_variance_loss_fn = SubthresholdVarianceLoss(
         v_threshold=v_threshold_tensor, target_ratio=threshold_ratio_tensor
     )
-    weight_ratio_loss_fn = RecurrentFeedforwardBalanceLoss(
+    weight_ratio_loss_fn = ScalingFactorBalanceLoss(
         target_ratio=targets.weight_ratio,
         excitatory_cell_type=0,
     )
@@ -363,11 +363,21 @@ def main(
             mask = cell_type_indices == cell_type
             cell_type_name = params.recurrent.cell_types.names[int(cell_type)]
 
-            # Firing rate statistics
-            stats[f"firing_rate/{cell_type_name}/mean"] = float(
-                firing_rates[mask].mean()
-            )
-            stats[f"firing_rate/{cell_type_name}/std"] = float(firing_rates[mask].std())
+            # Firing rate statistics (excluding silent neurons)
+            cell_firing_rates = firing_rates[mask]
+            active_neurons = cell_firing_rates > 0
+            active_firing_rates = cell_firing_rates[active_neurons]
+
+            if len(active_firing_rates) > 0:
+                stats[f"firing_rate/{cell_type_name}/mean"] = float(
+                    active_firing_rates.mean()
+                )
+                stats[f"firing_rate/{cell_type_name}/std"] = float(
+                    active_firing_rates.std()
+                )
+            else:
+                stats[f"firing_rate/{cell_type_name}/mean"] = float("nan")
+                stats[f"firing_rate/{cell_type_name}/std"] = float("nan")
 
             # CV statistics (only for neurons with valid CVs)
             cell_cvs = cv_per_neuron[mask]
@@ -571,6 +581,8 @@ def main(
             feedforward_connectivity_graph.astype(np.float32)
         ).to(device),
     )
+
+    trainer.debug_gradients = True
 
     # Handle checkpoint resuming
     if resume_from is not None:

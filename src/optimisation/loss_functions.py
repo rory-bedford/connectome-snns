@@ -492,3 +492,64 @@ class RecurrentFeedforwardBalanceLoss(nn.Module):
         loss = (actual_ratio - self.target_ratio) ** 2
 
         return loss
+
+
+class ScalingFactorBalanceLoss(nn.Module):
+    """
+    Loss to encourage recurrent scaling factors to be larger than feedforward scaling factors.
+
+    Computes the ratio of recurrent excitatory scaling factors to feedforward scaling factors
+    and penalizes deviations from a target ratio. This is the scaling factor equivalent of
+    RecurrentFeedforwardBalanceLoss.
+
+    Args:
+        target_ratio (float): Target ratio of recurrent/feedforward scaling factors.
+            For example, 2.0 means recurrent scaling factors should be 2x larger on average.
+        excitatory_cell_type (int): Cell type index for excitatory neurons (default: 0).
+    """
+
+    required_inputs = ["scaling_factors", "scaling_factors_FF"]
+    requires_target = False
+
+    def __init__(self, target_ratio: float, excitatory_cell_type: int = 0):
+        """
+        Initialize the scaling factor balance loss.
+
+        Args:
+            target_ratio (float): Target ratio of mean(recurrent_scaling_factors) / mean(feedforward_scaling_factors).
+            excitatory_cell_type (int): Cell type index for excitatory neurons (default: 0).
+        """
+        super(ScalingFactorBalanceLoss, self).__init__()
+        self.target_ratio = target_ratio
+        self.excitatory_cell_type = excitatory_cell_type
+
+    def forward(
+        self,
+        scaling_factors: torch.Tensor,
+        scaling_factors_FF: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute scaling factor balance loss.
+
+        Args:
+            scaling_factors (torch.Tensor): Recurrent scaling factors (n_source_types, n_target_types).
+            scaling_factors_FF (torch.Tensor): Feedforward scaling factors (n_source_types, n_target_types).
+
+        Returns:
+            torch.Tensor: Scalar loss value.
+        """
+        # Get the recurrent scaling factors for excitatory sources to all targets
+        # scaling_factors shape: (n_source_types, n_target_types)
+        # We want the mean of scaling_factors[excitatory_source, :] (excitatory to all targets)
+        rec_mean = scaling_factors[self.excitatory_cell_type, :].mean()
+
+        # Get the feedforward scaling factors - average across all source types
+        ff_mean = scaling_factors_FF.mean()
+
+        # Compute actual ratio
+        actual_ratio = rec_mean / (ff_mean + 1e-8)
+
+        # Loss is squared difference from target ratio
+        loss = (actual_ratio - self.target_ratio) ** 2
+
+        return loss

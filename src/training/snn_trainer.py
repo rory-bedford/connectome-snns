@@ -434,6 +434,10 @@ class SNNTrainer:
                             inputs["connectome_mask"] = self.connectome_mask
                         elif req_input == "feedforward_mask":
                             inputs["feedforward_mask"] = self.feedforward_mask
+                        elif req_input == "scaling_factors":
+                            inputs["scaling_factors"] = self.model.scaling_factors
+                        elif req_input == "scaling_factors_FF":
+                            inputs["scaling_factors_FF"] = self.model.scaling_factors_FF
                 else:
                     # For losses without metadata, assume they take output_spikes
                     inputs["output_spikes"] = spikes
