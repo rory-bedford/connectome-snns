@@ -516,6 +516,8 @@ def main(
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
                 "connectome_mask": connectivity_graph.astype(np.bool_),
                 "feedforward_mask": feedforward_connectivity_graph.astype(np.bool_),
+                "scaling_factors": model.scaling_factors.detach().cpu().numpy(),
+                "scaling_factors_FF": model.scaling_factors_FF.detach().cpu().numpy(),
             }
 
             # Generate plots
@@ -753,6 +755,10 @@ def main(
             .numpy(),
             "weights": model.weights.detach().cpu().numpy(),
             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+            "connectome_mask": connectivity_graph.astype(np.bool_),
+            "feedforward_mask": feedforward_connectivity_graph.astype(np.bool_),
+            "scaling_factors": model.scaling_factors.detach().cpu().numpy(),
+            "scaling_factors_FF": model.scaling_factors_FF.detach().cpu().numpy(),
         }
 
         # Generate plots
