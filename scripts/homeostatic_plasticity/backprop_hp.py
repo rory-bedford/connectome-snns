@@ -286,6 +286,8 @@ def main(
         feedforward_weights,
         connectome_mask,
         feedforward_mask,
+        scaling_factors,
+        scaling_factors_FF,
     ):
         """Generate connectivity and activity dashboards."""
 
@@ -300,6 +302,8 @@ def main(
             connectome_mask=connectome_mask,
             feedforward_mask=feedforward_mask,
             num_assemblies=params.recurrent.topology.num_assemblies,
+            scaling_factors=scaling_factors,
+            scaling_factors_FF=scaling_factors_FF,
         )
 
         # Generate activity dashboard

@@ -731,6 +731,8 @@ class SNNTrainer:
             # Get weights as separate parameters
             weights = copy_tensor_optimized(self.model.weights)
             weights_ff = copy_tensor_optimized(self.model.weights_FF)
+            scaling_factors = copy_tensor_optimized(self.model.scaling_factors)
+            scaling_factors_FF = copy_tensor_optimized(self.model.scaling_factors_FF)
 
             # Submit plot with blocking to ensure it doesn't get skipped
             print("  📊 Submitting plot (will wait if queue is full)...")
@@ -745,6 +747,8 @@ class SNNTrainer:
                 feedforward_mask=self.feedforward_mask.detach().cpu().numpy()
                 if self.feedforward_mask is not None
                 else None,
+                scaling_factors=scaling_factors,
+                scaling_factors_FF=scaling_factors_FF,
                 block=True,
                 timeout=90.0,
             )
@@ -759,8 +763,7 @@ class SNNTrainer:
         # Print checkpoint info
         self._print_checkpoint_info(losses)
 
-        # Cleanup and refresh
-        self._clear_plot_data()
+        # Refresh progress bar
         if self.pbar:
             self.pbar.refresh()
 

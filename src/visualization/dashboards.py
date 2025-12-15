@@ -50,6 +50,8 @@ def create_connectivity_dashboard(
     heatmap_inches: float = 6.0,
     plot_fraction_feedforward: float = 0.1,
     plot_fraction_recurrent: float = 0.1,
+    scaling_factors: NDArray[np.float32] | None = None,
+    scaling_factors_FF: NDArray[np.float32] | None = None,
 ) -> plt.Figure:
     """Create a connectivity dashboard showing connectomes and weight distributions.
 
@@ -67,10 +69,31 @@ def create_connectivity_dashboard(
         heatmap_inches (float): Size of heatmaps in inches. Defaults to 6.0.
         plot_fraction_feedforward (float): Fraction of neurons to show in feedforward connectivity. Defaults to 0.1.
         plot_fraction_recurrent (float): Fraction of neurons to show in recurrent connectivity (only used if num_assemblies is None). Defaults to 0.1.
+        scaling_factors (NDArray[np.float32] | None): Recurrent scaling factors (n_source_types, n_target_types). If provided, weights will be scaled by cell type.
+        scaling_factors_FF (NDArray[np.float32] | None): Feedforward scaling factors (n_source_types, n_target_types). If provided, feedforward weights will be scaled by cell type.
 
     Returns:
         plt.Figure: Single comprehensive dashboard figure with connectivity plots arranged.
     """
+    # Apply scaling factors if provided
+    if scaling_factors is not None:
+        weights = weights.copy()
+        for source_idx in range(len(cell_type_names)):
+            source_mask = cell_type_indices == source_idx
+            for target_idx in range(len(cell_type_names)):
+                target_mask = cell_type_indices == target_idx
+                scale = scaling_factors[source_idx, target_idx]
+                weights[np.ix_(target_mask, source_mask)] *= scale
+
+    if scaling_factors_FF is not None:
+        feedforward_weights = feedforward_weights.copy()
+        for source_idx in range(len(input_cell_type_names)):
+            source_mask = input_cell_type_indices == source_idx
+            for target_idx in range(len(cell_type_names)):
+                target_mask = cell_type_indices == target_idx
+                scale = scaling_factors_FF[source_idx, target_idx]
+                feedforward_weights[np.ix_(target_mask, source_mask)] *= scale
+
     # Create main dashboard figure
     fig = plt.figure(figsize=(24, 16))
 

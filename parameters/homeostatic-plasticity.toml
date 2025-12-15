@@ -16,11 +16,11 @@ chunk_size = 100                       # Number of timesteps per chunk
 # ======================
 
 [training]
-chunks_per_update = 20                 # Number of loss calculations per gradient step
+chunks_per_update = 10                 # Number of loss calculations per gradient step
 log_interval = 5                       # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 200              # Save model checkpoints and generate plots every N chunks
+checkpoint_interval = 100              # Save model checkpoints and generate plots every N chunks
 mixed_precision = false                # Whether to train with mixed precision
-plot_size = 200                        # Number of chunks to save for plotting
+plot_size = 100                        # Number of chunks to save for plotting
 batch_size = 100                       # Number of batches to run in parallel for training
 grad_norm_clip = 1.0                   # Maximum gradient norm for clipping
 
@@ -43,7 +43,7 @@ weight_ratio = 10.0                    # Target ratio of recurrent mean weights 
 
 [hyperparameters]
 surrgrad_scale = 200.0                 # Scale for surrogate gradient fast sigmoid function
-learning_rate = 1e-3                   # Learning rate for ADAM optimiser
+learning_rate = 1e-2                   # Learning rate for ADAM optimiser
 loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
 loss_weight.cv = 0.5                   # Weight for CV loss (typical unweighted: ~0.01-0.1)
 loss_weight.silent_penalty = 0.1       # Weight for silent neuron penalty (typical unweighted: ~0.01-0.1)
