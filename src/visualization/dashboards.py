@@ -92,7 +92,7 @@ def create_connectivity_dashboard(
             for target_idx in range(len(cell_type_names)):
                 target_mask = cell_type_indices == target_idx
                 scale = scaling_factors_FF[source_idx, target_idx]
-                feedforward_weights[np.ix_(target_mask, source_mask)] *= scale
+                feedforward_weights[np.ix_(source_mask, target_mask)] *= scale
 
     # Create main dashboard figure
     fig = plt.figure(figsize=(24, 16))
