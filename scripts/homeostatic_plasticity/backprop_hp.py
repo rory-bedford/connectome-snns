@@ -453,94 +453,93 @@ def main(
         # =====================================
         # Initial Inference and Visualization
         # =====================================
-        # COMMENTED OUT - Initial inference and plotting
 
-        # # Run 10s inference on single batch (batch_size=1)
-        # print("\nRunning 10s inference with initial weights...")
-        # inference_duration_ms = 10000.0  # 10 seconds
-        # inference_timesteps = int(inference_duration_ms / simulation.dt)
-        #
-        # # Create a new dataloader for 10s inference with batch_size=1
-        # inference_dataloader = HomogeneousPoissonSpikeDataLoader(
-        #     firing_rates=input_firing_rates,
-        #     chunk_size=inference_timesteps,  # Single chunk of 10s
-        #     dt=simulation.dt,
-        #     batch_size=1,
-        #     device=device,
-        #     shuffle=False,
-        #     num_workers=0,
-        # )
-        # inference_input_spikes, _ = next(iter(inference_dataloader))
-        #
-        # # Run inference with tqdm progress bar
-        # model.use_tqdm = True
-        # with torch.inference_mode():
-        #     (
-        #         inf_spikes,
-        #         inf_voltages,
-        #         inf_currents,
-        #         inf_currents_FF,
-        #         inf_currents_leak,
-        #         inf_conductances,
-        #         inf_conductances_FF,
-        #     ) = model.forward(
-        #         input_spikes=inference_input_spikes,
-        #         initial_v=None,
-        #         initial_g=None,
-        #         initial_g_FF=None,
-        #     )
-        # model.use_tqdm = False
-        #
-        # print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
-        #
-        # # Generate plots for initial state
-        # if plot_generator:
-        #     print("Generating initial state plots...")
-        #     figures_dir = initial_state_dir / "figures"
-        #     figures_dir.mkdir(parents=True, exist_ok=True)
-        #
-        #     # Convert to numpy and take only first batch
-        #     plot_data = {
-        #         "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
-        #         "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
-        #         "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
-        #         "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
-        #         "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
-        #         "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
-        #         "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
-        #         "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
-        #         "weights": model.weights.detach().cpu().numpy(),
-        #         "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
-        #         "connectome_mask": connectivity_graph.astype(np.bool_),
-        #         "feedforward_mask": feedforward_connectivity_graph.astype(np.bool_),
-        #     }
-        #
-        #     # Generate plots
-        #     figures = plot_generator(**plot_data)
-        #
-        #     # Save plots to disk
-        #     for plot_name, fig in figures.items():
-        #         fig_path = figures_dir / f"{plot_name}.png"
-        #         fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-        #         plt.close(fig)
-        #
-        #     print(f"✓ Initial state plots saved to {figures_dir}")
-        #
-        # # Clean up inference data
-        # del (
-        #     inference_input_spikes,
-        #     inf_spikes,
-        #     inf_voltages,
-        #     inf_currents,
-        #     inf_currents_FF,
-        #     inf_currents_leak,
-        #     inf_conductances,
-        #     inf_conductances_FF,
-        # )
-        # if device == "cuda":
-        #     torch.cuda.empty_cache()
-        #
-        # print("=" * 60 + "\n")
+        # Run 10s inference on single batch (batch_size=1)
+        print("\nRunning 10s inference with initial weights...")
+        inference_duration_ms = 10000.0  # 10 seconds
+        inference_timesteps = int(inference_duration_ms / simulation.dt)
+
+        # Create a new dataloader for 10s inference with batch_size=1
+        inference_dataloader = HomogeneousPoissonSpikeDataLoader(
+            firing_rates=input_firing_rates,
+            chunk_size=inference_timesteps,  # Single chunk of 10s
+            dt=simulation.dt,
+            batch_size=1,
+            device=device,
+            shuffle=False,
+            num_workers=0,
+        )
+        inference_input_spikes, _ = next(iter(inference_dataloader))
+
+        # Run inference with tqdm progress bar
+        model.use_tqdm = True
+        with torch.inference_mode():
+            (
+                inf_spikes,
+                inf_voltages,
+                inf_currents,
+                inf_currents_FF,
+                inf_currents_leak,
+                inf_conductances,
+                inf_conductances_FF,
+            ) = model.forward(
+                input_spikes=inference_input_spikes,
+                initial_v=None,
+                initial_g=None,
+                initial_g_FF=None,
+            )
+        model.use_tqdm = False
+
+        print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
+
+        # Generate plots for initial state
+        if plot_generator:
+            print("Generating initial state plots...")
+            figures_dir = initial_state_dir / "figures"
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to numpy and take only first batch
+            plot_data = {
+                "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
+                "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
+                "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
+                "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
+                "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
+                "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+                "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
+                "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+                "weights": model.weights.detach().cpu().numpy(),
+                "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+                "connectome_mask": connectivity_graph.astype(np.bool_),
+                "feedforward_mask": feedforward_connectivity_graph.astype(np.bool_),
+            }
+
+            # Generate plots
+            figures = plot_generator(**plot_data)
+
+            # Save plots to disk
+            for plot_name, fig in figures.items():
+                fig_path = figures_dir / f"{plot_name}.png"
+                fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+                plt.close(fig)
+
+            print(f"✓ Initial state plots saved to {figures_dir}")
+
+        # Clean up inference data
+        del (
+            inference_input_spikes,
+            inf_spikes,
+            inf_voltages,
+            inf_currents,
+            inf_currents_FF,
+            inf_currents_leak,
+            inf_conductances,
+            inf_conductances_FF,
+        )
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+        print("=" * 60 + "\n")
 
     # ===================
     # Setup Training Loop
