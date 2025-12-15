@@ -734,21 +734,27 @@ class SNNTrainer:
             scaling_factors = copy_tensor_optimized(self.model.scaling_factors)
             scaling_factors_FF = copy_tensor_optimized(self.model.scaling_factors_FF)
 
+            # Add weights and masks to plot_data
+            plot_data["weights"] = weights
+            plot_data["feedforward_weights"] = weights_ff
+            plot_data["connectome_mask"] = (
+                self.connectome_mask.detach().cpu().numpy()
+                if self.connectome_mask is not None
+                else None
+            )
+            plot_data["feedforward_mask"] = (
+                self.feedforward_mask.detach().cpu().numpy()
+                if self.feedforward_mask is not None
+                else None
+            )
+            plot_data["scaling_factors"] = scaling_factors
+            plot_data["scaling_factors_FF"] = scaling_factors_FF
+
             # Submit plot with blocking to ensure it doesn't get skipped
             print("  📊 Submitting plot (will wait if queue is full)...")
             success = self.async_plotter.submit_plot(
                 plot_data=plot_data,
                 epoch=epoch,
-                weights=weights,
-                weights_ff=weights_ff,
-                connectome_mask=self.connectome_mask.detach().cpu().numpy()
-                if self.connectome_mask is not None
-                else None,
-                feedforward_mask=self.feedforward_mask.detach().cpu().numpy()
-                if self.feedforward_mask is not None
-                else None,
-                scaling_factors=scaling_factors,
-                scaling_factors_FF=scaling_factors_FF,
                 block=True,
                 timeout=90.0,
             )

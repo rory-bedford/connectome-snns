@@ -379,39 +379,52 @@ class AsyncPlotter:
         self,
         plot_data: Dict[str, np.ndarray],
         epoch: int,
-        weights: np.ndarray,
-        weights_ff: Optional[np.ndarray] = None,
-        connectome_mask: Optional[np.ndarray] = None,
-        feedforward_mask: Optional[np.ndarray] = None,
         block: bool = True,
         timeout: Optional[float] = 90.0,
     ) -> bool:
         """Submit a plotting job to the background thread.
 
         Args:
-            plot_data (Dict[str, np.ndarray]): Dictionary containing activity data as numpy arrays
+            plot_data (Dict[str, np.ndarray]): Dictionary containing activity data and weights as numpy arrays.
+                Should include keys: spikes, voltages, currents, etc., plus:
+                - weights: Current network weights
+                - feedforward_weights: Current feedforward weights
+                - connectome_mask (optional): Binary mask for recurrent connections
+                - feedforward_mask (optional): Binary mask for feedforward connections
+                - scaling_factors (optional): Recurrent scaling factors
+                - scaling_factors_FF (optional): Feedforward scaling factors
             epoch (int): Current epoch number
-            weights (np.ndarray): Current network weights as numpy array
-            weights_ff (Optional[np.ndarray]): Current feedforward weights as numpy array
-            connectome_mask (Optional[np.ndarray]): Binary mask for recurrent connections
-            feedforward_mask (Optional[np.ndarray]): Binary mask for feedforward connections
             block (bool): If True, wait for space in queue. If False, skip if queue full.
             timeout (Optional[float]): Maximum time to wait if blocking (None = wait forever)
 
         Returns:
             bool: True if job was queued, False if queue full and not blocking or timeout
         """
+        # Extract weights and masks from plot_data
+        weights = plot_data.pop("weights", None)
+        weights_ff = plot_data.pop("feedforward_weights", None)
+        connectome_mask = plot_data.pop("connectome_mask", None)
+        feedforward_mask = plot_data.pop("feedforward_mask", None)
+        scaling_factors = plot_data.pop("scaling_factors", None)
+        scaling_factors_FF = plot_data.pop("scaling_factors_FF", None)
+
         # Create plot job with already-copied numpy data
         plot_job = {
             "plot_data": plot_data.copy(),  # Shallow copy of dict
             "epoch": epoch,
-            "weights": weights.copy(),  # Copy numpy array
+            "weights": weights.copy() if weights is not None else None,
             "weights_ff": weights_ff.copy() if weights_ff is not None else None,
             "connectome_mask": connectome_mask.copy()
             if connectome_mask is not None
             else None,
             "feedforward_mask": feedforward_mask.copy()
             if feedforward_mask is not None
+            else None,
+            "scaling_factors": scaling_factors.copy()
+            if scaling_factors is not None
+            else None,
+            "scaling_factors_FF": scaling_factors_FF.copy()
+            if scaling_factors_FF is not None
             else None,
             "timestamp": time.time(),
         }
@@ -491,6 +504,10 @@ class AsyncPlotter:
             plot_kwargs["connectome_mask"] = job["connectome_mask"]
         if job["feedforward_mask"] is not None:
             plot_kwargs["feedforward_mask"] = job["feedforward_mask"]
+        if job["scaling_factors"] is not None:
+            plot_kwargs["scaling_factors"] = job["scaling_factors"]
+        if job["scaling_factors_FF"] is not None:
+            plot_kwargs["scaling_factors_FF"] = job["scaling_factors_FF"]
 
         # Generate plots using the provided function
         figures = self.plot_generator(**plot_kwargs)
