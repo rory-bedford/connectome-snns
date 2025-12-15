@@ -385,8 +385,8 @@ def main(
             )
 
         # Add scaling factor tracking
-        current_recurrent_sf = model.scaling_factors
-        current_feedforward_sf = model.scaling_factors_FF
+        current_recurrent_sf = model["scaling_factors"]
+        current_feedforward_sf = model["scaling_factors_FF"]
 
         # Get cell type names
         target_cell_types = params.recurrent.cell_types.names
