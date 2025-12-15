@@ -581,7 +581,7 @@ def main(
         ).to(device),
     )
 
-    trainer.debug_gradients = True
+    trainer.debug_gradients = False
 
     # Handle checkpoint resuming
     if resume_from is not None:
