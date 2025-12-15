@@ -6,22 +6,23 @@
 # ========================
 
 [simulation]
-seed = 42                              # Random seed for reproducibility
+seed = 43                              # Random seed for reproducibility
 dt = 1.0                               # ms - Time resolution of the simulation
-duration = 100000                      # ms - Total duration of the simulation
-chunk_size = 50                        # Number of timesteps per chunk
+duration = 1000000.0                   # ms - Total duration of the simulation
+chunk_size = 25                        # Number of timesteps per chunk
 
 # ======================
 # TRAINING CONFIGURATION
 # ======================
 
 [training]
+chunks_per_update = 20                 # Number of loss calculations per gradient step
+log_interval = 5                       # Log metrics to CSV and wandb every N chunks
+checkpoint_interval = 400              # Save model checkpoints and generate plots every N chunks
+mixed_precision = false                # Whether to train with mixed precision
+plot_size = 400                        # Number of chunks to save for plotting
 batch_size = 100                       # Number of batches to run in parallel for training
-chunks_per_update = 2                  # Number of loss calculations per gradient step
-log_interval = 200                     # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
-mixed_precision = true                 # Whether to train with mixed precision
-plot_size = 200                        # Number of chunks to save for plotting
+grad_norm_clip = 1.0                   # Maximum gradient norm for clipping
 
 # ====================
 # OPTIMISATION TARGETS
@@ -34,7 +35,7 @@ alpha.excitatory = 10.0                # S - Penalty parameter for nearly silent
 alpha.inhibitory = 2.0                 # S - Penalty parameter for nearly silent inhibitroy neurons
 threshold_ratio.excitatory = 0.25      # Target ratio of std vs threshold for excitatory neurons
 threshold_ratio.inhibitory = 0.45      # Target ratio of std vs threshold for inhibitory neurons
-weight_ratio = 2.0                     # Target ratio of recurrent mean weights over feedforward mean weights
+weight_ratio = 10.0                    # Target ratio of recurrent mean weights over feedforward mean weights
 
 # ===============
 # HYPERPARAMETERS
@@ -45,31 +46,25 @@ surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmo
 learning_rate = 5e-4                   # Learning rate for ADAM optimiser
 loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
 loss_weight.cv = 0.5                   # Weight for CV loss (typical unweighted: ~0.01-0.1)
-loss_weight.silent_penalty = 1.0       # Weight for silent neuron penalty (typical unweighted: ~0.01-0.1)
+loss_weight.silent_penalty = 0.1       # Weight for silent neuron penalty (typical unweighted: ~0.01-0.1)
 loss_weight.membrane_variance = 10.0   # Weight for membrane variance loss (typical unweighted: ~0.01-0.1)
-loss_weight.weight_ratio = 3.0         # Weight for the weight ratio loss (typical unweighted: ~0.1-1.0)
+loss_weight.weight_ratio = 0.01        # Weight for the weight ratio loss (typical unweighted: ~0.1-1.0)
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY
 # ==========================
 
 [feedforward.cell_types]
-names = ['mitral']                     # Cell type names
-proportion = [1]                       # Relative proportions of each cell type
+names = [ "mitral",]                   # Cell type names
+proportion = [ 1,]                     # Relative proportions of each cell type
 
 [feedforward.topology]
 num_neurons = 1500                     # Total number of input neurons
-conn_inputs = [                        # Connection probabilities to connectome layers
-    [0.02, 0.02],
-]
+conn_inputs = [ [ 0.05, 0.05,],]       # Connection probabilities to connectome layers
 
 [feedforward.weights]
-w_mu = [                               # Mean for input synapse strengths
-    [0.4, 0.4],
-]
-w_sigma = [                            # Std dev for input synapse strengths
-    [0.2, 0.2],
-]
+w_mu = [ [ 0.05, 0.02,],]              # Mean for input synapse strengths
+w_sigma = [ [ 0.1, 0.1,],]             # Std dev for input synapse strengths
 
 # =======================================
 # FEEDFORWARD LAYER ACTIVITY AND SYNAPSES
@@ -79,43 +74,31 @@ w_sigma = [                            # Std dev for input synapse strengths
 firing_rate = 6.0                      # Hz - Firing rate of mitral cells (Poisson process)
 
 [feedforward.synapses.mitral]
-names = ['AMPA', 'NMDA']
-tau_rise = [0.1, 10.0]                 # ms - Synaptic rise time constants
-tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
-E_syn = [0.0, 0.0]                     # mV - Synaptic reversal potentials
-g_bar = [0.4177, 0.0448]               # nS - Maximum synaptic conductances
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 4.177, 0.448,]               # nS - Maximum synaptic conductances
 
 # ========================
 # RECURRENT LAYER TOPOLOGY 
 # ========================
 
 [recurrent.cell_types]
-names = ['excitatory', 'inhibitory']   # Cell type names
-proportion = [0.8, 0.2]                # Relative proportions of each cell type
+names = [ "excitatory", "inhibitory",] # Cell type names
+proportion = [ 0.8, 0.2,]              # Relative proportions of each cell type
 
 [recurrent.topology]
 num_neurons = 5000                     # Total number of neurons in the network
 num_assemblies = 20                    # Number of assemblies in the network
 
-conn_within = [                        # Connection probabilities within assemblies
-    [0.2, 0.2],
-    [0.4, 0.2],
-]
+conn_within = [ [ 0.2, 0.2,], [ 0.4, 0.2,],] # Connection probabilities within assemblies
 
-conn_between = [                       # Connection probabilities between assemblies
-    [0.02, 0.02],
-    [0.02, 0.02],
-]
+conn_between = [ [ 0.05, 0.05,], [ 0.05, 0.05,],] # Connection probabilities between assemblies
 
 [recurrent.weights]
-w_mu = [                               # Mean synapse strengths
-    [0.4, 0.4],
-    [0.6, 0.3],
-]
-w_sigma = [                            # Standard-deviation synapse strengths
-    [0.2, 0.2],
-    [0.3, 0.1],
-]
+w_mu = [ [ 0.1, 0.05,], [ 0.2, 0.19,],] # Mean synapse strengths
+w_sigma = [ [ 0.1, 0.1,], [ 0.1, 0.1,],] # Standard-deviation synapse strengths
 
 # =======================================
 # RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
@@ -130,11 +113,11 @@ g_L = 1.35                             # nS - Leak conductance
 tau_ref = 8.0                          # ms - Refractory period
 
 [recurrent.synapses.excitatory]
-names = ['AMPA', 'NMDA']
-tau_rise = [0.1, 10.0]                 # ms - Synaptic rise time constants
-tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
-E_syn = [0.0, 0.0]                     # mV - Synaptic reversal potentials
-g_bar = [0.4177, 0.0448]               # nS - Synaptic conductances (per spike)
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 4.177, 0.448,]               # nS - Synaptic conductances (per spike)
 
 [recurrent.physiology.inhibitory]
 tau_mem = 50.0                         # ms - Membrane time constant
@@ -145,8 +128,8 @@ g_L = 0.9                              # nS - Leak conductance
 tau_ref = 8.0                          # ms - Refractory period
 
 [recurrent.synapses.inhibitory]
-names = ['GABA_A']
-tau_rise = [1.0]                       # ms - Synaptic rise time constants
-tau_decay = [6.0]                      # ms - Synaptic decay time constants
-E_syn = [-70.0]                        # mV - Synaptic reversal potentials
-g_bar = [0.8139]                       # nS - Synaptic conductances (per spike)
+names = [ "GABA_A",]
+tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
+tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
+E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
+g_bar = [ 8.139,]                      # nS - Synaptic conductances (per spike)

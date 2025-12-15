@@ -178,7 +178,9 @@ def main(
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable="weights",
+        optimisable="scaling_factors",
+        connectome_mask=connectivity_graph,
+        feedforward_mask=feedforward_connectivity_graph,
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
@@ -286,15 +288,6 @@ def main(
         feedforward_mask,
     ):
         """Generate connectivity and activity dashboards."""
-        # Calculate mean membrane potential by cell type from voltage traces
-        recurrent_V_mem_by_type = {}
-        for i, cell_type_name in enumerate(params.recurrent.cell_types.names):
-            cell_mask = cell_type_indices == i
-            if cell_mask.sum() > 0:
-                # Average over batch, time, and neurons of this type
-                recurrent_V_mem_by_type[cell_type_name] = float(
-                    voltages[:, :, cell_mask].mean()
-                )
 
         # Generate connectivity dashboard
         connectivity_fig = create_connectivity_dashboard(
@@ -344,7 +337,7 @@ def main(
 
         Args:
             spikes: Spike array of shape (1, time, neurons) - single batch accumulated over plot_size chunks
-            model: The network model (unused in this script)
+            model: The network model
 
         Returns:
             Dictionary with keys: metric/cell_type/stat
@@ -391,122 +384,153 @@ def main(
                 (firing_rates[mask] > 0).mean()
             )
 
+        # Add scaling factor tracking
+        current_recurrent_sf = model.scaling_factors
+        current_feedforward_sf = model.scaling_factors_FF
+
+        # Get cell type names
+        target_cell_types = params.recurrent.cell_types.names
+        source_ff_cell_types = params.feedforward.cell_types.names
+
+        # Log recurrent scaling factors: source -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(target_cell_types):
+                synapse_name = f"{source_type}_to_{target_type}"
+                stats[f"scaling_factors/recurrent/{synapse_name}"] = float(
+                    current_recurrent_sf[source_idx, target_idx]
+                )
+
+        # Log feedforward scaling factors: source_ff -> target
+        for target_idx, target_type in enumerate(target_cell_types):
+            for source_idx, source_type in enumerate(source_ff_cell_types):
+                synapse_name = f"{source_type}_to_{target_type}"
+                stats[f"scaling_factors/feedforward/{synapse_name}"] = float(
+                    current_feedforward_sf[source_idx, target_idx]
+                )
+
         return stats
 
     # ===================================
     # Save Initial State and Run Inference
     # ===================================
 
-    # # Only save initial state and run inference if starting from scratch
-    # if resume_from is None:
-    #     print("\n" + "=" * 60)
-    #     print("SAVING INITIAL STATE AND RUNNING INFERENCE")
-    #     print("=" * 60)
+    # Only save initial state and run inference if starting from scratch
+    if resume_from is None:
+        print("\n" + "=" * 60)
+        print("SAVING INITIAL STATE AND RUNNING INFERENCE")
+        print("=" * 60)
 
-    #     # Create initial_state directory
-    #     initial_state_dir = output_dir / "initial_state"
-    #     initial_state_dir.mkdir(parents=True, exist_ok=True)
+        # Create initial_state directory
+        initial_state_dir = output_dir / "initial_state"
+        initial_state_dir.mkdir(parents=True, exist_ok=True)
 
-    #     # Save initial network structure as single npz file
-    #     print("Saving initial network structure...")
-    #     np.savez(
-    #         initial_state_dir / "network_structure.npz",
-    #         recurrent_weights=model.weights.detach().cpu().numpy(),
-    #         feedforward_weights=model.weights_FF.detach().cpu().numpy(),
-    #         recurrent_connectivity=connectivity_graph,
-    #         feedforward_connectivity=feedforward_connectivity_graph,
-    #         cell_type_indices=cell_type_indices,
-    #         feedforward_cell_type_indices=input_source_indices,
-    #         assembly_ids=assembly_ids,
-    #     )
-    #     print(
-    #         f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
-    #     )
+        # Save initial network structure as single npz file
+        print("Saving initial network structure...")
+        np.savez(
+            initial_state_dir / "network_structure.npz",
+            recurrent_weights=model.weights.detach().cpu().numpy(),
+            feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+            recurrent_connectivity=connectivity_graph,
+            feedforward_connectivity=feedforward_connectivity_graph,
+            cell_type_indices=cell_type_indices,
+            feedforward_cell_type_indices=input_source_indices,
+            assembly_ids=assembly_ids,
+        )
+        print(
+            f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
+        )
 
-    #     # Run 10s inference on single batch (batch_size=1)
-    #     print("\nRunning 10s inference with initial weights...")
-    #     inference_duration_ms = 10000.0  # 10 seconds
-    #     inference_timesteps = int(inference_duration_ms / simulation.dt)
+        # =====================================
+        # Initial Inference and Visualization
+        # =====================================
+        # COMMENTED OUT - Initial inference and plotting
 
-    #     # Create a new dataloader for 10s inference with batch_size=1
-    #     inference_dataloader = HomogeneousPoissonSpikeDataLoader(
-    #         firing_rates=input_firing_rates,
-    #         chunk_size=inference_timesteps,  # Single chunk of 10s
-    #         dt=simulation.dt,
-    #         batch_size=1,
-    #         device=device,
-    #         shuffle=False,
-    #         num_workers=0,
-    #     )
-    #     inference_input_spikes, _ = next(iter(inference_dataloader))
-
-    #     # Run inference with tqdm progress bar
-    #     model.use_tqdm = True
-    #     with torch.inference_mode():
-    #         (
-    #             inf_spikes,
-    #             inf_voltages,
-    #             inf_currents,
-    #             inf_currents_FF,
-    #             inf_currents_leak,
-    #             inf_conductances,
-    #             inf_conductances_FF,
-    #         ) = model.forward(
-    #             input_spikes=inference_input_spikes,
-    #             initial_v=None,
-    #             initial_g=None,
-    #             initial_g_FF=None,
-    #         )
-    #     model.use_tqdm = False
-
-    #     print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
-
-    #     # Generate plots for initial state
-    #     if plot_generator:
-    #         print("Generating initial state plots...")
-    #         figures_dir = initial_state_dir / "figures"
-    #         figures_dir.mkdir(parents=True, exist_ok=True)
-
-    #         # Convert to numpy and take only first batch
-    #         plot_data = {
-    #             "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
-    #             "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
-    #             "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
-    #             "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
-    #             "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
-    #             "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
-    #             "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
-    #             "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
-    #             "weights": model.weights.detach().cpu().numpy(),
-    #             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
-    #         }
-
-    #         # Generate plots
-    #         figures = plot_generator(**plot_data)
-
-    #         # Save plots to disk
-    #         for plot_name, fig in figures.items():
-    #             fig_path = figures_dir / f"{plot_name}.png"
-    #             fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-    #             plt.close(fig)
-
-    #         print(f"✓ Initial state plots saved to {figures_dir}")
-
-    #     # Clean up inference data
-    #     del (
-    #         inference_input_spikes,
-    #         inf_spikes,
-    #         inf_voltages,
-    #         inf_currents,
-    #         inf_currents_FF,
-    #         inf_currents_leak,
-    #         inf_conductances,
-    #         inf_conductances_FF,
-    #     )
-    #     if device == "cuda":
-    #         torch.cuda.empty_cache()
-
-    #     print("=" * 60 + "\n")
+        # # Run 10s inference on single batch (batch_size=1)
+        # print("\nRunning 10s inference with initial weights...")
+        # inference_duration_ms = 10000.0  # 10 seconds
+        # inference_timesteps = int(inference_duration_ms / simulation.dt)
+        #
+        # # Create a new dataloader for 10s inference with batch_size=1
+        # inference_dataloader = HomogeneousPoissonSpikeDataLoader(
+        #     firing_rates=input_firing_rates,
+        #     chunk_size=inference_timesteps,  # Single chunk of 10s
+        #     dt=simulation.dt,
+        #     batch_size=1,
+        #     device=device,
+        #     shuffle=False,
+        #     num_workers=0,
+        # )
+        # inference_input_spikes, _ = next(iter(inference_dataloader))
+        #
+        # # Run inference with tqdm progress bar
+        # model.use_tqdm = True
+        # with torch.inference_mode():
+        #     (
+        #         inf_spikes,
+        #         inf_voltages,
+        #         inf_currents,
+        #         inf_currents_FF,
+        #         inf_currents_leak,
+        #         inf_conductances,
+        #         inf_conductances_FF,
+        #     ) = model.forward(
+        #         input_spikes=inference_input_spikes,
+        #         initial_v=None,
+        #         initial_g=None,
+        #         initial_g_FF=None,
+        #     )
+        # model.use_tqdm = False
+        #
+        # print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
+        #
+        # # Generate plots for initial state
+        # if plot_generator:
+        #     print("Generating initial state plots...")
+        #     figures_dir = initial_state_dir / "figures"
+        #     figures_dir.mkdir(parents=True, exist_ok=True)
+        #
+        #     # Convert to numpy and take only first batch
+        #     plot_data = {
+        #         "spikes": inf_spikes[0:1, ...].detach().cpu().numpy(),
+        #         "voltages": inf_voltages[0:1, ...].detach().cpu().numpy(),
+        #         "conductances": inf_conductances[0:1, ...].detach().cpu().numpy(),
+        #         "conductances_FF": inf_conductances_FF[0:1, ...].detach().cpu().numpy(),
+        #         "currents": inf_currents[0:1, ...].detach().cpu().numpy(),
+        #         "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
+        #         "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
+        #         "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+        #         "weights": model.weights.detach().cpu().numpy(),
+        #         "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+        #         "connectome_mask": connectivity_graph.astype(np.bool_),
+        #         "feedforward_mask": feedforward_connectivity_graph.astype(np.bool_),
+        #     }
+        #
+        #     # Generate plots
+        #     figures = plot_generator(**plot_data)
+        #
+        #     # Save plots to disk
+        #     for plot_name, fig in figures.items():
+        #         fig_path = figures_dir / f"{plot_name}.png"
+        #         fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        #         plt.close(fig)
+        #
+        #     print(f"✓ Initial state plots saved to {figures_dir}")
+        #
+        # # Clean up inference data
+        # del (
+        #     inference_input_spikes,
+        #     inf_spikes,
+        #     inf_voltages,
+        #     inf_currents,
+        #     inf_currents_FF,
+        #     inf_currents_leak,
+        #     inf_conductances,
+        #     inf_conductances_FF,
+        # )
+        # if device == "cuda":
+        #     torch.cuda.empty_cache()
+        #
+        # print("=" * 60 + "\n")
 
     # ===================
     # Setup Training Loop
@@ -547,8 +571,6 @@ def main(
             feedforward_connectivity_graph.astype(np.float32)
         ).to(device),
     )
-
-    trainer.debug_gradients = True
 
     # Handle checkpoint resuming
     if resume_from is not None:
@@ -612,10 +634,38 @@ def main(
 
     # Save final network structure as single npz file
     print("Saving final network structure...")
+
+    # Scale weights by scaling factors
+    # Scaling factors shape: (n_source_types, n_target_types)
+    # Recurrent weights shape: (n_neurons, n_neurons, n_syn_types)
+    # We need to apply scaling_factors[source_type, target_type] to weights
+
+    scaled_recurrent_weights = model.weights.detach().cpu().numpy().copy()
+    scaled_feedforward_weights = model.weights_FF.detach().cpu().numpy().copy()
+
+    scaling_factors_np = model.scaling_factors.detach().cpu().numpy()
+    scaling_factors_FF_np = model.scaling_factors_FF.detach().cpu().numpy()
+
+    # Apply recurrent scaling factors
+    for source_idx in range(len(params.recurrent.cell_types.names)):
+        source_mask = cell_type_indices == source_idx
+        for target_idx in range(len(params.recurrent.cell_types.names)):
+            target_mask = cell_type_indices == target_idx
+            scale = scaling_factors_np[source_idx, target_idx]
+            scaled_recurrent_weights[np.ix_(target_mask, source_mask)] *= scale
+
+    # Apply feedforward scaling factors
+    for source_idx in range(len(params.feedforward.cell_types.names)):
+        source_mask = input_source_indices == source_idx
+        for target_idx in range(len(params.recurrent.cell_types.names)):
+            target_mask = cell_type_indices == target_idx
+            scale = scaling_factors_FF_np[source_idx, target_idx]
+            scaled_feedforward_weights[np.ix_(target_mask, source_mask)] *= scale
+
     np.savez(
         final_state_dir / "network_structure.npz",
-        recurrent_weights=model.weights.detach().cpu().numpy(),
-        feedforward_weights=model.weights_FF.detach().cpu().numpy(),
+        recurrent_weights=scaled_recurrent_weights,
+        feedforward_weights=scaled_feedforward_weights,
         recurrent_connectivity=connectivity_graph,
         feedforward_connectivity=feedforward_connectivity_graph,
         cell_type_indices=cell_type_indices,

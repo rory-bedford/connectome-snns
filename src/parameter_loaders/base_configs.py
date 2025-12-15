@@ -54,6 +54,7 @@ class TrainingConfig(BaseModel):
     checkpoint_interval: int
     mixed_precision: bool
     plot_size: int
+    grad_norm_clip: float
 
 
 # =============================================================================

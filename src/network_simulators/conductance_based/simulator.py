@@ -120,15 +120,6 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         # Run simulation
         # ==============
 
-        # Compute weights once at the start if optimizing weights
-        # This creates a single tensor in the computation graph instead of calling property multiple times
-        if self.optimisable == "weights":
-            weights_for_forward = torch.exp(self.log_weights)
-            weights_FF_for_forward = torch.exp(self.log_weights_FF)
-        else:
-            weights_for_forward = None
-            weights_FF_for_forward = None
-
         # Gather cached weight tensors into lists once (outside the loop)
         cached_rec = [
             getattr(self, f"cached_rec_{i}")
@@ -159,6 +150,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     self.E_L,
                     self.C_m,
                     self.U_reset,
+                    self.g_mins,
+                    self.g_maxs,
                     self.cached_weights_rec_masks,
                     self.cached_weights_rec_syn_masks,
                     cached_rec,
@@ -180,8 +173,10 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     self.E_L,
                     self.C_m,
                     self.U_reset,
-                    weights_for_forward,
-                    weights_FF_for_forward,
+                    self.weights,
+                    self.weights_FF,
+                    self.g_mins,
+                    self.g_maxs,
                     self.cached_weights_rec_masks,
                     self.cached_weights_rec_syn_masks,
                     self.cached_weights_rec_indices,
@@ -208,6 +203,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     self.scaling_factors,
                     self.scaling_factors_FF,
                     self.cell_type_indices,
+                    self.g_mins,
+                    self.g_maxs,
                     self.cached_weights_rec_masks,
                     self.cached_weights_rec_syn_masks,
                     self.cached_weights_rec_indices,
@@ -254,6 +251,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         E_L: torch.Tensor,
         C_m: torch.Tensor,
         U_reset: torch.Tensor,
+        g_mins: torch.Tensor,
+        g_maxs: torch.Tensor,
         masks_rec: List[torch.Tensor],
         syn_masks_rec: List[torch.Tensor],
         weights_rec: List[torch.Tensor],
@@ -292,6 +291,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weights
             )
 
+        # Clip rise and decay components to their physiological peaks
+        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
+
         return v, g, s, I, I_leak
 
     @staticmethod
@@ -310,6 +312,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         U_reset: torch.Tensor,
         weights: torch.Tensor,
         weights_FF: torch.Tensor,
+        g_mins: torch.Tensor,
+        g_maxs: torch.Tensor,
         masks_rec: List[torch.Tensor],
         syn_masks_rec: List[torch.Tensor],
         indices_rec: List[int],
@@ -360,6 +364,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 weights_FF[mask, :][:, :, None, None] * cached[None, :, :, :],
             )
 
+        # Clip rise and decay components to their physiological peaks
+        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
+
         return v, g, s, I, I_leak
 
     @staticmethod
@@ -379,6 +386,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         scaling_factors: torch.Tensor,
         scaling_factors_FF: torch.Tensor,
         cell_type_indices: torch.Tensor,
+        g_mins: torch.Tensor,
+        g_maxs: torch.Tensor,
         masks_rec: List[torch.Tensor],
         syn_masks_rec: List[torch.Tensor],
         indices_rec: List[int],
@@ -426,5 +435,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 torch.einsum("bi,ijkl->bjkl", input_spikes_t[:, mask].float(), cached)
                 * scaling_factors_FF[k, cell_type_indices][None, :, None, None]
             )
+
+        # Clip rise and decay components to their physiological peaks
+        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
 
         return v, g, s, I, I_leak

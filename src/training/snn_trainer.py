@@ -552,7 +552,11 @@ class SNNTrainer:
         # Accumulate gradient statistics for online averaging
         self._accumulate_gradient_statistics()
 
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        # Clip gradients if configured
+        if self.training.grad_norm_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.training.grad_norm_clip
+            )
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -598,11 +602,15 @@ class SNNTrainer:
             # Compute stats synchronously
             stats = self.stats_computer(spikes, model_snapshot)
 
+        # Compute gradient stats for logging
+        gradient_stats = self._compute_average_gradients()
+
         # Prepare CSV data
         csv_data = {
             f"{loss_name}_loss": loss_value for loss_name, loss_value in losses.items()
         }
         csv_data.update(stats)
+        csv_data.update(gradient_stats)
 
         # Log to CSV asynchronously
         if self.metrics_logger:
@@ -611,9 +619,6 @@ class SNNTrainer:
         # Log to wandb directly (synchronous but fast)
         if self.wandb_logger:
             import wandb
-
-            # Compute gradient stats for wandb
-            gradient_stats = self._compute_average_gradients()
 
             # Create loss dict with wandb naming convention
             wandb_losses = {
@@ -730,6 +735,12 @@ class SNNTrainer:
                 epoch=epoch,
                 weights=weights,
                 weights_ff=weights_ff,
+                connectome_mask=self.connectome_mask.detach().cpu().numpy()
+                if self.connectome_mask is not None
+                else None,
+                feedforward_mask=self.feedforward_mask.detach().cpu().numpy()
+                if self.feedforward_mask is not None
+                else None,
                 block=True,
                 timeout=90.0,
             )

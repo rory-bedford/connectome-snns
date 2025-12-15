@@ -30,6 +30,8 @@ class ConductanceLIFNetwork_IO(nn.Module):
         scaling_factors: FloatArray | None = None,
         scaling_factors_FF: FloatArray | None = None,
         optimisable: OptimisableParams = None,
+        connectome_mask: FloatArray | None = None,
+        feedforward_mask: FloatArray | None = None,
         use_tqdm: bool = True,
     ):
         """
@@ -69,6 +71,10 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 - "weights": Optimise connection weights (weights and weights_FF)
                 - "scaling_factors": Optimise scaling factors (scaling_factors and scaling_factors_FF)
                 - None: Don't optimise anything (all parameters are fixed) [default]
+            connectome_mask (FloatArray | None): Boolean mask for recurrent connections of shape (n_neurons, n_neurons).
+                Required if optimisable="weights". If None, computed from weights != 0.
+            feedforward_mask (FloatArray | None): Boolean mask for feedforward connections of shape (n_inputs, n_neurons).
+                Required if optimisable="weights". If None, computed from weights_FF != 0.
             use_tqdm (bool): Whether to display tqdm progress bar during forward pass. Default is True.
         """
         super(ConductanceLIFNetwork_IO, self).__init__()
@@ -120,20 +126,45 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self.n_cell_types_FF = self.n_cell_types_FF
         self.n_synapse_types_FF = len(synapse_params_FF)
 
+        # Validate and prepare weights masks
+        if self.optimisable == "weights":
+            assert connectome_mask is not None, (
+                "connectome_mask is required when optimisable='weights'"
+            )
+            assert feedforward_mask is not None, (
+                "feedforward_mask is required when optimisable='weights'"
+            )
+            weights_mask = connectome_mask
+            weights_mask_FF = feedforward_mask
+        else:
+            # If not optimizing weights, derive masks from non-zero entries if not provided
+            weights_mask = (
+                connectome_mask if connectome_mask is not None else (weights != 0)
+            )
+            weights_mask_FF = (
+                feedforward_mask if feedforward_mask is not None else (weights_FF != 0)
+            )
+
+        # Create and register weights masks (always non-trainable) - do this first
+        self.register_buffer("weights_mask", torch.from_numpy(weights_mask))
+        self.register_buffer("weights_mask_FF", torch.from_numpy(weights_mask_FF))
+
         # Register weights with log parameterization if optimising
         if self.optimisable == "weights":
-            # Store log-space parameters (automatically positive when exponentiated)
-            # For zero weights (masked connections), keep log_weights = 0 instead of -inf
-            # since they'll be masked out anyway - this avoids numerical issues
+            # Extract only non-masked weights and store as flat 1D log-space arrays
             eps = 1e-8
-            log_weights = np.where(weights > 0, np.log(weights + eps), 0.0)
-            log_weights_FF = np.where(weights_FF > 0, np.log(weights_FF + eps), 0.0)
+            non_masked_weights = weights[weights_mask]
+            non_masked_weights_FF = weights_FF[weights_mask_FF]
+
+            # Convert to log space
+            log_weights_flat = np.log(non_masked_weights + eps)
+            log_weights_FF_flat = np.log(non_masked_weights_FF + eps)
 
             self._register_parameter_or_buffer(
-                "log_weights", log_weights, trainable=True
+                "log_weights_flat", log_weights_flat, trainable=True
             )
             self._register_parameter_or_buffer(
-                "log_weights_FF", log_weights_FF, trainable=True
+                "log_weights_FF_flat", log_weights_FF_flat, trainable=True
             )
         else:
             # Store linear-space parameters with internal names to avoid conflict with @property
@@ -151,12 +182,6 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self._register_parameter_or_buffer(
             "cell_type_indices_FF", cell_type_indices_FF, trainable=False
         )
-
-        # Create and register weights masks (always non-trainable)
-        weights_mask = weights != 0
-        weights_mask_FF = weights_FF != 0
-        self.register_buffer("weights_mask", torch.from_numpy(weights_mask))
-        self.register_buffer("weights_mask_FF", torch.from_numpy(weights_mask_FF))
 
         # Create synapse-to-cell and cell-to-synapse mapping arrays
         self._create_synapse_to_cell_mappings(synapse_params, synapse_params_FF)
@@ -495,7 +520,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
     def weights(self) -> torch.Tensor:
         """Get weights in linear space (converts from log if optimising weights)."""
         if self.optimisable == "weights":
-            return torch.exp(self.log_weights)
+            return torch.zeros_like(
+                self.weights_mask, dtype=torch.float32
+            ).masked_scatter_(self.weights_mask, torch.exp(self.log_weights_flat))
         else:
             return self._buffers["_weights_buffer"]
 
@@ -503,7 +530,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
     def weights_FF(self) -> torch.Tensor:
         """Get feedforward weights in linear space (converts from log if optimising weights)."""
         if self.optimisable == "weights":
-            return torch.exp(self.log_weights_FF)
+            return torch.zeros_like(
+                self.weights_mask_FF, dtype=torch.float32
+            ).masked_scatter_(self.weights_mask_FF, torch.exp(self.log_weights_FF_flat))
         else:
             return self._buffers["_weights_FF_buffer"]
 
@@ -511,7 +540,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
     def device(self):
         """Get the device the model is on"""
         if self.optimisable == "weights":
-            return self.log_weights.device
+            return self.log_weights_flat.device
         elif self.optimisable == "scaling_factors":
             return self.scaling_factors.device
         else:
@@ -555,6 +584,12 @@ class ConductanceLIFNetwork_IO(nn.Module):
         norm_peak = (r ** (r / (1 - r))) - (r ** (1 / (1 - r)))
         g_scale = g_scale / norm_peak
         self.register_buffer("g_scale", g_scale)
+
+        # Precompute clamping bounds for conductances
+        g_mins = torch.stack([g_scale[0, :], torch.zeros_like(g_scale[1, :])], dim=0)
+        g_maxs = torch.stack([torch.zeros_like(g_scale[0, :]), g_scale[1, :]], dim=0)
+        self.register_buffer("g_mins", g_mins)
+        self.register_buffer("g_maxs", g_maxs)
 
         # Recompute weight products after timestep change
         self._precompute_weight_products()

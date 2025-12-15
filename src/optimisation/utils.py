@@ -381,6 +381,8 @@ class AsyncPlotter:
         epoch: int,
         weights: np.ndarray,
         weights_ff: Optional[np.ndarray] = None,
+        connectome_mask: Optional[np.ndarray] = None,
+        feedforward_mask: Optional[np.ndarray] = None,
         block: bool = True,
         timeout: Optional[float] = 90.0,
     ) -> bool:
@@ -391,6 +393,8 @@ class AsyncPlotter:
             epoch (int): Current epoch number
             weights (np.ndarray): Current network weights as numpy array
             weights_ff (Optional[np.ndarray]): Current feedforward weights as numpy array
+            connectome_mask (Optional[np.ndarray]): Binary mask for recurrent connections
+            feedforward_mask (Optional[np.ndarray]): Binary mask for feedforward connections
             block (bool): If True, wait for space in queue. If False, skip if queue full.
             timeout (Optional[float]): Maximum time to wait if blocking (None = wait forever)
 
@@ -403,6 +407,12 @@ class AsyncPlotter:
             "epoch": epoch,
             "weights": weights.copy(),  # Copy numpy array
             "weights_ff": weights_ff.copy() if weights_ff is not None else None,
+            "connectome_mask": connectome_mask.copy()
+            if connectome_mask is not None
+            else None,
+            "feedforward_mask": feedforward_mask.copy()
+            if feedforward_mask is not None
+            else None,
             "timestamp": time.time(),
         }
 
@@ -477,6 +487,10 @@ class AsyncPlotter:
         }
         if job["weights_ff"] is not None:
             plot_kwargs["feedforward_weights"] = job["weights_ff"]
+        if job["connectome_mask"] is not None:
+            plot_kwargs["connectome_mask"] = job["connectome_mask"]
+        if job["feedforward_mask"] is not None:
+            plot_kwargs["feedforward_mask"] = job["feedforward_mask"]
 
         # Generate plots using the provided function
         figures = self.plot_generator(**plot_kwargs)
