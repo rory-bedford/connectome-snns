@@ -35,7 +35,7 @@ alpha.excitatory = 10.0                # S - Penalty parameter for nearly silent
 alpha.inhibitory = 2.0                 # S - Penalty parameter for nearly silent inhibitroy neurons
 threshold_ratio.excitatory = 0.25      # Target ratio of std vs threshold for excitatory neurons
 threshold_ratio.inhibitory = 0.45      # Target ratio of std vs threshold for inhibitory neurons
-weight_ratio = 10.0                    # Target ratio of recurrent mean weights over feedforward mean weights
+weight_ratio = 2.0                     # Target ratio of recurrent mean weights over feedforward mean weights
 
 # ===============
 # HYPERPARAMETERS
