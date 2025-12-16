@@ -6,7 +6,7 @@
 # ========================
 
 [simulation]
-seed = 43                              # Random seed for reproducibility
+seed = 44                              # Random seed for reproducibility
 chunk_size = 50                        # Number of timesteps per chunk
 
 # ======================
@@ -14,26 +14,25 @@ chunk_size = 50                        # Number of timesteps per chunk
 # ======================
 
 [training]
-epochs = 100                           # Total number of loops through the training data
-chunks_per_update = 20                 # Number of loss calculations per gradient step
-log_interval = 200                     # Log metrics to CSV and wandb every N chunks
+epochs = 10                            # Total number of loops through the training data
+chunks_per_update = 10                 # Number of loss calculations per gradient step
+log_interval = 10                      # Log metrics to CSV and wandb every N chunks
 checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
 plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
+grad_norm_clip = 1.0                   # Maximum norm for gradient clipping (None to disable)
 
 # ===============
 # HYPERPARAMETERS
 # ===============
 
 [hyperparameters]
-surrgrad_scale = 100.0                 # Scale for surrogate gradient fast sigmoid function
-learning_rate = 5e-4                   # Learning rate for ADAM optimiser
-van_rossum_tau = 100.0                 # ms - Exponential temporal kernel in van Rossum loss
-firing_rate_epsilon = 1.0              # Hz - Regularization for firing rate loss normalization (prevents division by zero)
+surrgrad_scale = 200.0                  # Scale for surrogate gradient fast sigmoid function
+learning_rate = 1e-3                   # Learning rate for ADAM optimiser
+van_rossum_tau = 10.0                  # ms - Exponential temporal kernel in van Rossum loss
 
-loss_weight.firing_rate = 1.0          # Weight for firing rate loss (typical unweighted: ~1-10)
-loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.01)
+loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.005-0.01)
 
 # ==========================
 # FEEDFORWARD LAYER SYNAPSES
@@ -47,7 +46,7 @@ names = [ "AMPA", "NMDA",]
 tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
 tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
 E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
-g_bar = [ 0.4177, 0.0448,]             # nS - Maximum synaptic conductances
+g_bar = [ 4.177, 0.448,]               # nS - Maximum synaptic conductances
 
 # =======================================
 # RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
@@ -69,7 +68,7 @@ names = [ "AMPA", "NMDA",]
 tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
 tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
 E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
-g_bar = [ 0.4177, 0.0448,]             # nS - Synaptic conductances (per spike)
+g_bar = [ 4.177, 0.448,]               # nS - Synaptic conductances (per spike)
 
 [recurrent.physiology.inhibitory]
 tau_mem = 50.0                         # ms - Membrane time constant
@@ -84,4 +83,18 @@ names = [ "GABA_A",]
 tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
 tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
 E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
-g_bar = [ 0.8139,]                     # nS - Synaptic conductances (per spike)
+g_bar = [ 8.139,]                      # nS - Synaptic conductances (per spike)
+
+# ========================
+# SCALING FACTORS
+# ========================
+
+[scaling_factors]
+recurrent = [
+    [1.33, 0.69],
+    [0.71, 1.75],
+]
+
+feedforward = [
+    [1.67, 1.81],
+]

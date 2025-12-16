@@ -17,7 +17,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from network_inputs.unsupervised import HomogeneousPoissonSpikeDataLoader
-from network_inputs.odourants import generate_odour_firing_rates
+from network_inputs.odourants import (
+    generate_odour_firing_rates,
+    generate_baseline_firing_rates,
+)
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from parameter_loaders import TeacherActivityParams
 from visualization.firing_statistics import plot_cross_correlation_scatter
@@ -114,64 +117,108 @@ def main(experiment_dir):
     print("✓ Network initialized")
 
     # ========================================
-    # Generate Responses: Odourant 1 vs 2
+    # Generate Baseline Firing Rates
     # ========================================
 
-    print("\nGenerating responses to different odours (Odourant 1 vs 2)...")
+    print("\nGenerating baseline firing rates...")
 
-    # Create dataloaders for odourant 1 and odourant 2
-    # Use only first batch element (batch_size=1)
+    baseline_firing_rates = generate_baseline_firing_rates(
+        n_input_neurons=feedforward_weights.shape[0],
+        input_source_indices=input_source_indices,
+        cell_type_names=feedforward.cell_types.names,
+        odour_configs=params.get_odour_configs_dict(),
+    )
+
+    print(f"✓ Generated baseline firing rates: {baseline_firing_rates.shape}")
+
+    # ========================================
+    # Generate Responses: All patterns in parallel batch
+    # ========================================
+
+    print(
+        "\nGenerating network responses for Odourant 1, Odourant 1 (repeat), and Baseline..."
+    )
+
+    # Create firing rate patterns: Odourant 1, Odourant 1 repeat (different seed), Baseline
+    firing_rates_pattern_1 = input_firing_rates_odour[0:1]  # Odourant 1
+
+    # Generate Odourant 1 with different seed for repeat
+    torch.manual_seed(simulation.seed + 1 if simulation.seed is not None else 42)
+    np.random.seed((simulation.seed + 1) if simulation.seed is not None else 42)
+    firing_rates_pattern_2 = generate_odour_firing_rates(
+        feedforward_weights=feedforward_weights,
+        input_source_indices=input_source_indices,
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        target_cell_type_idx=0,
+        cell_type_names=feedforward.cell_types.names,
+        odour_configs=params.get_odour_configs_dict(),
+    )[0:1]  # Get odourant 1 again with different random seed
+
+    firing_rates_pattern_3 = baseline_firing_rates
+
+    # Stack all 3 patterns: (3, n_input_neurons)
+    all_firing_rates = np.vstack(
+        [firing_rates_pattern_1, firing_rates_pattern_2, firing_rates_pattern_3]
+    )
+
+    # Reset seed back to original for dataloader
+    torch.manual_seed(simulation.seed)
+    np.random.seed(simulation.seed)
+
     chunk_size = int(simulation.chunk_size)
     dt = simulation.dt
 
-    dataloader_odour_1 = HomogeneousPoissonSpikeDataLoader(
-        firing_rates=input_firing_rates_odour[0:1],  # Odourant 1
+    dataloader_all = HomogeneousPoissonSpikeDataLoader(
+        firing_rates=all_firing_rates,
         chunk_size=chunk_size,
         dt=dt,
         batch_size=1,
         device=device,
     )
 
-    if num_odours > 1:
-        dataloader_odour_2 = HomogeneousPoissonSpikeDataLoader(
-            firing_rates=input_firing_rates_odour[1:2],  # Odourant 2
-            batch_size=1,
-            chunk_size=chunk_size,
-            dt=dt,
-            device=device,
-        )
-    else:
-        print("Warning: Only 1 odour pattern found, cannot compare odourant 1 vs 2")
-        dataloader_odour_2 = None
-
-    # Generate responses for a fixed number of chunks
+    # Run network for all 3 patterns in parallel
     num_chunks = simulation.plot_size if hasattr(simulation, "plot_size") else 10
+    all_spikes_chunks = []
+    initial_v_states = None
+    initial_g_states = None
+    initial_g_FF_states = None
 
-    def run_network_chunks(dataloader, num_chunks_to_run, description):
-        """Run network for specified number of chunks and return spike data."""
-        all_spikes = []
+    with torch.inference_mode():
+        for chunk_idx, (input_spikes_chunk, pattern_indices) in enumerate(
+            tqdm(
+                dataloader_all,
+                total=num_chunks,
+                desc="Processing patterns",
+                leave=False,
+            )
+        ):
+            input_spikes_chunk = input_spikes_chunk.to(device)
 
-        with torch.inference_mode():
-            for chunk_idx, (input_spikes_chunk, pattern_indices) in enumerate(
-                tqdm(
-                    dataloader,
-                    total=num_chunks_to_run,
-                    desc=description,
-                    leave=False,
-                )
-            ):
-                # Extract only first batch element: (1, chunk_size, n_input_neurons)
-                input_spikes_chunk = input_spikes_chunk[0:1]
+            # 4D case: (batch=1, n_patterns=3, time, inputs)
+            batch_size, n_patterns, time_steps, n_inputs = input_spikes_chunk.shape
 
-                # Initialize state variables on first chunk
-                if chunk_idx == 0:
-                    initial_v = None
-                    initial_g = None
-                    initial_g_FF = None
+            # Initialize state storage for each pattern (first chunk only)
+            if chunk_idx == 0:
+                initial_v_states = [None] * n_patterns
+                initial_g_states = [None] * n_patterns
+                initial_g_FF_states = [None] * n_patterns
+
+            # Process each pattern separately
+            chunk_outputs = []
+            for pattern_idx in range(n_patterns):
+                input_pattern = input_spikes_chunk[
+                    :, pattern_idx, :, :
+                ]  # (batch, time, inputs)
+
+                # Get states for this pattern
+                state_v = initial_v_states[pattern_idx]
+                state_g = initial_g_states[pattern_idx]
+                state_g_FF = initial_g_FF_states[pattern_idx]
 
                 # Run network
                 (
-                    output_spikes_chunk,
+                    output_spikes_pattern,
                     output_voltages,
                     output_currents,
                     output_currents_FF,
@@ -179,57 +226,38 @@ def main(experiment_dir):
                     output_conductances,
                     output_conductances_FF,
                 ) = model(
-                    input_spikes=input_spikes_chunk,
-                    initial_v=initial_v,
-                    initial_g=initial_g,
-                    initial_g_FF=initial_g_FF,
+                    input_spikes=input_pattern,
+                    initial_v=state_v,
+                    initial_g=state_g,
+                    initial_g_FF=state_g_FF,
                 )
 
-                # Store final states for next chunk
-                initial_v = output_voltages[:, -1, :].clone()
-                initial_g = output_conductances[:, -1, :, :, :].clone()
-                initial_g_FF = output_conductances_FF[:, -1, :, :, :].clone()
+                # Update states for next chunk
+                initial_v_states[pattern_idx] = output_voltages[:, -1, :].clone()
+                initial_g_states[pattern_idx] = output_conductances[
+                    :, -1, :, :, :
+                ].clone()
+                initial_g_FF_states[pattern_idx] = output_conductances_FF[
+                    :, -1, :, :, :
+                ].clone()
 
-                # Move to CPU and accumulate
-                if device == "cuda":
-                    all_spikes.append(output_spikes_chunk.cpu())
-                else:
-                    all_spikes.append(output_spikes_chunk)
+                # Store output
+                chunk_outputs.append(output_spikes_pattern.cpu())
 
-                if chunk_idx + 1 >= num_chunks_to_run:
-                    break
+            # Stack patterns: (batch, n_patterns, time, neurons)
+            chunk_stacked = torch.stack(chunk_outputs, dim=1)
+            all_spikes_chunks.append(chunk_stacked)
 
-        # Concatenate chunks: (batch_size=1, total_time, n_neurons)
-        spikes = torch.cat(all_spikes, dim=1)
-        return spikes
+            if chunk_idx + 1 >= num_chunks:
+                break
 
-    # Generate responses
-    spikes_odour_1 = run_network_chunks(dataloader_odour_1, num_chunks, "Odourant 1")
+    # Concatenate chunks: (batch=1, n_patterns=3, total_time, n_neurons)
+    spikes_all_patterns = torch.cat(all_spikes_chunks, dim=2)
 
-    if dataloader_odour_2 is not None:
-        spikes_odour_2 = run_network_chunks(
-            dataloader_odour_2, num_chunks, "Odourant 2"
-        )
-    else:
-        spikes_odour_2 = None
-
-    # Generate second instance of odourant 1 for comparison (different random seed)
-    print("\nGenerating second instance of Odourant 1 (with different noise)...")
-    # Reset seed for different random instance
-    torch.manual_seed(simulation.seed + 1 if simulation.seed is not None else 42)
-    np.random.seed((simulation.seed + 1) if simulation.seed is not None else 42)
-
-    dataloader_odour_1_repeat = HomogeneousPoissonSpikeDataLoader(
-        firing_rates=input_firing_rates_odour[0:1],  # Odourant 1 again
-        chunk_size=chunk_size,
-        dt=dt,
-        batch_size=1,
-        device=device,
-    )
-
-    spikes_odour_1_repeat = run_network_chunks(
-        dataloader_odour_1_repeat, num_chunks, "Odourant 1 (repeat)"
-    )
+    # Extract individual patterns
+    spikes_odour_1 = spikes_all_patterns[:, 0, :, :]  # Odourant 1
+    spikes_odour_1_repeat = spikes_all_patterns[:, 1, :, :]  # Odourant 1 (repeat)
+    spikes_baseline = spikes_all_patterns[:, 2, :, :]  # Baseline
 
     print("✓ Network simulations completed")
 
@@ -253,26 +281,22 @@ def main(experiment_dir):
 
     # Convert spike tensors to numpy
     spikes_odour_1_np = spikes_odour_1.cpu().numpy()
-    if spikes_odour_2 is not None:
-        spikes_odour_2_np = spikes_odour_2.cpu().numpy()
+    spikes_baseline_np = spikes_baseline.cpu().numpy()
     spikes_odour_1_repeat_np = spikes_odour_1_repeat.cpu().numpy()
 
     output_dir = experiment_dir / "figures"
 
-    # Plot 1: Odourant 1 vs Odourant 2 (if available)
-    if spikes_odour_2_np is not None:
-        print("  Creating odourant 1 vs 2 scatter plot...")
-        fig_odour_comparison = plot_cross_correlation_scatter(
-            spike_trains_trial1=spikes_odour_1_np,
-            spike_trains_trial2=spikes_odour_2_np,
-            window_size=10.0,  # 10 second windows
-            dt=dt,
-            title="Network Activity: Odourant 1 vs Odourant 2",
-            x_label="Odourant 1 Firing Rate (Hz)",
-            y_label="Odourant 2 Firing Rate (Hz)",
-        )
-    else:
-        fig_odour_comparison = None
+    # Plot 1: Odourant 1 vs Baseline
+    print("  Creating odourant 1 vs baseline scatter plot...")
+    fig_odour_comparison = plot_cross_correlation_scatter(
+        spike_trains_trial1=spikes_odour_1_np,
+        spike_trains_trial2=spikes_baseline_np,
+        window_size=10.0,  # 10 second windows
+        dt=dt,
+        title="Network Activity: Odourant 1 vs Baseline",
+        x_label="Odourant 1 Firing Rate (Hz)",
+        y_label="Baseline Firing Rate (Hz)",
+    )
 
     # Plot 2: Odourant 1 vs Odourant 1 (repeat with different noise)
     print("  Creating odourant 1 vs 1 scatter plot (noise comparison)...")
@@ -344,7 +368,7 @@ def main(experiment_dir):
             break
 
     # Save dashboard
-    dashboard_path = output_dir / "odourant_vs_noise_correlogram.png"
+    dashboard_path = output_dir / "odourant_vs_baseline_correlogram.png"
     dashboard_fig.savefig(dashboard_path, dpi=150, bbox_inches="tight")
     plt.close(dashboard_fig)
     print(f"✓ Saved: {dashboard_path}")

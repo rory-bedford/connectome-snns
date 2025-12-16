@@ -857,18 +857,38 @@ class SNNTrainer:
                 del chunk_outputs[key]
 
     def _accumulate_gradient_statistics(self) -> None:
-        """Accumulate gradient statistics for online averaging."""
+        """Accumulate scaling factor gradients with proper connection type and cell type names."""
         grad_stats = {}
-        for name, param in self.model.named_parameters():
-            if param.grad is not None:
-                grad_norm = param.grad.norm().item()
-                grad_max = param.grad.abs().max().item()
-                grad_mean = param.grad.abs().mean().item()
 
-                # Store with parameter name prefix
-                grad_stats[f"gradients/{name}/norm"] = grad_norm
-                grad_stats[f"gradients/{name}/max"] = grad_max
-                grad_stats[f"gradients/{name}/mean"] = grad_mean
+        recurrent_cell_types = self.params.recurrent.cell_types.names
+        feedforward_cell_types = self.params.feedforward.cell_types.names
+
+        # Log recurrent scaling factors: shape (n_recurrent_types, n_recurrent_types)
+        # Rows: source cell types (feedforward and recurrent)
+        # Columns: target cell types (recurrent)
+        if (
+            hasattr(self.model, "scaling_factors")
+            and self.model.scaling_factors.grad is not None
+        ):
+            scaling_grads = self.model.scaling_factors.grad.detach().cpu()
+            # First n_recurrent_types rows are recurrent->recurrent connections
+            for src_idx, src_cell_type in enumerate(recurrent_cell_types):
+                for tgt_idx, tgt_cell_type in enumerate(recurrent_cell_types):
+                    key = f"gradients/scaling_factors/recurrent/{src_cell_type}_to_{tgt_cell_type}"
+                    grad_stats[key] = scaling_grads[src_idx, tgt_idx].item()
+
+        # Log feedforward scaling factors: shape (n_ff_types, n_recurrent_types)
+        # Rows: feedforward cell types
+        # Columns: target recurrent cell types
+        if (
+            hasattr(self.model, "scaling_factors_FF")
+            and self.model.scaling_factors_FF.grad is not None
+        ):
+            scaling_grads_ff = self.model.scaling_factors_FF.grad.detach().cpu()
+            for src_idx, src_cell_type in enumerate(feedforward_cell_types):
+                for tgt_idx, tgt_cell_type in enumerate(recurrent_cell_types):
+                    key = f"gradients/scaling_factors/feedforward/{src_cell_type}_to_{tgt_cell_type}"
+                    grad_stats[key] = scaling_grads_ff[src_idx, tgt_idx].item()
 
         if grad_stats:
             self.gradient_accumulator.append(grad_stats)

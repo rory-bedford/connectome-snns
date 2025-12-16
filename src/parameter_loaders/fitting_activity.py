@@ -76,6 +76,7 @@ class StudentTrainingConfig(BaseModel):
     plot_size: int
     mixed_precision: bool
     weight_perturbation_variance: float
+    grad_norm_clip: float | None = None
 
     def total_chunks(self, num_chunks_per_epoch: int) -> int:
         """Total number of chunks across all epochs.
@@ -114,9 +115,7 @@ class StudentTrainingConfig(BaseModel):
 class StudentLossWeights(BaseModel):
     """Loss function weights for student training."""
 
-    firing_rate: float
     van_rossum: float
-    silent_penalty: float
 
 
 class StudentHyperparameters(BaseModel):
@@ -125,8 +124,6 @@ class StudentHyperparameters(BaseModel):
     surrgrad_scale: float
     learning_rate: float
     van_rossum_tau: float
-    firing_rate_epsilon: float
-    alpha: Dict[str, float]
     loss_weight: StudentLossWeights
 
 
@@ -247,23 +244,4 @@ class StudentTrainingParams(BaseModel):
     hyperparameters: StudentHyperparameters
     recurrent: BaseRecurrentLayerConfig
     feedforward: BaseFeedforwardLayerConfig
-
-    @model_validator(mode="after")
-    def validate_alpha_cell_types(self) -> "StudentTrainingParams":
-        """Validate that alpha keys match recurrent cell types."""
-        recurrent_cell_types = set(self.recurrent.cell_types.names)
-        alpha_cell_types = set(self.hyperparameters.alpha.keys())
-
-        if alpha_cell_types != recurrent_cell_types:
-            missing_in_alpha = recurrent_cell_types - alpha_cell_types
-            extra_in_alpha = alpha_cell_types - recurrent_cell_types
-
-            error_msg = "Alpha cell types must match recurrent cell types."
-            if missing_in_alpha:
-                error_msg += f"\n  Missing in alpha: {missing_in_alpha}"
-            if extra_in_alpha:
-                error_msg += f"\n  Extra in alpha: {extra_in_alpha}"
-
-            raise ValueError(error_msg)
-
-        return self
+    scaling_factors: Dict[str, Any]

@@ -26,9 +26,7 @@ from torch.amp import GradScaler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from optimisation.loss_functions import (
-    FiringRateLoss,
     VanRossumLoss,
-    SilentNeuronPenalty,
 )
 from optimisation.utils import load_checkpoint
 from parameter_loaders import StudentTrainingParams
@@ -99,11 +97,10 @@ def main(
     feedforward_weights = network_structure["feedforward_weights"]
     cell_type_indices = network_structure["cell_type_indices"]
     feedforward_cell_type_indices = network_structure["feedforward_cell_type_indices"]
+    connectivity_graph = network_structure["recurrent_connectivity"]
+    feedforward_connectivity_graph = network_structure["feedforward_connectivity"]
 
-    connectivity_graph = weights != 0.0
-    feedforward_connectivity_graph = feedforward_weights != 0.0
-
-    # Apply Weight Perturbations
+    # Apply Weight Perturbations to get target scaling factors
     (
         weights,
         feedforward_weights,
@@ -139,16 +136,12 @@ def main(
         device=device,
     )
 
-    n_patterns = spike_dataset.n_patterns
     batch_size = spike_dataset.batch_size
-    effective_batch_size = batch_size * n_patterns
 
-    print(
-        f"✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batches × {n_patterns} patterns = {effective_batch_size} effective batch size"
-    )
+    print(f"✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batch size")
     # DataLoader without additional batching (data is already batched)
 
-    # Result shape per iteration: (batch_size, n_patterns, chunk_size, n_neurons)
+    # Result shape per iteration: (batch_size, chunk_size, n_neurons)
     # Use CyclicSampler to enable infinite iteration for multi-epoch training
     spike_dataloader = DataLoader(
         spike_dataset,
@@ -161,7 +154,7 @@ def main(
     # Initialize LIF Network
     # ======================
 
-    # Initialize conductance-based LIF network model
+    # Initialize conductance-based LIF network model with initial scaling factors from parameters
     model = ConductanceLIFNetwork(
         dt=spike_dataset.dt,
         weights=weights,
@@ -173,6 +166,8 @@ def main(
         cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
+        scaling_factors=np.array(params.scaling_factors["recurrent"]),
+        scaling_factors_FF=np.array(params.scaling_factors["feedforward"]),
         optimisable="scaling_factors",
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
@@ -210,25 +205,6 @@ def main(
     # Define Loss Functions
     # =====================
 
-    # Initialize all target tensors
-    target_rate_tensor = spike_dataset.target_firing_rates
-
-    # Build alpha tensor for silent neuron penalty (per-neuron)
-    alpha_tensor = torch.zeros(len(cell_type_indices), device=device)
-    for cell_type_name in recurrent.cell_types.names:
-        cell_type_idx = recurrent.cell_types.names.index(cell_type_name)
-        mask = cell_type_indices == cell_type_idx
-        alpha_tensor[mask] = hyperparameters.alpha[cell_type_name]
-
-    # Initialize loss functions
-    silent_penalty_fn = SilentNeuronPenalty(alpha=alpha_tensor, dt=spike_dataset.dt)
-
-    firing_rate_loss_fn = FiringRateLoss(
-        target_rate=target_rate_tensor,
-        dt=spike_dataset.dt,
-        epsilon=hyperparameters.firing_rate_epsilon,
-    )
-
     van_rossum_loss_fn = VanRossumLoss(
         tau=hyperparameters.van_rossum_tau,
         dt=spike_dataset.dt,
@@ -238,9 +214,7 @@ def main(
 
     # Define loss weights from config
     loss_weights = {
-        "firing_rate": hyperparameters.loss_weight.firing_rate,
         "van_rossum": hyperparameters.loss_weight.van_rossum,
-        "silent_penalty": hyperparameters.loss_weight.silent_penalty,
     }
 
     # ================================================
@@ -442,21 +416,25 @@ def main(
             f"✓ Initial network structure saved to {initial_state_dir / 'network_structure.npz'}"
         )
 
-        # Run 10s inference on single batch
-        print("\nRunning 10s inference with initial weights...")
-        inference_duration_ms = 10000.0  # 10 seconds
+        # Run inference for plot_size chunks
+        print(
+            f"\nRunning inference with initial weights ({training.plot_size} chunks)..."
+        )
+        inference_duration_ms = (
+            training.plot_size * simulation.chunk_size * spike_dataset.dt
+        )
         inference_timesteps = int(inference_duration_ms / spike_dataset.dt)
 
-        # Calculate number of chunks needed for 10s
+        # Calculate number of chunks needed
         chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
 
-        # Collect input and target spikes from precomputed dataset (batch=0, pattern=0)
+        # Collect input and target spikes from precomputed dataset (batch=0)
         inference_input_spikes_list = []
         for chunk_idx in range(chunks_needed):
             input_chunk, target_chunk = spike_dataset[chunk_idx]
-            # Dataset returns (batch, patterns, time, neurons)
-            # Extract batch 0, pattern 0: (time, neurons)
-            inference_input_spikes_list.append(input_chunk[0, 0, :, :])
+            # Dataset returns (batch, time, neurons)
+            # Extract batch 0: (time, neurons)
+            inference_input_spikes_list.append(input_chunk[0, :, :])
 
         # Concatenate chunks and truncate to exact duration
         inference_input_spikes = torch.cat(inference_input_spikes_list, dim=0)[
@@ -504,6 +482,8 @@ def main(
                 "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
                 "weights": model.weights.detach().cpu().numpy(),
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+                "connectome_mask": connectivity_graph,
+                "feedforward_mask": feedforward_connectivity_graph,
             }
 
             # Generate plots
@@ -561,9 +541,7 @@ def main(
         scaler=scaler,
         spike_dataloader=spike_dataloader,
         loss_functions={
-            "firing_rate": firing_rate_loss_fn,
             "van_rossum": van_rossum_loss_fn,
-            "silent_penalty": silent_penalty_fn,
         },
         loss_weights=loss_weights,
         params=params,
@@ -579,6 +557,9 @@ def main(
             feedforward_connectivity_graph.astype(np.float32)
         ).to(device),
     )
+
+    # Set debug flag from config
+    trainer.debug_gradients = True
 
     # Handle checkpoint resuming
     if resume_from is not None:
@@ -609,9 +590,7 @@ def main(
         f"Total chunks: {simulation.num_chunks} ({simulation.total_duration_s:.1f}s total)"
     )
     print(f"Epochs: {training.epochs}")
-    print(
-        f"Batch size: {batch_size} × {n_patterns} patterns = {effective_batch_size} effective"
-    )
+    print(f"Batch size: {batch_size}")
     print(
         f"Log interval: {training.log_interval} chunks ({training.log_interval_s(simulation.chunk_duration_s):.1f}s)"
     )
