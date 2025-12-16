@@ -127,7 +127,9 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
 
         # Precompute OU parameters
         self.drift = -1.0 / tau
-        self.diffusion = self.sigma * np.sqrt(dt)  # Shape: (n_patterns,)
+        self.diffusion = self.sigma * np.sqrt(
+            2.0 * dt / tau
+        )  # Correct OU diffusion scaling
 
     def _to_pattern_tensor(
         self, value: Union[float, np.ndarray, torch.Tensor], n_patterns: int
@@ -188,9 +190,6 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
             dW = torch.randn(self.n_patterns)
             da = self.drift * self.activations * self.dt + self.diffusion * dW
             self.activations = self.activations + da
-
-            # Clip to ensure non-negative activations
-            self.activations = torch.clamp(self.activations, min=0.0)
 
         # Combine patterns using softmax normalization of activations
         # activation_chunk: (chunk_size, n_patterns)

@@ -3,7 +3,7 @@
 For training networks to match target activity patterns without fixed connectivity.
 """
 
-from typing import Dict
+from typing import Dict, Any
 from pydantic import BaseModel, model_validator
 from .base_configs import (
     SimulationConfig,
@@ -206,6 +206,25 @@ class TeacherActivityParams(BaseModel):
     tau: float
     temperature: float
     sigma: float
+
+    @model_validator(mode="before")
+    def extract_odour_process_params(cls, data: Any) -> Any:
+        """Extract tau, temperature, sigma from odours dict if present.
+
+        Allows these parameters to be specified under [odours] in TOML
+        while still being stored as top-level fields.
+        """
+        if isinstance(data, dict) and "odours" in data:
+            odours = data["odours"]
+            if isinstance(odours, dict):
+                # Extract process parameters if they exist in odours
+                if "tau" in odours:
+                    data["tau"] = odours.pop("tau")
+                if "temperature" in odours:
+                    data["temperature"] = odours.pop("temperature")
+                if "sigma" in odours:
+                    data["sigma"] = odours.pop("sigma")
+        return data
 
     def get_odour_configs_dict(self) -> dict[str, dict]:
         """Convert odour configurations to standard dictionaries.

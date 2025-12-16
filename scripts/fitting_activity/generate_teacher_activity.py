@@ -187,15 +187,15 @@ def main(input_dir, output_dir, params_file):
     # Store dt as a metadata attribute
     root.attrs["dt"] = simulation.dt
 
-    # Save input firing rates immediately (the base patterns before OU modulation)
+    # Save odourant patterns immediately (the base patterns before OU modulation)
     root.create_dataset(
-        "input_firing_rates",
+        "odourant_patterns",
         shape=input_firing_rates_odour.shape,
         dtype=input_firing_rates_odour.dtype,
         data=input_firing_rates_odour,
     )
-    print("✓ Saved input firing rates to zarr")
-    print(f"  - input_firing_rates (odour patterns): {input_firing_rates_odour.shape}")
+    print("✓ Saved odourant patterns to zarr")
+    print(f"  - odourant_patterns: {input_firing_rates_odour.shape}")
 
     # Create datasets for OU-modulated spike data
     # Shape: (batch_size, total_steps, n_neurons) since OU process gives independent temporal dynamics per batch
@@ -213,11 +213,13 @@ def main(input_dir, output_dir, params_file):
         dtype=np.bool_,
     )
 
-    # Create datasets for OU-modulated firing rates
-    input_rates = root.create_dataset(
-        "input_rates",
-        shape=(batch_size, total_steps, n_input_neurons),
-        chunks=(batch_size, simulation.chunk_size, n_input_neurons),
+    # Create dataset for OU process weights (pattern mixing over time)
+    # Extract number of odours (patterns)
+    n_odours = input_firing_rates_odour.shape[0]
+    ou_process_weights = root.create_dataset(
+        "ou_process_weights",
+        shape=(batch_size, total_steps, n_odours),
+        chunks=(batch_size, simulation.chunk_size, n_odours),
         dtype=np.float32,
     )
 
@@ -235,7 +237,7 @@ def main(input_dir, output_dir, params_file):
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
-        f"DataLoader returns (batch_size={batch_size}, chunk_size, n_input_neurons) per iteration"
+        f"DataLoader returns (batch_size={batch_size}, chunk_size={simulation.chunk_size}, n_input_neurons={n_input_neurons}) per iteration"
     )
 
     # Initialize state variables: (batch_size, n_patterns, ...)
@@ -245,7 +247,6 @@ def main(input_dir, output_dir, params_file):
 
     # Variables to store traces from last plot_size chunks for visualization
     viz_chunks = simulation.plot_size
-    viz_duration_s = viz_chunks * simulation.chunk_duration_s
     viz_start_chunk = max(0, simulation.num_chunks - viz_chunks)
 
     # Store pattern 0 (first odour) for dashboards
@@ -257,10 +258,7 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = []
     viz_output_spikes = []
     viz_input_spikes = []
-    viz_input_rates = []
-
-    # Store pattern 0 from batch 1 (second repeat) for cross-correlation
-    viz_output_spikes_signal_repeat = []
+    viz_ou_weights = []  # OU process weights
 
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
@@ -270,7 +268,7 @@ def main(input_dir, output_dir, params_file):
             )
         ):
             # Unpack batch data: (spikes, rates, weights)
-            input_spikes_chunk, input_rates_chunk, _ = batch_data
+            input_spikes_chunk, input_rates_chunk, weights_chunk = batch_data
 
             # Run one chunk of simulation
             (
@@ -301,13 +299,9 @@ def main(input_dir, output_dir, params_file):
                 )
                 viz_output_spikes.append(output_spikes_chunk[0:1, :, :].clone())
                 viz_input_spikes.append(input_spikes_chunk[0:1, :, :].clone())
-                viz_input_rates.append(input_rates_chunk[0:1, :, :].clone())
-
-                # Store second batch item for repeatability comparison
-                if batch_size > 1:
-                    viz_output_spikes_signal_repeat.append(
-                        output_spikes_chunk[1:2, :, :].clone()
-                    )
+                viz_ou_weights.append(
+                    weights_chunk[0:1, :, :].clone()
+                )  # OU process weights
 
             # Store final states for next chunk
             initial_v = output_voltages_chunk[:, -1, :].clone()
@@ -323,19 +317,26 @@ def main(input_dir, output_dir, params_file):
                     output_spikes_chunk.bool().cpu().numpy()
                 )
                 input_spikes[:, start_idx:end_idx, :] = input_spikes_chunk.cpu().numpy()
-                input_rates[:, start_idx:end_idx, :] = input_rates_chunk.cpu().numpy()
+                ou_process_weights[:, start_idx:end_idx, :] = (
+                    weights_chunk.cpu().numpy()
+                )
             else:
                 output_spikes[:, start_idx:end_idx, :] = (
                     output_spikes_chunk.bool().numpy()
                 )
                 input_spikes[:, start_idx:end_idx, :] = input_spikes_chunk.numpy()
-                input_rates[:, start_idx:end_idx, :] = input_rates_chunk.numpy()
+                ou_process_weights[:, start_idx:end_idx, :] = weights_chunk.numpy()
+
+            # Break after processing all expected chunks
+            if chunk_idx >= simulation.num_chunks - 1:
+                break
 
     print("\n✓ Network simulation completed!")
     print(f"\n✓ All data saved to {results_dir / 'spike_data.zarr'}")
+    print(f"  - odourant_patterns: {input_firing_rates_odour.shape}")
     print(f"  - output_spikes: {output_spikes.shape}")
     print(f"  - input_spikes: {input_spikes.shape}")
-    print(f"  - input_rates: {input_rates.shape}")
+    print(f"  - ou_process_weights: {ou_process_weights.shape}")
 
     # Free GPU memory
     if device == "cuda":
@@ -365,7 +366,6 @@ def main(input_dir, output_dir, params_file):
     print("=" * len("GENERATING DASHBOARDS"))
 
     # Concatenate visualization traces
-    print("Preparing data for dashboards...")
     viz_voltages = torch.cat(viz_voltages, dim=1)
     viz_currents = torch.cat(viz_currents, dim=1)
     viz_currents_FF = torch.cat(viz_currents_FF, dim=1)
@@ -374,10 +374,7 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = torch.cat(viz_conductances_FF, dim=1)
     viz_output_spikes = torch.cat(viz_output_spikes, dim=1)
     viz_input_spikes = torch.cat(viz_input_spikes, dim=1)
-    viz_input_rates = torch.cat(viz_input_rates, dim=1)
-
-    # Concatenate signal repeat data (pattern 0 from batch 1)
-    viz_output_spikes_signal_repeat = torch.cat(viz_output_spikes_signal_repeat, dim=1)
+    viz_ou_weights = torch.cat(viz_ou_weights, dim=1)
 
     # Move to CPU and convert to numpy
     if device == "cuda":
@@ -389,8 +386,7 @@ def main(input_dir, output_dir, params_file):
         viz_conductances_FF = viz_conductances_FF.cpu()
         viz_output_spikes = viz_output_spikes.cpu()
         viz_input_spikes = viz_input_spikes.cpu()
-        viz_input_rates = viz_input_rates.cpu()
-        viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.cpu()
+        viz_ou_weights = viz_ou_weights.cpu()
 
     viz_voltages = viz_voltages.numpy().astype(np.float32)
     viz_currents = viz_currents.numpy().astype(np.float32)
@@ -400,26 +396,7 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = viz_conductances_FF.numpy().astype(np.float32)
     viz_output_spikes = viz_output_spikes.numpy().astype(np.int32)
     viz_input_spikes = viz_input_spikes.numpy().astype(np.int32)
-    viz_input_rates = viz_input_rates.numpy().astype(np.float32)
-
-    # Convert signal repeat to numpy
-    viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.numpy().astype(
-        np.int32
-    )
-
-    print(
-        f"✓ Prepared {viz_voltages.shape[1]} time steps for visualization (last ~{viz_duration_s:.1f}s)"
-    )
-
-    # Calculate mean membrane potential by cell type from voltage traces
-    recurrent_V_mem_by_type = {}
-    for i, cell_type_name in enumerate(recurrent.cell_types.names):
-        cell_mask = cell_type_indices == i
-        if cell_mask.sum() > 0:
-            # Average over batch, time, and neurons of this type
-            recurrent_V_mem_by_type[cell_type_name] = float(
-                viz_voltages[:, :, cell_mask].mean()
-            )
+    viz_ou_weights = viz_ou_weights.numpy().astype(np.float32)
 
     # Generate connectivity dashboard
     print("Generating connectivity dashboard...")
@@ -464,7 +441,7 @@ def main(input_dir, output_dir, params_file):
     print("Generating assembly activity dashboard...")
     assembly_fig = create_assembly_activity_dashboard(
         output_spikes=viz_output_spikes,
-        input_rates=viz_input_rates,
+        ou_process_weights=viz_ou_weights,
         cell_type_indices=cell_type_indices,
         assembly_ids=assembly_ids,
         dt=simulation.dt,

@@ -815,6 +815,7 @@ def plot_assembly_population_activity(
     excitatory_idx: int = 0,
     ax: plt.Axes | None = None,
     title: str | None = None,
+    colors: list | None = None,
 ) -> Figure:
     """
     Plot population activity for excitatory neurons grouped by assembly.
@@ -851,8 +852,9 @@ def plot_assembly_population_activity(
         raise ValueError("No assemblies found with assigned neurons")
 
     # Generate colors for assemblies
-    cmap = plt.cm.get_cmap("tab10")
-    colors = [cmap(i % 10) for i in range(n_assemblies)]
+    if colors is None:
+        cmap = plt.cm.get_cmap("tab10")
+        colors = [cmap(i % 10) for i in range(n_assemblies)]
 
     # Convert window size to timesteps
     window_steps = int(np.round(window_size / dt))
@@ -899,7 +901,7 @@ def plot_assembly_population_activity(
             color=colors[assembly_idx],
             linewidth=1.5,
             alpha=0.7,
-            label=f"Assembly {assembly_id} (n={n_neurons_assembly})",
+            label=f"Assembly {assembly_id}",
         )
 
     ax_to_use.set_xlabel("Time (s)", fontsize=10)
@@ -916,7 +918,6 @@ def plot_assembly_population_activity(
     ax_to_use.set_xlim(start_time_s, end_time_s + 0.01)
     ax_to_use.margins(x=0)
 
-    ax_to_use.legend(loc="upper right", fontsize=9)
     ax_to_use.grid(True, alpha=0.3)
 
     if return_fig:
@@ -1352,6 +1353,58 @@ def plot_input_rate_process(
     ax.set_ylabel("Firing Rate (Hz)")
     ax.set_title(title)
     ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    return ax
+
+
+def plot_ou_process_weights(
+    weights: NDArray[np.float32],
+    dt: float,
+    batch_idx: int = 0,
+    ax: plt.Axes | None = None,
+    title: str = "OU Process Weights (Odourant Mixing)",
+    colors: list | None = None,
+) -> plt.Axes:
+    """Plot Ornstein-Uhlenbeck process weights showing temporal dynamics of odourant mixing.
+
+    Args:
+        weights (NDArray[np.float32]): OU process weights with shape (batch, time, n_assemblies).
+        dt (float): Time step in milliseconds.
+        batch_idx (int): Which batch item to plot. Defaults to 0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, uses current axes.
+        title (str): Title for the plot. Defaults to "OU Process Weights (Odourant Mixing)".
+        colors (list | None): List of colors for each odourant. If None, uses tab20 colormap.
+
+    Returns:
+        plt.Axes: The matplotlib axes object with the plot.
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    # Get weights for specified batch
+    time_seconds = np.arange(weights.shape[1]) * dt / 1000.0
+    weights_batch = weights[batch_idx]  # Shape: (timesteps, n_assemblies)
+
+    # Plot each odourant as a separate line with distinct colors
+    n_odourants = weights_batch.shape[1]
+    if colors is None:
+        colors = plt.cm.tab20(np.linspace(0, 1, n_odourants))
+
+    for odourant_idx in range(n_odourants):
+        ax.plot(
+            time_seconds,
+            weights_batch[:, odourant_idx],
+            color=colors[odourant_idx],
+            linewidth=1.5,
+            alpha=0.8,
+            label=f"Odourant {odourant_idx}",
+        )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Normalized Weight")
+    ax.set_title(title)
+    ax.set_ylim([0, 1])
     ax.grid(True, alpha=0.3)
 
     return ax

@@ -26,7 +26,7 @@ from visualization.firing_statistics import (
     plot_isi_histogram,
     plot_fano_factor_vs_window_size,
     plot_assembly_population_activity,
-    plot_input_rate_process,
+    plot_ou_process_weights,
 )
 from visualization.neuronal_dynamics import (
     plot_spike_trains,
@@ -634,17 +634,17 @@ def create_activity_dashboard(
 
 def create_assembly_activity_dashboard(
     output_spikes: NDArray[np.int32],
-    input_rates: NDArray[np.float32],
+    ou_process_weights: NDArray[np.float32],
     cell_type_indices: NDArray[np.int32],
     assembly_ids: NDArray[np.int32],
     dt: float,
     excitatory_idx: int = 0,
 ) -> plt.Figure:
-    """Create dashboard combining assembly population activity and input rate process.
+    """Create dashboard combining assembly population activity and OU process weights.
 
     Args:
         output_spikes (NDArray[np.int32]): Output spike array with shape (batch, time, neurons).
-        input_rates (NDArray[np.float32]): Input firing rates with shape (batch, time, input_neurons).
+        ou_process_weights (NDArray[np.float32]): OU process weights with shape (batch, time, n_assemblies).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
         assembly_ids (NDArray[np.int32]): Array of assembly IDs for each neuron.
         dt (float): Time step in milliseconds.
@@ -655,6 +655,10 @@ def create_assembly_activity_dashboard(
     """
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
+    # Generate shared color palette for assemblies/odourants
+    n_odourants = ou_process_weights.shape[2]
+    colors = plt.cm.tab20(np.linspace(0, 1, n_odourants))
+
     # Left panel: assembly population activity
     plot_assembly_population_activity(
         spike_trains=output_spikes,
@@ -663,17 +667,19 @@ def create_assembly_activity_dashboard(
         window_size=200.0,  # Gaussian kernel std in ms
         dt=dt,
         excitatory_idx=excitatory_idx,
-        title="Excitatory Assembly Activity",
+        title="Assembly Population Activity",
         ax=axes[0],
+        colors=colors,
     )
 
-    # Right panel: input rate process
-    plot_input_rate_process(
-        input_rates=input_rates,
+    # Right panel: OU process weights
+    plot_ou_process_weights(
+        weights=ou_process_weights,
         dt=dt,
         batch_idx=0,
         ax=axes[1],
-        title="Input Rate Process (Odour Dynamics)",
+        title="OU Process Weights (Odourant Mixing)",
+        colors=colors,
     )
 
     plt.tight_layout()
