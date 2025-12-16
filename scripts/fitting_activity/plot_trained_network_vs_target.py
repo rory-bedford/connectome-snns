@@ -10,13 +10,14 @@ The script generates comparison plots including cross-correlation histograms
 and scatter plots to quantify how well the student matches the teacher.
 """
 
+import argparse
 import numpy as np
 import torch
 import toml
 from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from inputs.dataloaders import PrecomputedSpikeDataset
+from network_inputs.supervised import PrecomputedSpikeDataset
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from parameter_loaders import StudentTrainingParams
 from visualization.firing_statistics import (
@@ -109,6 +110,9 @@ def main(experiment_dir, output_dir):
     print(
         f"  Chunk size: {simulation.chunk_size:.1f} ms, Timestep: {spike_dataset.dt:.2f} ms"
     )
+    print(
+        f"  Batch size: {spike_dataset.batch_size}, Input neurons: {spike_dataset.n_input_neurons}"
+    )
 
     # ====================================
     # Initialize Original Network and Run
@@ -136,20 +140,19 @@ def main(experiment_dir, output_dir):
     # Initialize lists to accumulate results across batches and chunks
     all_target_spikes = []
 
-    # Run inference in chunks, processing all batches and patterns
+    # Run inference in chunks, processing only first batch element
     with torch.inference_mode():
         for chunk_idx in tqdm(range(chunks_to_run), desc="Target network chunks"):
-            # Get one chunk of input spikes from dataset (returns tuple)
+            # Get one chunk of input spikes from dataset
+            # Dataset returns (batch_size, chunk_size, n_input_neurons)
             input_spikes_chunk, _ = spike_dataset[chunk_idx]
 
-            # Dataset returns (batch, patterns, time, neurons)
-            # Flatten batch and pattern dimensions: (batch * patterns, time, neurons)
-            batch, patterns, time, n_inputs = input_spikes_chunk.shape
-            input_spikes_flat = input_spikes_chunk.reshape(
-                batch * patterns, time, n_inputs
-            )
+            # Extract only first batch element: (1, chunk_size, n_input_neurons)
+            input_spikes_chunk = input_spikes_chunk[0:1]
 
-            # Initialize state variables for this chunk (all batch×pattern combinations)
+            batch_size, time, n_inputs = input_spikes_chunk.shape
+
+            # Initialize state variables for this chunk (only on first iteration)
             if chunk_idx == 0:
                 initial_v = None
                 initial_g = None
@@ -165,7 +168,7 @@ def main(experiment_dir, output_dir):
                 target_conductances,
                 target_conductances_FF,
             ) = target_model(
-                input_spikes=input_spikes_flat,
+                input_spikes=input_spikes_chunk,
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
@@ -186,10 +189,8 @@ def main(experiment_dir, output_dir):
             else:
                 all_target_spikes.append(target_spikes_chunk)
 
-    # Concatenate all chunks along time dimension: (batch*patterns, total_time, n_neurons)
+    # Concatenate all chunks along time dimension: (batch_size, total_time, n_neurons)
     target_spikes = torch.cat(all_target_spikes, dim=1)
-    # Reshape back to (batch, patterns, total_time, n_neurons)
-    target_spikes = target_spikes.reshape(batch, patterns, -1, target_spikes.shape[-1])
 
     print(f"✓ Generated target spikes: {target_spikes.shape}")
 
@@ -229,20 +230,19 @@ def main(experiment_dir, output_dir):
     # Initialize lists to accumulate results across batches and chunks
     all_trained_spikes = []
 
-    # Run inference in chunks, processing all batches and patterns
+    # Run inference in chunks, processing only first batch element
     with torch.inference_mode():
         for chunk_idx in tqdm(range(chunks_to_run), desc="Trained network chunks"):
-            # Get one chunk of input spikes from dataset (returns tuple)
+            # Get one chunk of input spikes from dataset
+            # Dataset returns (batch_size, chunk_size, n_input_neurons)
             input_spikes_chunk, _ = spike_dataset[chunk_idx]
 
-            # Dataset returns (batch, patterns, time, neurons)
-            # Flatten batch and pattern dimensions: (batch * patterns, time, neurons)
-            batch, patterns, time, n_inputs = input_spikes_chunk.shape
-            input_spikes_flat = input_spikes_chunk.reshape(
-                batch * patterns, time, n_inputs
-            )
+            # Extract only first batch element: (1, chunk_size, n_input_neurons)
+            input_spikes_chunk = input_spikes_chunk[0:1]
 
-            # Initialize state variables for this chunk (all batch×pattern combinations)
+            batch_size, time, n_inputs = input_spikes_chunk.shape
+
+            # Initialize state variables for this chunk (only on first iteration)
             if chunk_idx == 0:
                 initial_v = None
                 initial_g = None
@@ -258,7 +258,7 @@ def main(experiment_dir, output_dir):
                 trained_conductances,
                 trained_conductances_FF,
             ) = trained_model(
-                input_spikes=input_spikes_flat,
+                input_spikes=input_spikes_chunk,
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
@@ -279,12 +279,8 @@ def main(experiment_dir, output_dir):
             else:
                 all_trained_spikes.append(trained_spikes_chunk)
 
-    # Concatenate all chunks along time dimension: (batch*patterns, total_time, n_neurons)
+    # Concatenate all chunks along time dimension: (batch_size, total_time, n_neurons)
     trained_spikes = torch.cat(all_trained_spikes, dim=1)
-    # Reshape back to (batch, patterns, total_time, n_neurons)
-    trained_spikes = trained_spikes.reshape(
-        batch, patterns, -1, trained_spikes.shape[-1]
-    )
 
     print(f"✓ Generated trained spikes: {trained_spikes.shape}")
 
@@ -294,17 +290,9 @@ def main(experiment_dir, output_dir):
 
     print("\nGenerating comparison plots...")
 
-    # Convert to numpy - now shape is (batch, patterns, total_time, n_neurons)
+    # Convert to numpy - shape is (batch_size, total_time, n_neurons)
     target_spikes_np = target_spikes.cpu().numpy()
     trained_spikes_np = trained_spikes.cpu().numpy()
-
-    # Flatten batch and pattern dimensions for plotting: (batch*patterns, total_time, n_neurons)
-    target_spikes_np = target_spikes_np.reshape(
-        -1, target_spikes_np.shape[2], target_spikes_np.shape[3]
-    )
-    trained_spikes_np = trained_spikes_np.reshape(
-        -1, trained_spikes_np.shape[2], trained_spikes_np.shape[3]
-    )
 
     # Create output directory
     output_dir = Path(output_dir)
@@ -356,8 +344,6 @@ def main(experiment_dir, output_dir):
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Compare trained network activity with target network activity"
     )
