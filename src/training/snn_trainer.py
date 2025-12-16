@@ -489,29 +489,69 @@ class SNNTrainer:
         # Backward pass
         self.scaler.scale(total_loss).backward()
 
-        # Debug: Print masked gradients on optimizable parameters
+        # Debug: Print scaling factor gradients or parameter gradients
         if self.debug_gradients:
             with torch.no_grad():
-                # Apply masks inline for debugging (without modifying actual gradients yet)
-                for name, param in self.model.named_parameters():
-                    if param.requires_grad and param.grad is not None:
-                        # Get masked gradient for display
-                        masked_grad = param.grad.clone()
-                        if name == "log_weights" and self.connectome_mask is not None:
-                            masked_grad *= self.connectome_mask
-                        elif (
-                            name == "log_weights_FF"
-                            and self.feedforward_mask is not None
-                        ):
-                            masked_grad *= self.feedforward_mask
+                # If optimizing scaling factors, print individual scaling factor gradients
+                if self.model.optimisable == "scaling_factors":
+                    recurrent_cell_types = self.params.recurrent.cell_types.names
+                    feedforward_cell_types = self.params.feedforward.cell_types.names
 
-                        has_nan = torch.isnan(masked_grad).any().item()
-                        has_inf = torch.isinf(masked_grad).any().item()
-                        if not has_nan and not has_inf:
-                            grad_norm = masked_grad.norm().item()
-                            print(f"  {name}.grad: norm={grad_norm:.6f}")
-                        else:
-                            print(f"  {name}.grad: NaN={has_nan} Inf={has_inf}")
+                    # Print recurrent scaling factor gradients
+                    if (
+                        hasattr(self.model, "scaling_factors")
+                        and self.model.scaling_factors.grad is not None
+                    ):
+                        scaling_grads = self.model.scaling_factors.grad.detach().cpu()
+                        for src_idx, src_cell_type in enumerate(recurrent_cell_types):
+                            for tgt_idx, tgt_cell_type in enumerate(
+                                recurrent_cell_types
+                            ):
+                                grad_val = scaling_grads[src_idx, tgt_idx].item()
+                                print(
+                                    f"  scaling_factors[{src_cell_type}→{tgt_cell_type}].grad: {grad_val:.6f}"
+                                )
+
+                    # Print feedforward scaling factor gradients
+                    if (
+                        hasattr(self.model, "scaling_factors_FF")
+                        and self.model.scaling_factors_FF.grad is not None
+                    ):
+                        scaling_grads_ff = (
+                            self.model.scaling_factors_FF.grad.detach().cpu()
+                        )
+                        for src_idx, src_cell_type in enumerate(feedforward_cell_types):
+                            for tgt_idx, tgt_cell_type in enumerate(
+                                recurrent_cell_types
+                            ):
+                                grad_val = scaling_grads_ff[src_idx, tgt_idx].item()
+                                print(
+                                    f"  scaling_factors_FF[{src_cell_type}→{tgt_cell_type}].grad: {grad_val:.6f}"
+                                )
+                else:
+                    # Otherwise print gradient norms for other parameters
+                    for name, param in self.model.named_parameters():
+                        if param.requires_grad and param.grad is not None:
+                            # Get masked gradient for display
+                            masked_grad = param.grad.clone()
+                            if (
+                                name == "log_weights"
+                                and self.connectome_mask is not None
+                            ):
+                                masked_grad *= self.connectome_mask
+                            elif (
+                                name == "log_weights_FF"
+                                and self.feedforward_mask is not None
+                            ):
+                                masked_grad *= self.feedforward_mask
+
+                            has_nan = torch.isnan(masked_grad).any().item()
+                            has_inf = torch.isinf(masked_grad).any().item()
+                            if not has_nan and not has_inf:
+                                grad_norm = masked_grad.norm().item()
+                                print(f"  {name}.grad: norm={grad_norm:.6f}")
+                            else:
+                                print(f"  {name}.grad: NaN={has_nan} Inf={has_inf}")
 
         # Convert to detached scalars for logging
         losses = {"total": total_loss.detach().cpu().item()}
