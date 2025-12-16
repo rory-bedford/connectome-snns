@@ -105,8 +105,8 @@ class SNNTrainer:
         # Debug mode flag (can be enabled externally)
         self.debug_gradients = False
 
-        # Gradient statistics accumulator for online averaging over log_interval
-        self.gradient_accumulator = deque(maxlen=self.training.log_interval)
+        # Store gradient snapshot from last update (before zero_grad)
+        self._last_gradient_snapshot: Dict[str, float] = {}
 
         # Track how many chunks have been accumulated for stats/plotting
         self.accumulated_chunks = 0
@@ -593,14 +593,14 @@ class SNNTrainer:
                     if self.model.weights_FF.grad is not None:
                         self.model.weights_FF.grad *= self.feedforward_mask
 
-        # Accumulate gradient statistics for online averaging
-        self._accumulate_gradient_statistics()
-
         # Clip gradients if configured
         if self.training.grad_norm_clip is not None:
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_norm=self.training.grad_norm_clip
             )
+
+        # Store gradient snapshot before zero_grad clears them
+        self._last_gradient_snapshot = self._extract_current_gradients()
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -646,8 +646,12 @@ class SNNTrainer:
             # Compute stats synchronously
             stats = self.stats_computer(spikes, model_snapshot)
 
-        # Compute gradient stats for logging
-        gradient_stats = self._compute_average_gradients()
+        # Extract current gradient values
+        gradient_stats = self._last_gradient_snapshot
+        if self.debug_gradients and gradient_stats:
+            print(
+                f"[DEBUG] Logging {len(gradient_stats)} gradient keys at logging interval"
+            )
 
         # Prepare CSV data
         csv_data = {
@@ -896,30 +900,25 @@ class SNNTrainer:
             if key in chunk_outputs:
                 del chunk_outputs[key]
 
-    def _accumulate_gradient_statistics(self) -> None:
-        """Accumulate scaling factor gradients with proper connection type and cell type names."""
+    def _extract_current_gradients(self) -> Dict[str, float]:
+        """Extract current scaling factor gradient values at logging time."""
         grad_stats = {}
 
         recurrent_cell_types = self.params.recurrent.cell_types.names
         feedforward_cell_types = self.params.feedforward.cell_types.names
 
-        # Log recurrent scaling factors: shape (n_recurrent_types, n_recurrent_types)
-        # Rows: source cell types (feedforward and recurrent)
-        # Columns: target cell types (recurrent)
+        # Extract recurrent scaling factors: shape (n_recurrent_types, n_recurrent_types)
         if (
             hasattr(self.model, "scaling_factors")
             and self.model.scaling_factors.grad is not None
         ):
             scaling_grads = self.model.scaling_factors.grad.detach().cpu()
-            # First n_recurrent_types rows are recurrent->recurrent connections
             for src_idx, src_cell_type in enumerate(recurrent_cell_types):
                 for tgt_idx, tgt_cell_type in enumerate(recurrent_cell_types):
                     key = f"gradients/scaling_factors/recurrent/{src_cell_type}_to_{tgt_cell_type}"
                     grad_stats[key] = scaling_grads[src_idx, tgt_idx].item()
 
-        # Log feedforward scaling factors: shape (n_ff_types, n_recurrent_types)
-        # Rows: feedforward cell types
-        # Columns: target recurrent cell types
+        # Extract feedforward scaling factors: shape (n_ff_types, n_recurrent_types)
         if (
             hasattr(self.model, "scaling_factors_FF")
             and self.model.scaling_factors_FF.grad is not None
@@ -930,28 +929,7 @@ class SNNTrainer:
                     key = f"gradients/scaling_factors/feedforward/{src_cell_type}_to_{tgt_cell_type}"
                     grad_stats[key] = scaling_grads_ff[src_idx, tgt_idx].item()
 
-        if grad_stats:
-            self.gradient_accumulator.append(grad_stats)
-
-    def _compute_average_gradients(self) -> Dict[str, float]:
-        """Compute online average of gradient statistics over the log_interval."""
-        if not self.gradient_accumulator:
-            return {}
-
-        # Get all gradient stat names from the history
-        all_grad_names = set()
-        for grad_dict in self.gradient_accumulator:
-            all_grad_names.update(grad_dict.keys())
-
-        # Compute average for each gradient statistic
-        avg_grads = {}
-        for grad_name in all_grad_names:
-            values = [
-                grad_dict.get(grad_name, 0.0) for grad_dict in self.gradient_accumulator
-            ]
-            avg_grads[grad_name] = sum(values) / len(values)
-
-        return avg_grads
+        return grad_stats
 
     def _update_progress_bar(self, losses: Dict[str, float]) -> None:
         """Update progress bar with current losses."""

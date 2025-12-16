@@ -84,7 +84,7 @@ def run_experiment(config_path=None, skip_git_check=False):
 
 def run_on_gpu(args):
     """Run experiment on specific GPU."""
-    experiment_config_path, gpu_id, description = args
+    experiment_config_path, gpu_id, description, output_dir = args
     print(f"Running: {description} on GPU {gpu_id}")
     env = {**subprocess.os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
     result = subprocess.run(
@@ -93,6 +93,20 @@ def run_on_gpu(args):
         text=True,
         env=env,
     )
+
+    # Write log file to output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    log_file = output_path / "grid_search.log"
+    with open(log_file, "w") as f:
+        f.write(f"Description: {description}\n")
+        f.write(f"GPU: {gpu_id}\n")
+        f.write(f"Return Code: {result.returncode}\n")
+        f.write("\n--- STDOUT ---\n")
+        f.write(result.stdout)
+        f.write("\n--- STDERR ---\n")
+        f.write(result.stderr)
+
     return {
         "config": experiment_config_path.stem,
         "gpu": gpu_id,
@@ -142,8 +156,8 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
 
     print("Generating configurations...")
 
-    # Generate all experiment configs
-    workspace = Path("workspace/temp_grid_configs")
+    # Generate all experiment configs in the output directory
+    workspace = grid_parent / "temp_grid_configs"
     workspace.mkdir(parents=True, exist_ok=True)
 
     experiment_configs = []
@@ -159,6 +173,10 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
         exp_config = deepcopy(experiment_config)
         exp_config["parameters_file"] = str(params_file)
         exp_config["output_dir"] = str(grid_parent / description)
+
+        # Set wandb notes to the description if wandb is enabled
+        if exp_config.get("wandb", {}).get("enabled", False):
+            exp_config["wandb"]["notes"] = description
 
         # Save experiment config
         exp_config_file = workspace / f"experiment_{i:03d}.toml"
@@ -221,7 +239,12 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
 
     # Assign GPUs round-robin and run in parallel
     jobs = [
-        (cfg, cuda_devices[i % len(cuda_devices)], all_runs[i]["description"])
+        (
+            cfg,
+            cuda_devices[i % len(cuda_devices)],
+            all_runs[i]["description"],
+            all_runs[i]["output_dir"],
+        )
         for i, cfg in enumerate(experiment_configs)
     ]
 
