@@ -1,13 +1,12 @@
 """
-Compare network activity driven by odourant patterns vs homogeneous Poisson noise.
+Analyze network activity driven by odourant patterns vs homogeneous Poisson noise.
 
 This script loads a teacher network and generates spike trains using homogeneous
-Poisson inputs with two different odour patterns. It then compares:
-1. Network responses to different odours (odourant 1 vs odourant 2)
-2. Network responses to same odour repeated (odourant 1 vs odourant 1 with different noise)
-
-The comparison uses cross-correlation scatter plots of firing rates to visualize
-how odour-specific the network response is.
+Poisson inputs with two different odour patterns. It then generates:
+1. Input firing rate histogram for odourant 1
+2. Cross-correlation scatter plots comparing:
+   - Network responses to different odours (odourant 1 vs odourant 2)
+   - Network responses to same odour repeated (odourant 1 vs odourant 1 with different noise)
 """
 
 import argparse
@@ -22,10 +21,11 @@ from network_inputs.odourants import generate_odour_firing_rates
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from parameter_loaders import TeacherActivityParams
 from visualization.firing_statistics import plot_cross_correlation_scatter
+from visualization.odours import plot_input_firing_rate_histogram
 
 
 def main(experiment_dir):
-    """Generate comparison plots between odourant-driven and noise-driven activity.
+    """Generate comparison plots for odourant-driven network activity.
 
     Args:
         experiment_dir (Path): Directory containing input/ with network_structure.npz
@@ -234,6 +234,18 @@ def main(experiment_dir):
     print("✓ Network simulations completed")
 
     # ====================================
+    # Plot Input Firing Rate Histogram
+    # ====================================
+
+    print("\nGenerating input firing rate histogram...")
+
+    # Plot histogram of odourant 1 firing rates
+    fig_input_histogram = plot_input_firing_rate_histogram(
+        firing_rates=input_firing_rates_odour[0:1],  # Odourant 1 only
+        bins=30,
+    )
+
+    # ====================================
     # Convert spikes to numpy and create comparison plots
     # ====================================
 
@@ -342,13 +354,21 @@ def main(experiment_dir):
         plt.close(fig_odour_comparison)
     if fig_noise_comparison is not None:
         plt.close(fig_noise_comparison)
+    if fig_input_histogram is not None:
+        fig_input_histogram.savefig(
+            output_dir / "input_firing_rates_histogram.png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        plt.close(fig_input_histogram)
+        print(f"✓ Saved: {output_dir / 'input_firing_rates_histogram.png'}")
 
     print(f"\n✓ All plots saved to {output_dir}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Compare network activity driven by odourants vs homogeneous Poisson noise"
+        description="Analyze network activity driven by odourants"
     )
     parser.add_argument(
         "experiment_dir",

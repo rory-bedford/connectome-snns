@@ -288,25 +288,56 @@ def main(input_dir, output_dir, params_file):
 
             # Store traces from last few chunks for visualization
             if chunk_idx >= viz_start_chunk:
-                # Extract first batch item for visualization
-                viz_voltages.append(output_voltages_chunk[0:1, :, :].clone())
-                viz_currents.append(output_currents_chunk[0:1, :, :, :].clone())
-                viz_currents_FF.append(output_currents_FF_chunk[0:1, :, :, :].clone())
-                viz_currents_leak.append(output_currents_leak_chunk[0:1, :, :].clone())
-                viz_conductances.append(output_conductances_chunk[0:1, :, :, :].clone())
-                viz_conductances_FF.append(
-                    output_conductances_FF_chunk[0:1, :, :, :].clone()
-                )
-                viz_output_spikes.append(output_spikes_chunk[0:1, :, :].clone())
-                viz_input_spikes.append(input_spikes_chunk[0:1, :, :].clone())
-                viz_ou_weights.append(
-                    weights_chunk[0:1, :, :].clone()
-                )  # OU process weights
+                # Extract first batch item for visualization, move to CPU immediately
+                if device == "cuda":
+                    viz_voltages.append(output_voltages_chunk[0:1, :, :].clone().cpu())
+                    viz_currents.append(
+                        output_currents_chunk[0:1, :, :, :].clone().cpu()
+                    )
+                    viz_currents_FF.append(
+                        output_currents_FF_chunk[0:1, :, :, :].clone().cpu()
+                    )
+                    viz_currents_leak.append(
+                        output_currents_leak_chunk[0:1, :, :].clone().cpu()
+                    )
+                    viz_conductances.append(
+                        output_conductances_chunk[0:1, :, :, :, :].clone().cpu()
+                    )
+                    viz_conductances_FF.append(
+                        output_conductances_FF_chunk[0:1, :, :, :, :].clone().cpu()
+                    )
+                    viz_output_spikes.append(
+                        output_spikes_chunk[0:1, :, :].clone().cpu()
+                    )
+                    viz_input_spikes.append(input_spikes_chunk[0:1, :, :].clone().cpu())
+                    viz_ou_weights.append(
+                        weights_chunk[0:1, :, :].clone().cpu()
+                    )  # OU process weights
+                else:
+                    viz_voltages.append(output_voltages_chunk[0:1, :, :].clone())
+                    viz_currents.append(output_currents_chunk[0:1, :, :, :].clone())
+                    viz_currents_FF.append(
+                        output_currents_FF_chunk[0:1, :, :, :].clone()
+                    )
+                    viz_currents_leak.append(
+                        output_currents_leak_chunk[0:1, :, :].clone()
+                    )
+                    viz_conductances.append(
+                        output_conductances_chunk[0:1, :, :, :, :].clone()
+                    )
+                    viz_conductances_FF.append(
+                        output_conductances_FF_chunk[0:1, :, :, :, :].clone()
+                    )
+                    viz_output_spikes.append(output_spikes_chunk[0:1, :, :].clone())
+                    viz_input_spikes.append(input_spikes_chunk[0:1, :, :].clone())
+                    viz_ou_weights.append(
+                        weights_chunk[0:1, :, :].clone()
+                    )  # OU process weights
 
             # Store final states for next chunk
             initial_v = output_voltages_chunk[:, -1, :].clone()
-            initial_g = output_conductances_chunk[:, -1, :, :].clone()
-            initial_g_FF = output_conductances_FF_chunk[:, -1, :, :].clone()
+            initial_g = output_conductances_chunk[:, -1, :, :, :].clone()
+            initial_g_FF = output_conductances_FF_chunk[:, -1, :, :, :].clone()
 
             # Write directly to zarr arrays - stream to disk, no RAM accumulation!
             start_idx = chunk_idx * simulation.chunk_size
@@ -375,18 +406,6 @@ def main(input_dir, output_dir, params_file):
     viz_output_spikes = torch.cat(viz_output_spikes, dim=1)
     viz_input_spikes = torch.cat(viz_input_spikes, dim=1)
     viz_ou_weights = torch.cat(viz_ou_weights, dim=1)
-
-    # Move to CPU and convert to numpy
-    if device == "cuda":
-        viz_voltages = viz_voltages.cpu()
-        viz_currents = viz_currents.cpu()
-        viz_currents_FF = viz_currents_FF.cpu()
-        viz_currents_leak = viz_currents_leak.cpu()
-        viz_conductances = viz_conductances.cpu()
-        viz_conductances_FF = viz_conductances_FF.cpu()
-        viz_output_spikes = viz_output_spikes.cpu()
-        viz_input_spikes = viz_input_spikes.cpu()
-        viz_ou_weights = viz_ou_weights.cpu()
 
     viz_voltages = viz_voltages.numpy().astype(np.float32)
     viz_currents = viz_currents.numpy().astype(np.float32)
