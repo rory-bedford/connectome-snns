@@ -25,6 +25,8 @@ from visualization.firing_statistics import (
     plot_cv_histogram,
     plot_isi_histogram,
     plot_fano_factor_vs_window_size,
+    plot_assembly_population_activity,
+    plot_input_rate_process,
 )
 from visualization.neuronal_dynamics import (
     plot_spike_trains,
@@ -623,5 +625,57 @@ def create_activity_dashboard(
     x_center = (bbox.x0 + bbox_right.x1) / 2
     y_top = bbox.y1 + 0.01
     fig.text(x_center, y_top, "Fano Factor", ha="center", va="bottom", fontsize=11)
+
+    return fig
+
+
+# ==================== ASSEMBLY ACTIVITY DASHBOARD ====================
+
+
+def create_assembly_activity_dashboard(
+    output_spikes: NDArray[np.int32],
+    input_rates: NDArray[np.float32],
+    cell_type_indices: NDArray[np.int32],
+    assembly_ids: NDArray[np.int32],
+    dt: float,
+    excitatory_idx: int = 0,
+) -> plt.Figure:
+    """Create dashboard combining assembly population activity and input rate process.
+
+    Args:
+        output_spikes (NDArray[np.int32]): Output spike array with shape (batch, time, neurons).
+        input_rates (NDArray[np.float32]): Input firing rates with shape (batch, time, input_neurons).
+        cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
+        assembly_ids (NDArray[np.int32]): Array of assembly IDs for each neuron.
+        dt (float): Time step in milliseconds.
+        excitatory_idx (int): Index of excitatory cell type. Defaults to 0.
+
+    Returns:
+        plt.Figure: Matplotlib figure object containing the assembly activity dashboard.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Left panel: assembly population activity
+    plot_assembly_population_activity(
+        spike_trains=output_spikes,
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        window_size=200.0,  # Gaussian kernel std in ms
+        dt=dt,
+        excitatory_idx=excitatory_idx,
+        title="Excitatory Assembly Activity",
+        ax=axes[0],
+    )
+
+    # Right panel: input rate process
+    plot_input_rate_process(
+        input_rates=input_rates,
+        dt=dt,
+        batch_idx=0,
+        ax=axes[1],
+        title="Input Rate Process (Odour Dynamics)",
+    )
+
+    plt.tight_layout()
 
     return fig

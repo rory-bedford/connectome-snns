@@ -25,13 +25,18 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
     maintains continuous state across iterations, yielding chunks of specified size
     from an ongoing trajectory.
 
-    Each pattern undergoes its own OU dynamics:
-        da_i = -(a_i - mean_i) / tau * dt + sigma_i * sqrt(dt) * dW_i
+    Each pattern undergoes its own OU dynamics (mean-reverting to zero):
+        da_i = -(a_i / tau) * dt + sigma_i * sqrt(dt) * dW_i
 
-    where a_i is the activation of pattern i. The final firing rate is:
-        r(t) = sum_i [a_i(t) * pattern_i] / sum_i a_i(t)
+    where a_i is the activation of pattern i. The final firing rate is computed
+    by applying softmax normalization to the activations, then taking a weighted
+    sum of the patterns:
+        weights_i(t) = softmax(a_i(t) / temperature)
+        r(t) = sum_i [weights_i(t) * pattern_i]
 
-    This normalization ensures the output remains a valid weighted average of patterns.
+    The softmax temperature controls the sharpness of the pattern mixture: lower
+    values make the distribution spikier (one pattern dominates), higher values
+    make it softer (patterns blend more uniformly).
 
     Args:
         patterns: Array of firing rate patterns, shape (n_patterns, n_neurons) in Hz.
@@ -39,10 +44,11 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         chunk_size: Number of timesteps per chunk/sample.
         dt: Timestep in milliseconds.
         tau: Timescale of mean reversion in milliseconds (shared across all patterns).
-        r_mean: Mean activation level. Scalar, applied to all patterns. Default: 1.0.
+        temperature: Softmax temperature for normalizing pattern activations. Higher values
+            make the distribution softer (more uniform), lower values sharpen it. Default: 1.0.
         sigma: Noise amplitude for each pattern. Shape (n_patterns,) or scalar. Default: 0.5.
         a_init: Initial activation for each pattern. Shape (n_patterns,) or scalar.
-            If None, uses r_mean for all patterns. Default: None.
+            If None, uses value 1.0 for all patterns. Default: None.
         return_rates: If True, __getitem__ returns tuple (rates, weights)
             for diagnostic/visualization purposes. If False, returns only rates. Default: False.
 
@@ -58,13 +64,13 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         >>> # Generate 20 odour patterns for 5000 neurons
         >>> patterns = generate_odour_firing_rates(...)  # Shape: (20, 5000)
         >>>
-        >>> # Continuous OU process in pattern space
+        >>> # Continuous OU process in pattern space with softmax normalization
         >>> rate_process = OrnsteinUhlenbeckRateProcess(
         ...     patterns=patterns,
         ...     chunk_size=100,
         ...     dt=0.1,
         ...     tau=50.0,
-        ...     r_mean=1.0,
+        ...     temperature=1.0,
         ...     sigma=0.5
         ... )
         >>>
@@ -78,6 +84,7 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         ...     chunk_size=100,
         ...     dt=0.1,
         ...     tau=50.0,
+        ...     temperature=1.0,
         ...     return_rates=True
         ... )
         >>> rates, weights = rate_process_diag[0]
@@ -90,10 +97,10 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         chunk_size: int,
         dt: float,
         tau: float,
-        r_mean: float = 1.0,
-        sigma: Union[float, np.ndarray, torch.Tensor] = 0.5,
-        a_init: Union[float, np.ndarray, torch.Tensor, None] = None,
-        return_rates: bool = False,
+        temperature: float,
+        sigma: Union[float, np.ndarray, torch.Tensor],
+        a_init: Union[float, np.ndarray, torch.Tensor, None],
+        return_rates: bool,
     ):
         # Convert patterns to tensor (CPU)
         if isinstance(patterns, np.ndarray):
@@ -104,7 +111,7 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         self.chunk_size = chunk_size
         self.dt = dt
         self.tau = tau
-        self.r_mean = r_mean
+        self.temperature = temperature
 
         # Convert sigma to tensor with shape (n_patterns,)
         self.sigma = self._to_pattern_tensor(sigma, self.n_patterns)
@@ -114,9 +121,7 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
 
         # Initialize activations (state of the continuous process)
         if a_init is None:
-            self.activations = torch.full(
-                (self.n_patterns,), r_mean, dtype=torch.float32
-            )
+            self.activations = torch.ones((self.n_patterns,), dtype=torch.float32)
         else:
             self.activations = self._to_pattern_tensor(a_init, self.n_patterns)
 
@@ -179,29 +184,23 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
             # Store current state
             activation_chunk[t] = self.activations
 
-            # Update state with OU dynamics
+            # Update state with OU dynamics (mean-reverting to 0)
             dW = torch.randn(self.n_patterns)
-            da = (
-                self.drift * (self.activations - self.r_mean) * self.dt
-                + self.diffusion * dW
-            )
+            da = self.drift * self.activations * self.dt + self.diffusion * dW
             self.activations = self.activations + da
 
             # Clip to ensure non-negative activations
             self.activations = torch.clamp(self.activations, min=0.0)
 
-        # Combine patterns as normalized weighted sum
+        # Combine patterns using softmax normalization of activations
         # activation_chunk: (chunk_size, n_patterns)
         # patterns: (n_patterns, n_neurons)
         # Output: (chunk_size, n_neurons)
 
-        # Normalize activations at each timestep to sum to 1
-        activation_sums = activation_chunk.sum(dim=1, keepdim=True)  # (chunk_size, 1)
-        activation_sums = torch.clamp(
-            activation_sums, min=1e-8
-        )  # Avoid division by zero
-        normalized_activations = (
-            activation_chunk / activation_sums
+        # Apply softmax with temperature to normalize activations
+        softmax_input = activation_chunk / self.temperature
+        normalized_activations = torch.softmax(
+            softmax_input, dim=1
         )  # (chunk_size, n_patterns)
 
         # Weighted sum of patterns
@@ -217,11 +216,9 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         Reset the process state to initial conditions.
 
         Args:
-            a_init: New initial activation. If None, resets to r_mean.
+            a_init: New initial activation. If None, resets to ones.
         """
         if a_init is None:
-            self.activations = torch.full(
-                (self.n_patterns,), self.r_mean, dtype=torch.float32
-            )
+            self.activations = torch.ones((self.n_patterns,), dtype=torch.float32)
         else:
             self.activations = self._to_pattern_tensor(a_init, self.n_patterns)

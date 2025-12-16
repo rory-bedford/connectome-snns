@@ -1311,3 +1311,47 @@ def plot_cross_correlation_scatter(
         plt.tight_layout()
 
     return fig if return_fig else None
+
+
+def plot_input_rate_process(
+    input_rates: NDArray[np.float32],
+    dt: float,
+    batch_idx: int = 0,
+    ax: plt.Axes | None = None,
+    title: str = "Input Rate Process (Odour Dynamics)",
+) -> plt.Axes:
+    """Plot input rate process showing temporal dynamics of odour-driven rates.
+
+    Args:
+        input_rates (NDArray[np.float32]): Input firing rates with shape (batch, time, input_neurons).
+        dt (float): Time step in milliseconds.
+        batch_idx (int): Which batch item to plot. Defaults to 0.
+        ax (plt.Axes | None): Matplotlib axes to plot on. If None, uses current axes.
+        title (str): Title for the plot. Defaults to "Input Rate Process (Odour Dynamics)".
+
+    Returns:
+        plt.Axes: The matplotlib axes object with the plot.
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    # Plot rates for specified batch, averaged across input neurons
+    time_seconds = np.arange(input_rates.shape[1]) * dt / 1000.0
+    rates_batch = input_rates[batch_idx]  # Shape: (timesteps, n_input_neurons)
+
+    # Compute statistics across neurons
+    rates_mean = np.mean(rates_batch, axis=1)
+    rates_p25 = np.percentile(rates_batch, 25, axis=1)
+    rates_p75 = np.percentile(rates_batch, 75, axis=1)
+
+    ax.plot(time_seconds, rates_mean, "b-", linewidth=2, label="Mean")
+    ax.fill_between(
+        time_seconds, rates_p25, rates_p75, alpha=0.3, label="25-75 percentile"
+    )
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Firing Rate (Hz)")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    return ax

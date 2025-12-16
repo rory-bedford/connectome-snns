@@ -677,7 +677,7 @@ def main(
         for target_idx in range(len(params.recurrent.cell_types.names)):
             target_mask = cell_type_indices == target_idx
             scale = scaling_factors_FF_np[source_idx, target_idx]
-            scaled_feedforward_weights[np.ix_(target_mask, source_mask)] *= scale
+            scaled_feedforward_weights[np.ix_(source_mask, target_mask)] *= scale
 
     np.savez(
         final_state_dir / "network_structure.npz",

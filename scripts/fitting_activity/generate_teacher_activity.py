@@ -14,25 +14,19 @@ import toml
 import zarr
 import matplotlib.pyplot as plt
 from src.network_inputs.unsupervised import (
-    HomogeneousPoissonSpikeDataset,
-    collate_pattern_batches,
+    InhomogeneousPoissonSpikeDataLoader,
 )
+from src.network_inputs.rate_processes import OrnsteinUhlenbeckRateProcess
 from src.network_inputs.odourants import (
     generate_odour_firing_rates,
-    generate_baseline_firing_rates,
 )
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
-from torch.utils.data import DataLoader
 from parameter_loaders import TeacherActivityParams
 from tqdm import tqdm
 from visualization.dashboards import (
     create_connectivity_dashboard,
     create_activity_dashboard,
-)
-from visualization.firing_statistics import (
-    plot_assembly_population_activity,
-    plot_cross_correlation_scatter,
-    plot_cross_correlation_histogram,
+    create_assembly_activity_dashboard,
 )
 
 
@@ -115,44 +109,33 @@ def main(input_dir, output_dir, params_file):
         odour_configs=params.get_odour_configs_dict(),
     )
 
-    # Generate baseline (control) firing rate pattern
-    input_firing_rates_baseline = generate_baseline_firing_rates(
-        n_input_neurons=feedforward_weights.shape[0],
-        input_source_indices=input_source_indices,
-        cell_type_names=feedforward.cell_types.names,
-        odour_configs=params.get_odour_configs_dict(),
-    )
+    print(f"✓ Generated {num_odours} odour patterns")
+    print(f"  Total patterns: {input_firing_rates_odour.shape[0]}")
 
-    # Concatenate odour patterns with baseline pattern
-    # This appends the control as the last pattern
-    input_firing_rates = np.concatenate(
-        [input_firing_rates_odour, input_firing_rates_baseline], axis=0
-    )
-
-    print(f"✓ Generated {num_odours} odour patterns + 1 baseline (control) pattern")
-    print(f"  Total patterns: {input_firing_rates.shape[0]}")
-
-    n_patterns = num_odours + 1  # Include control pattern
     batch_size = simulation.batch_size
 
-    # Create Poisson dataset for multiple patterns
-    # Dataset cycles through patterns indefinitely
-    spike_dataset = HomogeneousPoissonSpikeDataset(
-        firing_rates=input_firing_rates,
-        chunk_size=simulation.chunk_size,
+    # Create Ornstein-Uhlenbeck rate process in pattern space
+    # This modulates the odour patterns dynamically over time
+    rate_process = OrnsteinUhlenbeckRateProcess(
+        patterns=input_firing_rates_odour,  # Shape: (n_patterns, n_input_neurons)
+        chunk_size=int(simulation.chunk_size),
         dt=simulation.dt,
+        tau=params.tau,  # Time constant for mean reversion (ms)
+        temperature=params.temperature,  # Softmax temperature for pattern mixing
+        sigma=params.sigma,  # Noise amplitude
+        a_init=None,  # Initialize to ones
+        return_rates=True,  # Return rates for storage and diagnostics
     )
 
-    # DataLoader: batch_size * n_patterns items fetched per iteration
-    # Result shape: (batch_size, n_patterns, n_steps, n_neurons)
-    # batch_size = number of repeats/trials, n_patterns = number of different patterns
-    spike_dataloader = DataLoader(
-        spike_dataset,
-        batch_size=batch_size * n_patterns,  # Fetch batch_size repeats of all patterns
-        shuffle=False,
-        collate_fn=collate_pattern_batches,
-        num_workers=0,  # Keep 0 for GPU generation
+    # Create inhomogeneous Poisson spike dataloader with OU-driven rates
+    spike_dataloader = InhomogeneousPoissonSpikeDataLoader(
+        rate_process=rate_process,
+        batch_size=batch_size,
+        device=device,
+        return_rates=True,  # Enable rate output
     )
+
+    print("✓ Created inhomogeneous Poisson spike dataloader with OU rate process")
 
     # ======================
     # Initialize LIF Network
@@ -204,62 +187,41 @@ def main(input_dir, output_dir, params_file):
     # Store dt as a metadata attribute
     root.attrs["dt"] = simulation.dt
 
-    # Save input firing rates immediately
+    # Save input firing rates immediately (the base patterns before OU modulation)
     root.create_dataset(
         "input_firing_rates",
         shape=input_firing_rates_odour.shape,
         dtype=input_firing_rates_odour.dtype,
         data=input_firing_rates_odour,
     )
-
-    root.create_dataset(
-        "input_firing_rates_control",
-        shape=input_firing_rates_baseline.shape,
-        dtype=input_firing_rates_baseline.dtype,
-        data=input_firing_rates_baseline,
-    )
     print("✓ Saved input firing rates to zarr")
-    print(f"  - input_firing_rates (odour): {input_firing_rates_odour.shape}")
-    print(f"  - input_firing_rates_control: {input_firing_rates_baseline.shape}")
+    print(f"  - input_firing_rates (odour patterns): {input_firing_rates_odour.shape}")
 
-    # Create separate datasets for odour patterns and control pattern
-    # Stream directly to final arrays during simulation - no temp storage!
-    # Odour patterns: indices 0 to num_odours-1
-    output_spikes_odour = root.create_dataset(
+    # Create datasets for OU-modulated spike data
+    # Shape: (batch_size, total_steps, n_neurons) since OU process gives independent temporal dynamics per batch
+    output_spikes = root.create_dataset(
         "output_spikes",
-        shape=(batch_size, num_odours, total_steps, n_neurons),
-        chunks=(batch_size, num_odours, simulation.chunk_size, n_neurons),
+        shape=(batch_size, total_steps, n_neurons),
+        chunks=(batch_size, simulation.chunk_size, n_neurons),
         dtype=np.bool_,
     )
 
-    output_spikes_control = root.create_dataset(
-        "output_spikes_control",
-        shape=(batch_size, 1, total_steps, n_neurons),
-        chunks=(batch_size, 1, simulation.chunk_size, n_neurons),
-        dtype=np.bool_,
-    )
-
-    input_spikes_odour = root.create_dataset(
+    input_spikes = root.create_dataset(
         "input_spikes",
-        shape=(batch_size, num_odours, total_steps, n_input_neurons),
-        chunks=(batch_size, num_odours, simulation.chunk_size, n_input_neurons),
+        shape=(batch_size, total_steps, n_input_neurons),
+        chunks=(batch_size, simulation.chunk_size, n_input_neurons),
         dtype=np.bool_,
     )
 
-    input_spikes_control = root.create_dataset(
-        "input_spikes_control",
-        shape=(batch_size, 1, total_steps, n_input_neurons),
-        chunks=(batch_size, 1, simulation.chunk_size, n_input_neurons),
-        dtype=np.bool_,
+    # Create datasets for OU-modulated firing rates
+    input_rates = root.create_dataset(
+        "input_rates",
+        shape=(batch_size, total_steps, n_input_neurons),
+        chunks=(batch_size, simulation.chunk_size, n_input_neurons),
+        dtype=np.float32,
     )
 
-    chunk_size_mb = (batch_size * num_odours * simulation.chunk_size * n_neurons) / (
-        1024**2
-    )
-    print(
-        f"Zarr chunk shape (odour): ({batch_size}, {num_odours}, {simulation.chunk_size}, {n_neurons})"
-    )
-    print(f"  Chunk size: ~{chunk_size_mb:.1f} MB uncompressed")
+    print(f"Zarr chunk shape: ({batch_size}, {simulation.chunk_size}, {n_neurons})")
 
     # ==============================
     # Run Chunked Network Simulation
@@ -269,12 +231,11 @@ def main(input_dir, output_dir, params_file):
     print("STARTING CHUNKED NETWORK SIMULATION")
     print("=" * len("STARTING CHUNKED NETWORK SIMULATION"))
 
-    print(f"Running simulation with {n_patterns} patterns × {batch_size} repeats")
-    print(f"  ({num_odours} odour patterns + 1 baseline control)")
+    print(f"Running simulation with {batch_size} independent OU-modulated trajectories")
     print(f"Processing {simulation.num_chunks} chunks...")
     print(f"Total simulation duration: {simulation.total_duration_s:.2f} s")
     print(
-        f"DataLoader returns (batch_size={batch_size}, n_patterns={n_patterns}, chunk_size, neurons) per chunk"
+        f"DataLoader returns (batch_size={batch_size}, chunk_size, n_input_neurons) per iteration"
     )
 
     # Initialize state variables: (batch_size, n_patterns, ...)
@@ -282,9 +243,9 @@ def main(input_dir, output_dir, params_file):
     initial_g = None
     initial_g_FF = None
 
-    # Variables to store traces from last ~10 seconds for visualization
-    viz_duration_s = 10.0  # Save last 10 seconds
-    viz_chunks = int(np.ceil(viz_duration_s / simulation.chunk_duration_s))
+    # Variables to store traces from last plot_size chunks for visualization
+    viz_chunks = simulation.plot_size
+    viz_duration_s = viz_chunks * simulation.chunk_duration_s
     viz_start_chunk = max(0, simulation.num_chunks - viz_chunks)
 
     # Store pattern 0 (first odour) for dashboards
@@ -296,129 +257,85 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = []
     viz_output_spikes = []
     viz_input_spikes = []
-
-    # Also store control pattern spikes for assembly comparison
-    viz_output_spikes_control = []
-    viz_input_spikes_control = []
+    viz_input_rates = []
 
     # Store pattern 0 from batch 1 (second repeat) for cross-correlation
     viz_output_spikes_signal_repeat = []
 
     # Run inference in chunks using DataLoader
     with torch.inference_mode():
-        dataloader_iter = iter(spike_dataloader)
-
-        for chunk_idx in tqdm(range(simulation.num_chunks), desc="Processing chunks"):
-            # Get next chunk: (batch_size, n_patterns, n_steps, n_input_neurons)
-            input_spikes_chunk, pattern_indices = next(dataloader_iter)
-
-            # Flatten batch and pattern dimensions for SNN forward pass
-            # From (batch_size, n_patterns, n_steps, n_input_neurons) to (batch_size*n_patterns, n_steps, n_input_neurons)
-            input_spikes_flat = input_spikes_chunk.reshape(
-                batch_size * n_patterns, -1, n_input_neurons
+        for chunk_idx, batch_data in enumerate(
+            tqdm(
+                spike_dataloader, total=simulation.num_chunks, desc="Processing chunks"
             )
+        ):
+            # Unpack batch data: (spikes, rates, weights)
+            input_spikes_chunk, input_rates_chunk, _ = batch_data
 
             # Run one chunk of simulation
             (
-                output_spikes_chunk_flat,
-                output_voltages_chunk_flat,
-                output_currents_chunk_flat,
-                output_currents_FF_chunk_flat,
-                output_currents_leak_chunk_flat,
-                output_conductances_chunk_flat,
-                output_conductances_FF_chunk_flat,
+                output_spikes_chunk,
+                output_voltages_chunk,
+                output_currents_chunk,
+                output_currents_FF_chunk,
+                output_currents_leak_chunk,
+                output_conductances_chunk,
+                output_conductances_FF_chunk,
             ) = model.forward(
-                input_spikes=input_spikes_flat,
+                input_spikes=input_spikes_chunk,
                 initial_v=initial_v,
                 initial_g=initial_g,
                 initial_g_FF=initial_g_FF,
             )
 
-            # Unflatten outputs back to (batch_size, n_patterns, ...)
-            n_steps_out = output_spikes_chunk_flat.shape[1]
-            output_spikes_chunk = output_spikes_chunk_flat.reshape(
-                batch_size, n_patterns, n_steps_out, n_neurons
-            )
-
             # Store traces from last few chunks for visualization
             if chunk_idx >= viz_start_chunk:
-                # Extract first batch, pattern 0 (first odour) for visualization
-                viz_voltages.append(output_voltages_chunk_flat[0:1, :, :].clone())
-                viz_currents.append(output_currents_chunk_flat[0:1, :, :, :].clone())
-                viz_currents_FF.append(
-                    output_currents_FF_chunk_flat[0:1, :, :, :].clone()
-                )
-                viz_currents_leak.append(
-                    output_currents_leak_chunk_flat[0:1, :, :].clone()
-                )
-                viz_conductances.append(
-                    output_conductances_chunk_flat[0:1, :, :, :].clone()
-                )
+                # Extract first batch item for visualization
+                viz_voltages.append(output_voltages_chunk[0:1, :, :].clone())
+                viz_currents.append(output_currents_chunk[0:1, :, :, :].clone())
+                viz_currents_FF.append(output_currents_FF_chunk[0:1, :, :, :].clone())
+                viz_currents_leak.append(output_currents_leak_chunk[0:1, :, :].clone())
+                viz_conductances.append(output_conductances_chunk[0:1, :, :, :].clone())
                 viz_conductances_FF.append(
-                    output_conductances_FF_chunk_flat[0:1, :, :, :].clone()
+                    output_conductances_FF_chunk[0:1, :, :, :].clone()
                 )
-                viz_output_spikes.append(output_spikes_chunk_flat[0:1, :, :].clone())
-                viz_input_spikes.append(input_spikes_flat[0:1, :, :].clone())
+                viz_output_spikes.append(output_spikes_chunk[0:1, :, :].clone())
+                viz_input_spikes.append(input_spikes_chunk[0:1, :, :].clone())
+                viz_input_rates.append(input_rates_chunk[0:1, :, :].clone())
 
-                # Also store control pattern (last) for assembly comparison
-                viz_output_spikes_control.append(
-                    output_spikes_chunk_flat[n_patterns - 1 : n_patterns, :, :].clone()
-                )
-                viz_input_spikes_control.append(
-                    input_spikes_flat[n_patterns - 1 : n_patterns, :, :].clone()
-                )
+                # Store second batch item for repeatability comparison
+                if batch_size > 1:
+                    viz_output_spikes_signal_repeat.append(
+                        output_spikes_chunk[1:2, :, :].clone()
+                    )
 
-                # Store pattern 0 from batch 1 (second repeat)
-                viz_output_spikes_signal_repeat.append(
-                    output_spikes_chunk_flat[n_patterns : n_patterns + 1, :, :].clone()
-                )
+            # Store final states for next chunk
+            initial_v = output_voltages_chunk[:, -1, :].clone()
+            initial_g = output_conductances_chunk[:, -1, :, :].clone()
+            initial_g_FF = output_conductances_FF_chunk[:, -1, :, :].clone()
 
-            # Store final states for next chunk: (batch_size*n_patterns, neurons) or (batch_size*n_patterns, neurons, syn_types)
-            initial_v = output_voltages_chunk_flat[:, -1, :].clone()
-            initial_g = output_conductances_chunk_flat[:, -1, :, :].clone()
-            initial_g_FF = output_conductances_FF_chunk_flat[:, -1, :, :].clone()
-
-            # Write directly to separate zarr arrays - stream to disk, no RAM accumulation!
+            # Write directly to zarr arrays - stream to disk, no RAM accumulation!
             start_idx = chunk_idx * simulation.chunk_size
-            end_idx = start_idx + n_steps_out
+            end_idx = start_idx + output_spikes_chunk.shape[1]
 
             if device == "cuda":
-                # Split and write odour patterns (all except last)
-                output_spikes_odour[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk[:, :-1, :, :].bool().cpu().numpy()
+                output_spikes[:, start_idx:end_idx, :] = (
+                    output_spikes_chunk.bool().cpu().numpy()
                 )
-                input_spikes_odour[:, :, start_idx:end_idx, :] = (
-                    input_spikes_chunk[:, :-1, :, :].cpu().numpy()
-                )
-                # Write control pattern (last pattern only)
-                output_spikes_control[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk[:, -1:, :, :].bool().cpu().numpy()
-                )
-                input_spikes_control[:, :, start_idx:end_idx, :] = (
-                    input_spikes_chunk[:, -1:, :, :].cpu().numpy()
-                )
+                input_spikes[:, start_idx:end_idx, :] = input_spikes_chunk.cpu().numpy()
+                input_rates[:, start_idx:end_idx, :] = input_rates_chunk.cpu().numpy()
             else:
-                # Split and write odour patterns (all except last)
-                output_spikes_odour[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk[:, :-1, :, :].bool().numpy()
+                output_spikes[:, start_idx:end_idx, :] = (
+                    output_spikes_chunk.bool().numpy()
                 )
-                input_spikes_odour[:, :, start_idx:end_idx, :] = input_spikes_chunk[
-                    :, :-1, :, :
-                ].numpy()
-                # Write control pattern (last pattern only)
-                output_spikes_control[:, :, start_idx:end_idx, :] = (
-                    output_spikes_chunk[:, -1:, :, :].bool().numpy()
-                )
-                input_spikes_control[:, :, start_idx:end_idx, :] = input_spikes_chunk[
-                    :, -1:, :, :
-                ].numpy()
+                input_spikes[:, start_idx:end_idx, :] = input_spikes_chunk.numpy()
+                input_rates[:, start_idx:end_idx, :] = input_rates_chunk.numpy()
 
     print("\n✓ Network simulation completed!")
     print(f"\n✓ All data saved to {results_dir / 'spike_data.zarr'}")
-    print(f"  - output_spikes (odour): {output_spikes_odour.shape}")
-    print(f"  - output_spikes_control: {output_spikes_control.shape}")
-    print(f"  - input_spikes (odour): {input_spikes_odour.shape}")
-    print(f"  - input_spikes_control: {input_spikes_control.shape}")
+    print(f"  - output_spikes: {output_spikes.shape}")
+    print(f"  - input_spikes: {input_spikes.shape}")
+    print(f"  - input_rates: {input_rates.shape}")
 
     # Free GPU memory
     if device == "cuda":
@@ -457,10 +374,7 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = torch.cat(viz_conductances_FF, dim=1)
     viz_output_spikes = torch.cat(viz_output_spikes, dim=1)
     viz_input_spikes = torch.cat(viz_input_spikes, dim=1)
-
-    # Concatenate control pattern data
-    viz_output_spikes_control = torch.cat(viz_output_spikes_control, dim=1)
-    viz_input_spikes_control = torch.cat(viz_input_spikes_control, dim=1)
+    viz_input_rates = torch.cat(viz_input_rates, dim=1)
 
     # Concatenate signal repeat data (pattern 0 from batch 1)
     viz_output_spikes_signal_repeat = torch.cat(viz_output_spikes_signal_repeat, dim=1)
@@ -475,8 +389,7 @@ def main(input_dir, output_dir, params_file):
         viz_conductances_FF = viz_conductances_FF.cpu()
         viz_output_spikes = viz_output_spikes.cpu()
         viz_input_spikes = viz_input_spikes.cpu()
-        viz_output_spikes_control = viz_output_spikes_control.cpu()
-        viz_input_spikes_control = viz_input_spikes_control.cpu()
+        viz_input_rates = viz_input_rates.cpu()
         viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.cpu()
 
     viz_voltages = viz_voltages.numpy().astype(np.float32)
@@ -487,10 +400,7 @@ def main(input_dir, output_dir, params_file):
     viz_conductances_FF = viz_conductances_FF.numpy().astype(np.float32)
     viz_output_spikes = viz_output_spikes.numpy().astype(np.int32)
     viz_input_spikes = viz_input_spikes.numpy().astype(np.int32)
-
-    # Convert control pattern to numpy
-    viz_output_spikes_control = viz_output_spikes_control.numpy().astype(np.int32)
-    viz_input_spikes_control = viz_input_spikes_control.numpy().astype(np.int32)
+    viz_input_rates = viz_input_rates.numpy().astype(np.float32)
 
     # Convert signal repeat to numpy
     viz_output_spikes_signal_repeat = viz_output_spikes_signal_repeat.numpy().astype(
@@ -550,6 +460,17 @@ def main(input_dir, output_dir, params_file):
         assembly_ids=assembly_ids,
     )
 
+    # Generate assembly activity dashboard
+    print("Generating assembly activity dashboard...")
+    assembly_fig = create_assembly_activity_dashboard(
+        output_spikes=viz_output_spikes,
+        input_rates=viz_input_rates,
+        cell_type_indices=cell_type_indices,
+        assembly_ids=assembly_ids,
+        dt=simulation.dt,
+        excitatory_idx=0,
+    )
+
     # Save dashboards
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
@@ -564,137 +485,10 @@ def main(input_dir, output_dir, params_file):
     )
     plt.close(activity_fig)
 
-    # Generate assembly population activity plot (side-by-side comparison)
-    print("Generating assembly population activity plot...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
-
-    # Plot pattern 0 (odour)
-    plot_assembly_population_activity(
-        spike_trains=viz_output_spikes,
-        cell_type_indices=cell_type_indices,
-        assembly_ids=assembly_ids,
-        window_size=200.0,  # Gaussian kernel std in ms
-        dt=simulation.dt,
-        excitatory_idx=0,  # Assuming excitatory neurons are type 0
-        title="Excitatory Assembly Activity (Pattern 0)",
-        ax=ax1,
+    assembly_fig.savefig(
+        figures_dir / "assembly_activity_dashboard.png", dpi=300, bbox_inches="tight"
     )
-
-    # Plot control pattern
-    plot_assembly_population_activity(
-        spike_trains=viz_output_spikes_control,
-        cell_type_indices=cell_type_indices,
-        assembly_ids=assembly_ids,
-        window_size=200.0,  # Gaussian kernel std in ms
-        dt=simulation.dt,
-        excitatory_idx=0,  # Assuming excitatory neurons are type 0
-        title="Excitatory Assembly Activity (Control Pattern)",
-        ax=ax2,
-    )
-
-    plt.tight_layout()
-    fig.savefig(
-        figures_dir / "assembly_population_activity.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
-
-    # Generate cross-correlation scatter plot subplot
-    print("Generating cross-correlation scatter plot...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-
-    # Left: Pattern 0 (batch 0) vs Pattern 0 (batch 1) - signal repeatability
-    plot_cross_correlation_scatter(
-        spike_trains_trial1=viz_output_spikes,
-        spike_trains_trial2=viz_output_spikes_signal_repeat,
-        window_size=10.0,  # 10 second windows
-        dt=simulation.dt,
-        cell_indices=None,  # All cells in network
-        ax=ax1,
-        title="Pattern 0 vs Pattern 0 (Repeat)",
-        x_label="Pattern 0 (Trial 1) Rate (Hz)",
-        y_label="Pattern 0 (Trial 2) Rate (Hz)",
-    )
-
-    # Right: Pattern 0 vs Control - signal vs noise
-    plot_cross_correlation_scatter(
-        spike_trains_trial1=viz_output_spikes,
-        spike_trains_trial2=viz_output_spikes_control,
-        window_size=10.0,  # 10 second windows
-        dt=simulation.dt,
-        cell_indices=None,  # All cells in network
-        ax=ax2,
-        title="Pattern 0 vs Control",
-        x_label="Pattern 0 Rate (Hz)",
-        y_label="Control Rate (Hz)",
-    )
-
-    # Share axis limits across subplots
-    x_min = min(ax1.get_xlim()[0], ax2.get_xlim()[0])
-    x_max = max(ax1.get_xlim()[1], ax2.get_xlim()[1])
-    y_min = min(ax1.get_ylim()[0], ax2.get_ylim()[0])
-    y_max = max(ax1.get_ylim()[1], ax2.get_ylim()[1])
-    ax1.set_xlim(x_min, x_max)
-    ax1.set_ylim(y_min, y_max)
-    ax2.set_xlim(x_min, x_max)
-    ax2.set_ylim(y_min, y_max)
-
-    plt.tight_layout()
-    fig.savefig(
-        figures_dir / "cross_correlation_scatter.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
-
-    # Generate cross-correlation 2D histogram subplot (assembly-pooled)
-    print("Generating cross-correlation 2D histogram (assembly-pooled)...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
-
-    # Left: Pattern 0 (batch 0) vs Pattern 0 (batch 1) - signal repeatability
-    plot_cross_correlation_histogram(
-        spike_trains_trial1=viz_output_spikes,
-        spike_trains_trial2=viz_output_spikes_signal_repeat,
-        window_size=0.05,  # 50 ms windows
-        dt=simulation.dt,
-        bin_size=0.1,  # 0.1 Hz bins
-        cell_type_indices=cell_type_indices,
-        assembly_ids=assembly_ids,
-        excitatory_idx=0,  # Assuming excitatory neurons are type 0
-        ax=ax1,
-        title="Pattern 0 vs Pattern 0 (Repeat)",
-        x_label="Pattern 0 (Trial 1) Rate (Hz)",
-        y_label="Pattern 0 (Trial 2) Rate (Hz)",
-    )
-
-    # Right: Pattern 0 vs Control - signal vs noise
-    plot_cross_correlation_histogram(
-        spike_trains_trial1=viz_output_spikes,
-        spike_trains_trial2=viz_output_spikes_control,
-        window_size=0.05,  # 50 ms windows
-        dt=simulation.dt,
-        bin_size=0.1,  # 0.1 Hz bins
-        cell_type_indices=cell_type_indices,
-        assembly_ids=assembly_ids,
-        excitatory_idx=0,  # Assuming excitatory neurons are type 0
-        ax=ax2,
-        title="Pattern 0 vs Control",
-        x_label="Pattern 0 Rate (Hz)",
-        y_label="Control Rate (Hz)",
-    )
-
-    # Share axis limits across subplots
-    x_min = min(ax1.get_xlim()[0], ax2.get_xlim()[0])
-    x_max = max(ax1.get_xlim()[1], ax2.get_xlim()[1])
-    y_min = min(ax1.get_ylim()[0], ax2.get_ylim()[0])
-    y_max = max(ax1.get_ylim()[1], ax2.get_ylim()[1])
-    ax1.set_xlim(x_min, x_max)
-    ax1.set_ylim(y_min, y_max)
-    ax2.set_xlim(x_min, x_max)
-    ax2.set_ylim(y_min, y_max)
-
-    plt.tight_layout()
-    fig.savefig(
-        figures_dir / "cross_correlation_histogram.png", dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
+    plt.close(assembly_fig)
 
     print(f"✓ Saved dashboard plots to {figures_dir}")
     print("=" * len("GENERATING DASHBOARDS"))

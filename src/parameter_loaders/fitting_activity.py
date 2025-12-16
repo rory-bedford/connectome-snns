@@ -26,6 +26,7 @@ class SimulationConfigWithOdours(SimulationConfig):
     """
 
     batch_size: int
+    plot_size: int
 
 
 class StudentSimulationConfig(BaseModel):
@@ -174,6 +175,18 @@ class OdourInputConfig(BaseModel):
         }
 
 
+class OdourProcessConfig(BaseModel):
+    """Configuration for Ornstein-Uhlenbeck rate process dynamics.
+
+    Controls how firing rate patterns are modulated over time through
+    a stochastic OU process in pattern space.
+    """
+
+    tau: float
+    temperature: float
+    sigma: float
+
+
 # =============================================================================
 # TOP-LEVEL MODELS
 # =============================================================================
@@ -190,6 +203,9 @@ class TeacherActivityParams(BaseModel):
     recurrent: BaseRecurrentLayerConfig
     feedforward: BaseFeedforwardLayerConfig
     odours: Dict[str, OdourInputConfig]
+    tau: float
+    temperature: float
+    sigma: float
 
     def get_odour_configs_dict(self) -> dict[str, dict]:
         """Convert odour configurations to standard dictionaries.
