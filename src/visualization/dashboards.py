@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 
-from src.parameter_loaders import (
+from parameter_loaders import (
     EXCITATORY_SYNAPSE_TYPES,
     INHIBITORY_SYNAPSE_TYPES,
 )

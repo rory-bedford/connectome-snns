@@ -19,10 +19,59 @@ Generates teacher network spike trains from a pre-existing connectome structure 
 ### 2. `train_student.py` (Stage 4)
 Trains a student network to match teacher spike patterns using gradient descent with multiple loss functions (firing rate matching, van Rossum distance, silent neuron penalty).
 
-### 3. `plot_trained_network_vs_target.py`
-Compares trained student network outputs with teacher targets using cross-correlation analysis.
+### 3. `plot_trained_network_vs_target.py` (Post-Training Analysis)
+**Must be run after training is complete** on a trained experiment folder. Compares trained student network performance against the target (teacher) network to evaluate learning success.
 
-### 4. `resume_training.py`
+**Inputs:**
+- `experiment_dir`: Path to trained experiment folder (contains `checkpoints/checkpoint_best.pt`)
+- `output_dir`: Where to save comparison plots
+- `teacher_params_file`: Path to `generate-teacher-activity.toml` (for odour configurations)
+
+**What it does:**
+- Generates fresh odour 1 input spikes (using `HomogeneousPoissonSpikeDataLoader`)
+- Runs target network twice with different noise (batch size 2)
+- Runs trained network with identical input spikes as first target presentation
+- Creates three comparison plots:
+  1. **Variability comparison dashboard** (side-by-side):
+     - Left: Poisson variability (target odour 1 vs repeat) - shows intrinsic noise
+     - Right: Learning variability (target vs trained with same inputs) - shows learning quality
+  2. **Spike raster plot**: First 10 neurons with target/trained pairs interleaved
+
+**Usage:**
+```bash
+python scripts/fitting_activity/plot_trained_network_vs_target.py \
+    workspace/student_training_run \
+    workspace/student_training_run/comparison_plots \
+    parameters/generate-teacher-activity.toml
+```
+
+**Interpretation:** If learning variability is similar to Poisson variability, the student has learned as well as possible given stochastic spike generation.
+
+### 4. `plot_odourants.py` (Teacher Network Analysis)
+Analyzes how the teacher network responds to different odour inputs vs baseline activity. Useful for understanding odour selectivity before student training.
+
+**Inputs:**
+- `experiment_dir`: Path to teacher activity generation folder (contains `inputs/network_structure.npz` and `parameters.toml`)
+
+**What it does:**
+- Generates network responses to:
+  - Odourant 1 (two independent noise realizations)
+  - Baseline (homogeneous Poisson input without odour modulation)
+- Creates comparison plots:
+  1. **Input firing rate histogram**: Distribution of odourant 1 input rates
+  2. **Odourant comparison dashboard** (side-by-side):
+     - Left: Odourant 1 vs Baseline - shows odour selectivity
+     - Right: Odourant 1 vs Odourant 1 (repeat) - shows response reliability
+
+**Usage:**
+```bash
+python scripts/fitting_activity/plot_odourants.py \
+    workspace/teacher_activity_generation
+```
+
+Outputs saved to `experiment_dir/figures/`
+
+### 5. `resume_training.py`
 Resumes student training from a checkpoint after interruption.
 
 ## Features

@@ -40,15 +40,15 @@ class StudentSimulationConfig(BaseModel):
     seed: int
     chunk_size: int
 
-    # These are set by setup() method
-    dt: float = 0.0
+    # These are set by setup() method - must call setup() after loading dataset
+    dt: float | None = None
     num_chunks: int = 0
 
     def setup(self, dt: float, chunks_per_epoch: int, epochs: int) -> None:
         """Initialize computed simulation parameters from dataset and training config.
 
         Args:
-            dt: Timestep in milliseconds (from dataset).
+            dt: Timestep in milliseconds (from dataset zarr file).
             chunks_per_epoch: Number of chunks in one epoch (from dataset).
             epochs: Number of training epochs (from training config).
         """
@@ -58,11 +58,15 @@ class StudentSimulationConfig(BaseModel):
     @property
     def chunk_duration_s(self) -> float:
         """Duration of a single chunk in seconds."""
+        if self.dt is None:
+            raise ValueError("dt not initialized - call setup() after loading dataset")
         return self.chunk_size * self.dt / 1000.0
 
     @property
     def total_duration_s(self) -> float:
         """Total training duration in seconds."""
+        if self.dt is None:
+            raise ValueError("dt not initialized - call setup() after loading dataset")
         return self.num_chunks * self.chunk_duration_s
 
 
