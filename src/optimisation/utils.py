@@ -487,27 +487,42 @@ class AsyncPlotter:
         Args:
             job (Dict[str, Any]): Plot job containing data and metadata
         """
+        import inspect
+
         epoch = job["epoch"]
 
         # Create output directory for this epoch
         figures_dir = self.output_dir / "figures" / f"chunk_{epoch + 1:06d}"
         figures_dir.mkdir(parents=True, exist_ok=True)
 
-        # Prepare kwargs for plot generator
-        plot_kwargs = {
-            "weights": job["weights"],
-            **job["plot_data"],
-        }
+        # Prepare all available kwargs
+        all_kwargs = job["plot_data"].copy()  # Start with all activity data
+        all_kwargs["weights"] = job["weights"]
+
         if job["weights_ff"] is not None:
-            plot_kwargs["feedforward_weights"] = job["weights_ff"]
+            all_kwargs["feedforward_weights"] = job["weights_ff"]
         if job["connectome_mask"] is not None:
-            plot_kwargs["connectome_mask"] = job["connectome_mask"]
+            all_kwargs["connectome_mask"] = job["connectome_mask"]
         if job["feedforward_mask"] is not None:
-            plot_kwargs["feedforward_mask"] = job["feedforward_mask"]
+            all_kwargs["feedforward_mask"] = job["feedforward_mask"]
         if job["scaling_factors"] is not None:
-            plot_kwargs["scaling_factors"] = job["scaling_factors"]
+            all_kwargs["scaling_factors"] = job["scaling_factors"]
         if job["scaling_factors_FF"] is not None:
-            plot_kwargs["scaling_factors_FF"] = job["scaling_factors_FF"]
+            all_kwargs["scaling_factors_FF"] = job["scaling_factors_FF"]
+
+        # Filter kwargs to only include parameters that plot_generator accepts
+        sig = inspect.signature(self.plot_generator)
+        accepted_params = set(sig.parameters.keys())
+        has_var_keyword = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+
+        if has_var_keyword:
+            # Function accepts **kwargs, so pass everything
+            plot_kwargs = all_kwargs
+        else:
+            # Filter to only accepted parameters
+            plot_kwargs = {k: v for k, v in all_kwargs.items() if k in accepted_params}
 
         # Generate plots using the provided function
         figures = self.plot_generator(**plot_kwargs)

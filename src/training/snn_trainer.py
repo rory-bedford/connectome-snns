@@ -775,8 +775,6 @@ class SNNTrainer:
             # Get weights as separate parameters
             weights = copy_tensor_optimized(self.model.weights)
             weights_ff = copy_tensor_optimized(self.model.weights_FF)
-            scaling_factors = copy_tensor_optimized(self.model.scaling_factors)
-            scaling_factors_FF = copy_tensor_optimized(self.model.scaling_factors_FF)
 
             # Add weights and masks to plot_data
             plot_data["weights"] = weights
@@ -791,8 +789,6 @@ class SNNTrainer:
                 if self.feedforward_mask is not None
                 else None
             )
-            plot_data["scaling_factors"] = scaling_factors
-            plot_data["scaling_factors_FF"] = scaling_factors_FF
 
             # Submit plot with blocking to ensure it doesn't get skipped
             print("  📊 Submitting plot (will wait if queue is full)...")
