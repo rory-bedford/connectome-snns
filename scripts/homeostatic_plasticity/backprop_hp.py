@@ -178,7 +178,7 @@ def main(
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable="scaling_factors",
+        optimisable=training.optimisable,
         connectome_mask=connectivity_graph,
         feedforward_mask=feedforward_connectivity_graph,
         use_tqdm=False,  # Disable tqdm progress bar for training loop

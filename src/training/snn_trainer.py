@@ -493,13 +493,19 @@ class SNNTrainer:
         if self.debug_gradients:
             with torch.no_grad():
                 # If optimizing scaling factors, print individual scaling factor gradients
-                if self.model.optimisable == "scaling_factors":
+                if self.model.optimisable in [
+                    "scaling_factors",
+                    "scaling_factors_recurrent",
+                    "scaling_factors_feedforward",
+                ]:
                     recurrent_cell_types = self.params.recurrent.cell_types.names
                     feedforward_cell_types = self.params.feedforward.cell_types.names
 
-                    # Print recurrent scaling factor gradients
+                    # Print recurrent scaling factor gradients (if being optimized)
                     if (
-                        hasattr(self.model, "scaling_factors")
+                        self.model.optimisable
+                        in ["scaling_factors", "scaling_factors_recurrent"]
+                        and hasattr(self.model, "scaling_factors")
                         and self.model.scaling_factors.grad is not None
                     ):
                         scaling_grads = self.model.scaling_factors.grad.detach().cpu()
@@ -512,9 +518,11 @@ class SNNTrainer:
                                     f"  scaling_factors[{src_cell_type}→{tgt_cell_type}].grad: {grad_val:.6f}"
                                 )
 
-                    # Print feedforward scaling factor gradients
+                    # Print feedforward scaling factor gradients (if being optimized)
                     if (
-                        hasattr(self.model, "scaling_factors_FF")
+                        self.model.optimisable
+                        in ["scaling_factors", "scaling_factors_feedforward"]
+                        and hasattr(self.model, "scaling_factors_FF")
                         and self.model.scaling_factors_FF.grad is not None
                     ):
                         scaling_grads_ff = (

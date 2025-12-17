@@ -9,7 +9,13 @@ from typing import Literal
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
 FloatArray = NDArray[np.float64]
-OptimisableParams = Literal["weights", "scaling_factors", None]
+OptimisableParams = Literal[
+    "weights",
+    "scaling_factors",
+    "scaling_factors_recurrent",
+    "scaling_factors_feedforward",
+    None,
+]
 
 
 class ConductanceLIFNetwork_IO(nn.Module):
@@ -69,7 +75,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 If None, no scaling is applied (identity scaling).
             optimisable (OptimisableParams): What to optimise during training. Options:
                 - "weights": Optimise connection weights (weights and weights_FF)
-                - "scaling_factors": Optimise scaling factors (scaling_factors and scaling_factors_FF)
+                - "scaling_factors": Optimise both recurrent and feedforward scaling factors
+                - "scaling_factors_recurrent": Optimise only recurrent scaling factors
+                - "scaling_factors_feedforward": Optimise only feedforward scaling factors
                 - None: Don't optimise anything (all parameters are fixed) [default]
             connectome_mask (FloatArray | None): Boolean mask for recurrent connections of shape (n_neurons, n_neurons).
                 Required if optimisable="weights". If None, computed from weights != 0.
@@ -212,7 +220,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # OPTIMISABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
         # ===========================================================
 
-        # Register scaling factors (trainable if optimising scaling_factors)
+        # Register scaling factors (trainable based on optimisable mode)
         # Initialize to ones if not provided
         if scaling_factors is None:
             scaling_factors = np.ones(
@@ -222,7 +230,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self._register_parameter_or_buffer(
             "scaling_factors",
             scaling_factors,
-            trainable=(self.optimisable == "scaling_factors"),
+            trainable=(
+                self.optimisable in ["scaling_factors", "scaling_factors_recurrent"]
+            ),
         )
 
         if scaling_factors_FF is None:
@@ -233,7 +243,9 @@ class ConductanceLIFNetwork_IO(nn.Module):
         self._register_parameter_or_buffer(
             "scaling_factors_FF",
             scaling_factors_FF,
-            trainable=(self.optimisable == "scaling_factors"),
+            trainable=(
+                self.optimisable in ["scaling_factors", "scaling_factors_feedforward"]
+            ),
         )
 
         # ======================================================================
@@ -347,9 +359,14 @@ class ConductanceLIFNetwork_IO(nn.Module):
                     self.cached_weights_ff_syn_masks.append(syn_mask)
                     self.cached_weights_ff_indices.append(k)
 
-        elif self.optimisable == "scaling_factors":
+        elif self.optimisable in [
+            "scaling_factors",
+            "scaling_factors_recurrent",
+            "scaling_factors_feedforward",
+        ]:
             # === OPTIMIZE SCALING_FACTORS: Precompute weights * g_scale ===
             # Tensors have shape (n_neurons_in_type, n_neurons, 2, n_synapses_in_mask)
+            # Works for all scaling factor optimization modes - PyTorch only computes gradients for parameters with requires_grad=True
             for k in range(len(self.cell_type_masks)):
                 mask = self.cell_type_masks[k]
                 syn_mask = self.cell_to_synapse_mask[k]

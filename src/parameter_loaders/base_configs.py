@@ -4,7 +4,7 @@ Pydantic models for common configuration sections used in TOML files.
 """
 
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -29,6 +29,16 @@ class SimulationConfig(BaseModel):
     duration: float
     seed: int
     chunk_size: int
+    optimisable: (
+        Literal[
+            "weights",
+            "scaling_factors",
+            "scaling_factors_recurrent",
+            "scaling_factors_feedforward",
+            None,
+        ]
+        | None
+    ) = None
 
     @property
     def num_chunks(self) -> int:
@@ -55,6 +65,16 @@ class TrainingConfig(BaseModel):
     mixed_precision: bool
     plot_size: int
     grad_norm_clip: float
+    optimisable: (
+        Literal[
+            "weights",
+            "scaling_factors",
+            "scaling_factors_recurrent",
+            "scaling_factors_feedforward",
+            None,
+        ]
+        | None
+    ) = None
 
 
 # =============================================================================

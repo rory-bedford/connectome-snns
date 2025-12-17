@@ -22,6 +22,7 @@ plot_size = 200                        # Number of chunks to accumulate for plot
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
 grad_norm_clip = 1.0                   # Maximum norm for gradient clipping (None to disable)
+optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 
 # ===============
 # HYPERPARAMETERS

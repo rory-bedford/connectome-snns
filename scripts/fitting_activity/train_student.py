@@ -112,18 +112,21 @@ def main(
         cell_type_indices=cell_type_indices,
         feedforward_cell_type_indices=feedforward_cell_type_indices,
         variance=training.weight_perturbation_variance,
+        optimisable=training.optimisable,
     )
 
     # Create targets directory if it doesn't exist
     targets_dir = output_dir / "targets"
     targets_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save target scaling factors
-    np.savez(
-        targets_dir / "target_scaling_factors.npz",
-        recurrent_scaling_factors=target_scaling_factors,
-        feedforward_scaling_factors=target_feedforward_scaling_factors,
-    )
+    # Save target scaling factors (only save non-None targets)
+    target_data = {}
+    if target_scaling_factors is not None:
+        target_data["recurrent_scaling_factors"] = target_scaling_factors
+    if target_feedforward_scaling_factors is not None:
+        target_data["feedforward_scaling_factors"] = target_feedforward_scaling_factors
+
+    np.savez(targets_dir / "target_scaling_factors.npz", **target_data)
 
     # ======================
     # Load Dataset from Disk
@@ -168,7 +171,7 @@ def main(
         synapse_params_FF=feedforward.get_synapse_params(),
         scaling_factors=np.array(params.scaling_factors["recurrent"]),
         scaling_factors_FF=np.array(params.scaling_factors["feedforward"]),
-        optimisable="scaling_factors",
+        optimisable=training.optimisable,
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
@@ -186,10 +189,12 @@ def main(
     print(
         f"\nInitial feedforward scaling factors:\n{model.scaling_factors_FF.detach().cpu().numpy()}"
     )
-    print(f"\nTarget recurrent scaling factors:\n{target_scaling_factors}")
-    print(
-        f"\nTarget feedforward scaling factors:\n{target_feedforward_scaling_factors}"
-    )
+    if target_scaling_factors is not None:
+        print(f"\nTarget recurrent scaling factors:\n{target_scaling_factors}")
+    if target_feedforward_scaling_factors is not None:
+        print(
+            f"\nTarget feedforward scaling factors:\n{target_feedforward_scaling_factors}"
+        )
     print("=" * len(section) + "\n")
 
     # ==============================
@@ -362,27 +367,29 @@ def main(
         target_cell_types = params.recurrent.cell_types.names
         source_ff_cell_types = params.feedforward.cell_types.names
 
-        # Log recurrent scaling factors: source -> target
-        for target_idx, target_type in enumerate(target_cell_types):
-            for source_idx, source_type in enumerate(target_cell_types):
-                synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/recurrent/{synapse_name}/value"] = float(
-                    current_recurrent_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
-                    target_scaling_factors[source_idx, target_idx]
-                )
+        # Log recurrent scaling factors: source -> target (only if being optimized)
+        if target_scaling_factors is not None:
+            for target_idx, target_type in enumerate(target_cell_types):
+                for source_idx, source_type in enumerate(target_cell_types):
+                    synapse_name = f"{source_type}_to_{target_type}"
+                    stats[f"scaling_factors/recurrent/{synapse_name}/value"] = float(
+                        current_recurrent_sf[source_idx, target_idx]
+                    )
+                    stats[f"scaling_factors/recurrent/{synapse_name}/target"] = float(
+                        target_scaling_factors[source_idx, target_idx]
+                    )
 
-        # Log feedforward scaling factors: source_ff -> target
-        for target_idx, target_type in enumerate(target_cell_types):
-            for source_idx, source_type in enumerate(source_ff_cell_types):
-                synapse_name = f"{source_type}_to_{target_type}"
-                stats[f"scaling_factors/feedforward/{synapse_name}/value"] = float(
-                    current_feedforward_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
-                    target_feedforward_scaling_factors[source_idx, target_idx]
-                )
+        # Log feedforward scaling factors: source_ff -> target (only if being optimized)
+        if target_feedforward_scaling_factors is not None:
+            for target_idx, target_type in enumerate(target_cell_types):
+                for source_idx, source_type in enumerate(source_ff_cell_types):
+                    synapse_name = f"{source_type}_to_{target_type}"
+                    stats[f"scaling_factors/feedforward/{synapse_name}/value"] = float(
+                        current_feedforward_sf[source_idx, target_idx]
+                    )
+                    stats[f"scaling_factors/feedforward/{synapse_name}/target"] = float(
+                        target_feedforward_scaling_factors[source_idx, target_idx]
+                    )
 
         return stats
 
@@ -559,7 +566,7 @@ def main(
     )
 
     # Set debug flag from config
-    trainer.debug_gradients = True
+    trainer.debug_gradients = False
 
     # Handle checkpoint resuming
     if resume_from is not None:

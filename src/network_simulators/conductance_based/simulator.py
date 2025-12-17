@@ -186,7 +186,11 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     self.cached_weights_ff_indices,
                     cached_ff,
                 )
-            elif self.optimisable == "scaling_factors":
+            elif self.optimisable in [
+                "scaling_factors",
+                "scaling_factors_recurrent",
+                "scaling_factors_feedforward",
+            ]:
                 v, g, s, I, I_leak = self._step_optimize_scaling_factors(
                     v,
                     g,

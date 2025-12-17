@@ -3,7 +3,7 @@
 For training networks to match target activity patterns without fixed connectivity.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 from pydantic import BaseModel, model_validator
 from .base_configs import (
     SimulationConfig,
@@ -81,6 +81,12 @@ class StudentTrainingConfig(BaseModel):
     mixed_precision: bool
     weight_perturbation_variance: float
     grad_norm_clip: float | None = None
+    optimisable: Literal[
+        "weights",
+        "scaling_factors",
+        "scaling_factors_recurrent",
+        "scaling_factors_feedforward",
+    ]
 
     def total_chunks(self, num_chunks_per_epoch: int) -> int:
         """Total number of chunks across all epochs.

@@ -181,7 +181,7 @@ def main(
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
-        optimisable="weights",
+        optimisable=training.optimisable,
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 

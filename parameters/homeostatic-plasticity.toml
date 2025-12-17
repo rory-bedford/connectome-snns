@@ -23,6 +23,7 @@ mixed_precision = false                # Whether to train with mixed precision
 plot_size = 100                        # Number of chunks to save for plotting
 batch_size = 100                       # Number of batches to run in parallel for training
 grad_norm_clip = 1.0                   # Maximum gradient norm for clipping
+optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights", or null
 
 # ====================
 # OPTIMISATION TARGETS
