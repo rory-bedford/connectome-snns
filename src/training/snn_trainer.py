@@ -95,7 +95,6 @@ class SNNTrainer:
             pass
 
         # Training state
-        self.initial_states = {"v": None, "g": None, "g_FF": None}
         self.plot_accumulators = self._init_plot_accumulators()
 
         # Loss history for running averages (detached from computation graph)
@@ -210,9 +209,6 @@ class SNNTrainer:
             # Compute losses and backward pass (do this BEFORE detaching anything)
             losses = self._compute_losses(chunk_outputs)
 
-            # Update states for next chunk (now safe to detach)
-            self._update_initial_states(chunk_outputs)
-
             # Accumulate detached data for plotting
             self._accumulate_data(chunk_outputs, epoch)
 
@@ -274,7 +270,6 @@ class SNNTrainer:
             self.model._debug_weights = True
 
         # Get next data from dataloader
-        # With batch_size=None, DataLoader returns items directly without batching
         data = next(self.spike_iter)
 
         # Dataset returns (input_spikes, target_spikes) tuple
@@ -284,67 +279,57 @@ class SNNTrainer:
             input_spikes = data
             target_spikes = None
 
-        # Store original shape for reshaping outputs back
-        # Input shape: (..., chunk_size, n_input_neurons) - flatten all leading dims
-        original_shape = input_spikes.shape
-        leading_dims = original_shape[:-2]  # All dimensions except last 2
+        # Determine if we should track variables for logging/checkpointing
+        # Tracking is ONLY for visualization - always detached in simulator
+        # Losses only use spikes (+ model parameters accessed directly)
+        should_log_checkpoint = (
+            self._should_log(self.current_epoch)
+            or self._should_checkpoint(self.current_epoch)
+            or self.accumulated_chunks < self.training.plot_size
+        )
+        self.model.track_variables = should_log_checkpoint
 
-        # Reshape to 3D: (batch_combined, chunk_size, n_input_neurons)
-        input_spikes_3d = input_spikes.reshape(-1, *original_shape[-2:])
-
-        # Reshape initial states to match flattened batch dimension if they exist
-        initial_v = self.initial_states["v"]
-        initial_g = self.initial_states["g"]
-        initial_g_FF = self.initial_states["g_FF"]
-
-        if initial_v is not None:
-            # Flatten leading dims: (..., n_neurons) -> (batch_combined, n_neurons)
-            initial_v = initial_v.reshape(-1, initial_v.shape[-1])
-        if initial_g is not None:
-            # Flatten leading dims: (..., n_neurons, 2, n_cell_types) -> (batch_combined, n_neurons, 2, n_cell_types)
-            initial_g = initial_g.reshape(-1, *initial_g.shape[-3:])
-        if initial_g_FF is not None:
-            # Flatten leading dims: (..., n_neurons, 2, n_cell_types_FF) -> (batch_combined, n_neurons, 2, n_cell_types_FF)
-            initial_g_FF = initial_g_FF.reshape(-1, *initial_g_FF.shape[-3:])
+        # Always track only first batch element for memory efficiency
+        # (batch_size=1 tracked vs batch_size=N spikes)
+        self.model.track_batch_idx = 0 if should_log_checkpoint else None
 
         # Run network simulation with mixed precision
         with autocast(
             device_type="cuda",
             enabled=self.training.mixed_precision and self.device == "cuda",
         ):
-            outputs = self.model.forward(
-                input_spikes=input_spikes_3d,
-                initial_v=initial_v,
-                initial_g=initial_g,
-                initial_g_FF=initial_g_FF,
-            )
+            outputs = self.model.forward(input_spikes=input_spikes)
 
-        # Reshape outputs back to original leading dimensions + trailing dims
-        def reshape_output(tensor, leading_dims):
-            return tensor.reshape(*leading_dims, *tensor.shape[1:])
+        # Handle different return types based on tracking mode
+        if should_log_checkpoint:
+            # outputs is a dict with all variables (all detached except spikes)
+            result = {
+                "spikes": outputs["spikes"],
+                "input_spikes": input_spikes,
+                "target_spikes": target_spikes,
+            }
+            # Add tracked variables if they exist (for visualization only)
+            if "voltages" in outputs:
+                result["voltages"] = outputs["voltages"]
+            if "currents_recurrent" in outputs:
+                result["currents"] = outputs["currents_recurrent"]
+            if "currents_feedforward" in outputs:
+                result["currents_FF"] = outputs["currents_feedforward"]
+            if "currents_leak" in outputs:
+                result["currents_leak"] = outputs["currents_leak"]
+            if "conductances_recurrent" in outputs:
+                result["conductances"] = outputs["conductances_recurrent"]
+            if "conductances_feedforward" in outputs:
+                result["conductances_FF"] = outputs["conductances_feedforward"]
+        else:
+            # outputs is just the spike tensor
+            result = {
+                "spikes": outputs,
+                "input_spikes": input_spikes,
+                "target_spikes": target_spikes,
+            }
 
-        return {
-            "spikes": reshape_output(outputs[0], leading_dims),
-            "voltages": reshape_output(outputs[1], leading_dims),
-            "currents": reshape_output(outputs[2], leading_dims),
-            "currents_FF": reshape_output(outputs[3], leading_dims),
-            "currents_leak": reshape_output(outputs[4], leading_dims),
-            "conductances": reshape_output(outputs[5], leading_dims),
-            "conductances_FF": reshape_output(outputs[6], leading_dims),
-            "input_spikes": input_spikes,
-            "target_spikes": target_spikes,
-        }
-
-    def _update_initial_states(self, chunk_outputs: Dict[str, torch.Tensor]) -> None:
-        """Update initial states for next chunk."""
-        # Extract final timestep states, preserving all leading batch/pattern dimensions
-        # Voltages: (..., time, n_neurons) -> (..., n_neurons)
-        # Conductances: (..., time, n_neurons, 2, n_cell_types) -> (..., n_neurons, 2, n_cell_types)
-        self.initial_states = {
-            "v": chunk_outputs["voltages"][..., -1, :].detach(),
-            "g": chunk_outputs["conductances"][..., -1, :, :, :].detach(),
-            "g_FF": chunk_outputs["conductances_FF"][..., -1, :, :, :].detach(),
-        }
+        return result
 
     def _accumulate_data(
         self, chunk_outputs: Dict[str, torch.Tensor], epoch: int
@@ -353,8 +338,13 @@ class SNNTrainer:
         # Always accumulate data (used for both stats and plotting)
         # Accumulate up to plot_size, then start dropping oldest
         for key in self.plot_accumulators.keys():
+            # Skip keys that aren't present (e.g., voltages when not tracking for losses)
             if key == "input_spikes":
+                if "input_spikes" not in chunk_outputs:
+                    continue
                 tensor = chunk_outputs["input_spikes"]
+            elif key not in chunk_outputs:
+                continue
             else:
                 tensor = chunk_outputs[key]
 
@@ -1033,37 +1023,16 @@ class SNNTrainer:
                 print(f"  {display_name} Loss: {loss_value:.6f}")
         print("=" * 60)
 
-    def set_checkpoint_state(
-        self,
-        epoch: int,
-        best_loss: float,
-        initial_v: torch.Tensor,
-        initial_g: torch.Tensor,
-        initial_g_FF: torch.Tensor,
-    ) -> None:
+    def set_checkpoint_state(self, epoch: int, best_loss: float) -> None:
         """
         Set checkpoint state for resuming training.
+
+        Note: Model state (v, g, g_FF) is managed internally by the model via reset_state().
+        This method only sets the training loop state (epoch counter and best loss).
 
         Args:
             epoch (int): The epoch to resume from
             best_loss (float): The best loss achieved so far
-            initial_v (torch.Tensor): Initial voltage states
-            initial_g (torch.Tensor): Initial conductance states
-            initial_g_FF (torch.Tensor): Initial feedforward conductance states
         """
         self.current_epoch = epoch
         self.best_loss = best_loss
-        self.initial_states = {"v": initial_v, "g": initial_g, "g_FF": initial_g_FF}
-        """
-        Set checkpoint state for resuming training.
-
-        Args:
-            epoch (int): The epoch to resume from
-            best_loss (float): The best loss achieved so far
-            initial_v (torch.Tensor): Initial voltage states
-            initial_g (torch.Tensor): Initial conductance states
-            initial_g_FF (torch.Tensor): Initial feedforward conductance states
-        """
-        self.current_epoch = epoch
-        self.best_loss = best_loss
-        self.initial_states = {"v": initial_v, "g": initial_g, "g_FF": initial_g_FF}

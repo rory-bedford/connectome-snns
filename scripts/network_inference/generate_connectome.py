@@ -180,11 +180,13 @@ def main(input_dir, output_dir, params_file):
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference, but required parameter
+        batch_size=1,
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         optimisable=None,  # No optimization for inference
+        track_variables=True,  # Enable tracking for visualization
         use_tqdm=True,  # Enable model's internal progress bar for each chunk
     )
 
@@ -216,11 +218,6 @@ def main(input_dir, output_dir, params_file):
     all_output_conductances_FF = []
     all_input_spikes = []
 
-    # Initialize state variables (will be passed between chunks)
-    initial_v = None
-    initial_g = None
-    initial_g_FF = None
-
     # Run inference in chunks
     with torch.inference_mode():
         for chunk_idx in range(simulation.num_chunks):
@@ -231,29 +228,16 @@ def main(input_dir, output_dir, params_file):
             input_spikes_chunk = input_spikes_chunk.unsqueeze(0)  # Add batch dimension
 
             # Run one chunk of simulation
-            (
-                output_spikes,
-                output_voltages,
-                output_currents,
-                output_currents_FF,
-                output_currents_leak,
-                output_conductances,
-                output_conductances_FF,
-            ) = model.forward(
-                input_spikes=input_spikes_chunk,
-                initial_v=initial_v,
-                initial_g=initial_g,
-                initial_g_FF=initial_g_FF,
-            )
+            outputs = model.forward(input_spikes=input_spikes_chunk)
 
-            # Store final states for next chunk
-            initial_v = output_voltages[:, -1, :].clone()  # Last timestep voltages
-            initial_g = output_conductances[
-                :, -1, :, :
-            ].clone()  # Last timestep conductances
-            initial_g_FF = output_conductances_FF[
-                :, -1, :, :
-            ].clone()  # Last timestep FF conductances
+            # Extract outputs from dict
+            output_spikes = outputs["spikes"]
+            output_voltages = outputs["voltages"]
+            output_currents = outputs["currents_recurrent"]
+            output_currents_FF = outputs["currents_feedforward"]
+            output_currents_leak = outputs["currents_leak"]
+            output_conductances = outputs["conductances_recurrent"]
+            output_conductances_FF = outputs["conductances_feedforward"]
 
             # Move to CPU and accumulate results
             if device == "cuda":

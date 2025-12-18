@@ -106,11 +106,13 @@ def main(experiment_dir):
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=1.0,
+        batch_size=1,
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         optimisable=None,
+        track_variables=True,  # Enable tracking for visualization
         use_tqdm=False,
     ).to(device)
 
@@ -180,9 +182,6 @@ def main(experiment_dir):
     # Run network for all 3 patterns in parallel
     num_chunks = simulation.plot_size if hasattr(simulation, "plot_size") else 10
     all_spikes_chunks = []
-    initial_v_states = None
-    initial_g_states = None
-    initial_g_FF_states = None
 
     with torch.inference_mode():
         for chunk_idx, (input_spikes_chunk, pattern_indices) in enumerate(
@@ -198,48 +197,22 @@ def main(experiment_dir):
             # 4D case: (batch=1, n_patterns=3, time, inputs)
             batch_size, n_patterns, time_steps, n_inputs = input_spikes_chunk.shape
 
-            # Initialize state storage for each pattern (first chunk only)
-            if chunk_idx == 0:
-                initial_v_states = [None] * n_patterns
-                initial_g_states = [None] * n_patterns
-                initial_g_FF_states = [None] * n_patterns
-
             # Process each pattern separately
             chunk_outputs = []
             for pattern_idx in range(n_patterns):
+                # Reset state for each independent pattern (at start of each pattern)
+                if chunk_idx == 0:
+                    model.reset_state()
+
                 input_pattern = input_spikes_chunk[
                     :, pattern_idx, :, :
                 ]  # (batch, time, inputs)
 
-                # Get states for this pattern
-                state_v = initial_v_states[pattern_idx]
-                state_g = initial_g_states[pattern_idx]
-                state_g_FF = initial_g_FF_states[pattern_idx]
-
                 # Run network
-                (
-                    output_spikes_pattern,
-                    output_voltages,
-                    output_currents,
-                    output_currents_FF,
-                    output_currents_leak,
-                    output_conductances,
-                    output_conductances_FF,
-                ) = model(
-                    input_spikes=input_pattern,
-                    initial_v=state_v,
-                    initial_g=state_g,
-                    initial_g_FF=state_g_FF,
-                )
+                outputs = model.forward(input_spikes=input_pattern)
 
-                # Update states for next chunk
-                initial_v_states[pattern_idx] = output_voltages[:, -1, :].clone()
-                initial_g_states[pattern_idx] = output_conductances[
-                    :, -1, :, :, :
-                ].clone()
-                initial_g_FF_states[pattern_idx] = output_conductances_FF[
-                    :, -1, :, :, :
-                ].clone()
+                # Extract spikes from dict
+                output_spikes_pattern = outputs["spikes"]
 
                 # Store output
                 chunk_outputs.append(output_spikes_pattern.cpu())

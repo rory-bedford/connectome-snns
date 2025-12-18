@@ -14,61 +14,98 @@ FloatArray = NDArray[np.float64]
 
 
 class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
-    """Conductance-based LIF network simulator with connectome-constrained weights."""
+    """
+    Conductance-based LIF network simulator with connectome-constrained weights.
+
+    This simulator maintains internal state variables (v, g, g_FF) that automatically
+    continue across forward() calls, enabling efficient chunked simulation of long
+    time series without explicit state management.
+
+    State Management:
+        - Internal state automatically continues between forward() calls
+        - Call reset_state() before starting independent simulations
+        - Call reset_state(batch_size=N) to change batch size
+
+    Tracking Modes:
+        - track_variables=False (default): Returns only spikes, minimal memory
+        - track_variables=True: Returns full dict with all variables for analysis/visualization
+
+    Example:
+        >>> # Continuous simulation across chunks
+        >>> model = ConductanceLIFNetwork(..., batch_size=10, track_variables=False)
+        >>> for chunk in input_chunks:
+        ...     spikes = model.forward(chunk)  # State continues automatically
+        ...
+        >>> # Independent simulation with full tracking
+        >>> model.reset_state(batch_size=1)
+        >>> model.track_variables = True
+        >>> output_dict = model.forward(input_spikes)
+    """
 
     def forward(
         self,
-        input_spikes: FloatArray | None = None,
-        initial_v: FloatArray | None = None,
-        initial_g: FloatArray | None = None,
-        initial_g_FF: FloatArray | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        input_spikes: torch.Tensor | FloatArray,
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
         """
         Simulate the network for a given number of time steps.
 
+        Internal state (v, g, g_FF) is updated in-place and continues across calls.
+        Call reset_state() before starting a new independent simulation.
+
         Args:
-            input_spikes (FloatArray | None): External input spikes of shape (batch_size, n_steps, n_inputs).
-            initial_v (FloatArray | None): Initial membrane potentials of shape (batch_size, n_neurons). Defaults to resting potentials.
-            initial_g (FloatArray | None): Initial synaptic conductances of shape (batch_size, n_neurons, 2, n_cell_types). Defaults to zeros.
-            initial_g_FF (FloatArray | None): Initial feedforward synaptic conductances of shape (batch_size, n_neurons, 2, n_cell_types_FF). Defaults to zeros.
+            input_spikes (torch.Tensor | FloatArray): External input spikes of shape
+                (batch_size, n_steps, n_inputs). Batch size must match self.batch_size.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Tuple containing:
-                - all_s: Spike trains of shape (batch_size, n_steps, n_neurons)
-                - all_v: Membrane potentials of shape (batch_size, n_steps, n_neurons)
-                - all_I: Synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types)
-                - all_I_FF: Feedforward synaptic input currents of shape (batch_size, n_steps, n_neurons, n_synapse_types_FF)
-                - all_I_leak: Leak currents of shape (batch_size, n_steps, n_neurons)
-                - all_g: Synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types) where dim 3 is [rise, decay]
-                - all_g_FF: Feedforward synaptic conductances of shape (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF) where dim 3 is [rise, decay]
+            When track_variables=False:
+                torch.Tensor: Spike trains of shape (batch_size, n_steps, n_neurons)
+
+            When track_variables=True:
+                dict[str, torch.Tensor]: Dictionary containing:
+                    - "spikes": Spike trains (batch_size, n_steps, n_neurons)
+                    - "voltages": Membrane potentials (batch_size, n_steps, n_neurons)
+                    - "currents_recurrent": Recurrent synaptic currents (batch_size, n_steps, n_neurons, n_synapse_types)
+                    - "currents_feedforward": Feedforward synaptic currents (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+                    - "currents_leak": Leak currents (batch_size, n_steps, n_neurons)
+                    - "conductances_recurrent": Recurrent conductances (batch_size, n_steps, n_neurons, 2, n_synapse_types)
+                    - "conductances_feedforward": Feedforward conductances (batch_size, n_steps, n_neurons, 2, n_synapse_types_FF)
+
+        Raises:
+            ValueError: If input_spikes batch size doesn't match self.batch_size
         """
+        # Convert to tensor if needed
+        if isinstance(input_spikes, np.ndarray):
+            input_spikes = torch.from_numpy(input_spikes).float().to(self.device)
 
-        # ===============
         # Validate inputs
-        # ===============
+        self._validate_forward(input_spikes)
 
-        self._validate_forward(input_spikes, initial_v, initial_g, initial_g_FF)
-
-        # ==========================
-        # Initialize state variables
-        # ==========================
-
-        batch_size = input_spikes.shape[0]
         n_steps = input_spikes.shape[1]
 
-        # Membrane potentials (batch_size, n_neurons)
-        if initial_v is not None:
-            v = initial_v
-        else:
-            v = self.U_reset.repeat(batch_size, 1)
+        # Concatenate recurrent and feedforward conductances for unified processing
+        # Shape: (batch_size, n_neurons, 2, n_synapse_types + n_synapse_types_FF)
+        g = torch.cat([self.g, self.g_FF], dim=-1)
 
-        # Synaptic conductances (batch_size, n_neurons, 2, n_synapse_types + n_synapse_types_FF)
-        if initial_g is not None:
-            g = torch.cat([initial_g, initial_g_FF], dim=-1)
-        else:
-            g = torch.zeros(
+        # ==========================
+        # Conditionally allocate tracking arrays
+        # ==========================
+
+        if self.track_variables:
+            # Determine batch dimension for tracking
+            tracking_batch_size = (
+                1 if self.track_batch_idx is not None else self.batch_size
+            )
+
+            # Allocate storage for all variables
+            all_v = torch.empty(
+                (tracking_batch_size, n_steps, self.n_neurons),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            all_g = torch.empty(
                 (
-                    batch_size,
+                    tracking_batch_size,
+                    n_steps,
                     self.n_neurons,
                     2,
                     self.n_synapse_types + self.n_synapse_types_FF,
@@ -76,42 +113,20 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 dtype=torch.float32,
                 device=self.device,
             )
+            all_I = torch.empty(
+                (
+                    tracking_batch_size,
+                    n_steps,
+                    self.n_neurons,
+                    self.n_synapse_types + self.n_synapse_types_FF + 1,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
-        # Membrane potential storage (batch_size, n_steps, n_neurons)
-        all_v = torch.empty(
-            (batch_size, n_steps, self.n_neurons),
-            dtype=torch.float32,
-            device=self.device,
-        )
-
-        # Synaptic conductance storage (batch_size, n_steps, n_neurons, 2, n_synapse_types)
-        all_g = torch.empty(
-            (
-                batch_size,
-                n_steps,
-                self.n_neurons,
-                2,
-                self.n_synapse_types + self.n_synapse_types_FF,
-            ),
-            dtype=torch.float32,
-            device=self.device,
-        )
-
-        # Synaptic input current storage (batch_size, n_steps, n_neurons, n_synapse_types)
-        all_I = torch.empty(
-            (
-                batch_size,
-                n_steps,
-                self.n_neurons,
-                self.n_synapse_types + self.n_synapse_types_FF + 1,
-            ),
-            dtype=torch.float32,
-            device=self.device,
-        )
-
-        # Spike train storage (batch_size, n_steps, n_neurons)
+        # Always allocate spike storage
         all_s = torch.empty(
-            (batch_size, n_steps, self.n_neurons),
+            (self.batch_size, n_steps, self.n_neurons),
             dtype=torch.float32,
             device=self.device,
         )
@@ -137,8 +152,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         for t in iterator:
             # Call the appropriate _step method based on optimization mode
             if self.optimisable is None:
-                v, g, s, I, I_leak = self._step_inference(
-                    v,
+                self.v, g, s, I, I_leak = self._step_inference(
+                    self.v,
                     g,
                     input_spikes[:, t, :],
                     self.theta,
@@ -160,8 +175,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     cached_ff,
                 )
             elif self.optimisable == "weights":
-                v, g, s, I, I_leak = self._step_optimize_weights(
-                    v,
+                self.v, g, s, I, I_leak = self._step_optimize_weights(
+                    self.v,
                     g,
                     input_spikes[:, t, :],
                     self.theta,
@@ -191,8 +206,8 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                 "scaling_factors_recurrent",
                 "scaling_factors_feedforward",
             ]:
-                v, g, s, I, I_leak = self._step_optimize_scaling_factors(
-                    v,
+                self.v, g, s, I, I_leak = self._step_optimize_scaling_factors(
+                    self.v,
                     g,
                     input_spikes[:, t, :],
                     self.theta,
@@ -219,27 +234,64 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
                     cached_ff,
                 )
 
-            # Store variables
+            # Store spike output (spikes need gradients for training!)
             all_s[:, t, :] = s
-            all_v[:, t, :] = v
-            all_I[:, t, :, :-1] = I
-            all_I[:, t, :, -1] = I_leak
-            all_g[:, t, :, :, :] = g
 
-        return (
-            all_s,
-            all_v,
-            all_I[:, :, :, : self.n_synapse_types],
-            all_I[
-                :,
-                :,
-                :,
-                self.n_synapse_types : self.n_synapse_types + self.n_synapse_types_FF,
-            ],
-            all_I[:, :, :, -1],
-            all_g[:, :, :, :, : self.n_synapse_types],
-            all_g[:, :, :, :, self.n_synapse_types :],
-        )
+            # Conditionally store other variables (detach these for logging only)
+            if self.track_variables:
+                if self.track_batch_idx is not None:
+                    # Only track specified batch index
+                    all_v[:, t, :] = self.v[
+                        self.track_batch_idx : self.track_batch_idx + 1, :
+                    ].detach()
+                    all_I[:, t, :, :-1] = I[
+                        self.track_batch_idx : self.track_batch_idx + 1, :, :
+                    ].detach()
+                    all_I[:, t, :, -1] = I_leak[
+                        self.track_batch_idx : self.track_batch_idx + 1, :
+                    ].detach()
+                    all_g[:, t, :, :, :] = g[
+                        self.track_batch_idx : self.track_batch_idx + 1, :, :, :
+                    ].detach()
+                else:
+                    # Track all batch elements
+                    all_v[:, t, :] = self.v.detach()
+                    all_I[:, t, :, :-1] = I.detach()
+                    all_I[:, t, :, -1] = I_leak.detach()
+                    all_g[:, t, :, :, :] = g.detach()
+
+        # Update internal state variables (split g back into recurrent and feedforward)
+        self.g = g[:, :, :, : self.n_synapse_types]
+        self.g_FF = g[:, :, :, self.n_synapse_types :]
+
+        # CRITICAL: Detach state tensors to prevent carrying computation graph to next chunk
+        # Without this, chunk N+1 would try to use state from chunk N's (freed) graph
+        self.v = self.v.detach()
+        self.g = self.g.detach()
+        self.g_FF = self.g_FF.detach()
+
+        # ==============
+        # Return results
+        # ==============
+
+        if self.track_variables:
+            return {
+                "spikes": all_s,
+                "voltages": all_v,
+                "currents_recurrent": all_I[:, :, :, : self.n_synapse_types],
+                "currents_feedforward": all_I[
+                    :,
+                    :,
+                    :,
+                    self.n_synapse_types : self.n_synapse_types
+                    + self.n_synapse_types_FF,
+                ],
+                "currents_leak": all_I[:, :, :, -1],
+                "conductances_recurrent": all_g[:, :, :, :, : self.n_synapse_types],
+                "conductances_feedforward": all_g[:, :, :, :, self.n_synapse_types :],
+            }
+        else:
+            return all_s
 
     @staticmethod
     def _step_inference(

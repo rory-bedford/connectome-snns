@@ -167,12 +167,14 @@ def main(experiment_dir, output_dir, teacher_params_file):
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
+        batch_size=1,
         weights_FF=original_feedforward_weights,
         cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference
         optimisable=None,  # No optimization for target network
+        track_variables=True,  # Enable tracking for visualization
         use_tqdm=False,
     ).to(device)
 
@@ -194,10 +196,8 @@ def main(experiment_dir, output_dir, teacher_params_file):
     for run_idx in range(2):
         print(f"    Run {run_idx + 1}/2...")
 
-        # Reset states for each independent run
-        initial_v = None
-        initial_g = None
-        initial_g_FF = None
+        # Reset state for each independent run
+        target_model.reset_state()
 
         run_spikes = []
 
@@ -221,25 +221,16 @@ def main(experiment_dir, output_dir, teacher_params_file):
                     all_input_spikes_run1.append(input_spikes.cpu())
 
                 # Run simulation
-                (
-                    target_spikes_chunk,
-                    target_voltages,
-                    target_currents,
-                    target_currents_FF,
-                    target_currents_leak,
-                    target_conductances,
-                    target_conductances_FF,
-                ) = target_model(
-                    input_spikes=input_spikes,
-                    initial_v=initial_v,
-                    initial_g=initial_g,
-                    initial_g_FF=initial_g_FF,
-                )
+                outputs = target_model.forward(input_spikes=input_spikes)
 
-                # Store states for next chunk
-                initial_v = target_voltages[:, -1, :].clone()
-                initial_g = target_conductances[:, -1, :, :, :].clone()
-                initial_g_FF = target_conductances_FF[:, -1, :, :, :].clone()
+                # Extract outputs from dict
+                target_spikes_chunk = outputs["spikes"]
+                target_voltages = outputs["voltages"]
+                target_currents = outputs["currents_recurrent"]
+                target_currents_FF = outputs["currents_feedforward"]
+                target_currents_leak = outputs["currents_leak"]
+                target_conductances = outputs["conductances_recurrent"]
+                target_conductances_FF = outputs["conductances_feedforward"]
 
                 # Accumulate spikes
                 run_spikes.append(target_spikes_chunk.cpu())
@@ -272,12 +263,14 @@ def main(experiment_dir, output_dir, teacher_params_file):
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
+        batch_size=1,
         weights_FF=trained_feedforward_weights,  # Use final trained weights from final_state
         cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference
         optimisable=None,  # Inference mode - scaling factors already applied to weights
+        track_variables=True,  # Enable tracking for visualization
         use_tqdm=False,
     ).to(device)
 
@@ -298,9 +291,6 @@ def main(experiment_dir, output_dir, teacher_params_file):
     all_trained_currents_leak = []
     all_trained_conductances = []
     all_trained_conductances_FF = []
-    initial_v = None
-    initial_g = None
-    initial_g_FF = None
 
     # Run inference in chunks, using the saved input spikes
     with torch.inference_mode():
@@ -313,25 +303,16 @@ def main(experiment_dir, output_dir, teacher_params_file):
             input_pattern = input_spikes_for_trained[:, start_idx:end_idx, :].to(device)
 
             # Run one chunk of simulation
-            (
-                trained_spikes_chunk,
-                trained_voltages,
-                trained_currents,
-                trained_currents_FF,
-                trained_currents_leak,
-                trained_conductances,
-                trained_conductances_FF,
-            ) = trained_model(
-                input_spikes=input_pattern,
-                initial_v=initial_v,
-                initial_g=initial_g,
-                initial_g_FF=initial_g_FF,
-            )
+            outputs = trained_model.forward(input_spikes=input_pattern)
 
-            # Store final states for next chunk
-            initial_v = trained_voltages[:, -1, :].clone()
-            initial_g = trained_conductances[:, -1, :, :, :].clone()
-            initial_g_FF = trained_conductances_FF[:, -1, :, :, :].clone()
+            # Extract outputs from dict
+            trained_spikes_chunk = outputs["spikes"]
+            trained_voltages = outputs["voltages"]
+            trained_currents = outputs["currents_recurrent"]
+            trained_currents_FF = outputs["currents_feedforward"]
+            trained_currents_leak = outputs["currents_leak"]
+            trained_conductances = outputs["conductances_recurrent"]
+            trained_conductances_FF = outputs["conductances_feedforward"]
 
             # Move to CPU and accumulate results
             all_trained_spikes.append(trained_spikes_chunk.cpu())

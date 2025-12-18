@@ -149,11 +149,14 @@ def main(input_dir, output_dir, params_file):
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference, but required parameter
+        batch_size=batch_size,
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         optimisable=None,  # No optimization for inference
+        track_variables=False,  # Will enable only for visualization chunks
+        track_batch_idx=0,  # When tracking enabled, only track first batch element
         use_tqdm=False,  # Disable model's internal progress bar
     )
 
@@ -240,11 +243,6 @@ def main(input_dir, output_dir, params_file):
         f"DataLoader returns (batch_size={batch_size}, chunk_size={simulation.chunk_size}, n_input_neurons={n_input_neurons}) per iteration"
     )
 
-    # Initialize state variables: (batch_size, n_patterns, ...)
-    initial_v = None
-    initial_g = None
-    initial_g_FF = None
-
     # Variables to store traces from last plot_size chunks for visualization
     viz_chunks = simulation.plot_size
     viz_start_chunk = max(0, simulation.num_chunks - viz_chunks)
@@ -267,24 +265,28 @@ def main(input_dir, output_dir, params_file):
                 spike_dataloader, total=simulation.num_chunks, desc="Processing chunks"
             )
         ):
+            # Enable tracking for visualization chunks only (last few chunks)
+            if chunk_idx == viz_start_chunk:
+                model.track_variables = True
+
             # Unpack batch data: (spikes, rates, weights)
             input_spikes_chunk, input_rates_chunk, weights_chunk = batch_data
 
             # Run one chunk of simulation
-            (
-                output_spikes_chunk,
-                output_voltages_chunk,
-                output_currents_chunk,
-                output_currents_FF_chunk,
-                output_currents_leak_chunk,
-                output_conductances_chunk,
-                output_conductances_FF_chunk,
-            ) = model.forward(
-                input_spikes=input_spikes_chunk,
-                initial_v=initial_v,
-                initial_g=initial_g,
-                initial_g_FF=initial_g_FF,
-            )
+            outputs = model.forward(input_spikes=input_spikes_chunk)
+
+            # Extract outputs - handle both dict (tracking) and tensor (no tracking) returns
+            if isinstance(outputs, dict):
+                output_spikes_chunk = outputs["spikes"]
+                output_voltages_chunk = outputs["voltages"]
+                output_currents_chunk = outputs["currents_recurrent"]
+                output_currents_FF_chunk = outputs["currents_feedforward"]
+                output_currents_leak_chunk = outputs["currents_leak"]
+                output_conductances_chunk = outputs["conductances_recurrent"]
+                output_conductances_FF_chunk = outputs["conductances_feedforward"]
+            else:
+                # Only spikes returned when not tracking
+                output_spikes_chunk = outputs
 
             # Store traces from last few chunks for visualization
             if chunk_idx >= viz_start_chunk:
@@ -333,11 +335,6 @@ def main(input_dir, output_dir, params_file):
                     viz_ou_weights.append(
                         weights_chunk[0:1, :, :].clone()
                     )  # OU process weights
-
-            # Store final states for next chunk
-            initial_v = output_voltages_chunk[:, -1, :].clone()
-            initial_g = output_conductances_chunk[:, -1, :, :, :].clone()
-            initial_g_FF = output_conductances_FF_chunk[:, -1, :, :, :].clone()
 
             # Write directly to zarr arrays - stream to disk, no RAM accumulation!
             start_idx = chunk_idx * simulation.chunk_size

@@ -177,11 +177,13 @@ def main(
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
         surrgrad_scale=hyperparameters.surrgrad_scale,
+        batch_size=training.batch_size,
         weights_FF=feedforward_weights,
         cell_type_indices_FF=input_source_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         optimisable=training.optimisable,
+        track_variables=False,  # Disable tracking by default for training
         use_tqdm=False,  # Disable tqdm progress bar for training loop
     )
 
@@ -472,24 +474,26 @@ def main(
         )
         inference_input_spikes, _ = next(iter(inference_dataloader))
 
+        # Reset state for independent inference run and switch to batch_size=1
+        model.reset_state(batch_size=1)
+        model.track_variables = True
+
         # Run inference with tqdm progress bar
         model.use_tqdm = True
         with torch.inference_mode():
-            (
-                inf_spikes,
-                inf_voltages,
-                inf_currents,
-                inf_currents_FF,
-                inf_currents_leak,
-                inf_conductances,
-                inf_conductances_FF,
-            ) = model.forward(
-                input_spikes=inference_input_spikes,
-                initial_v=None,
-                initial_g=None,
-                initial_g_FF=None,
-            )
+            outputs = model.forward(input_spikes=inference_input_spikes)
+
+        # Extract outputs from dict
+        inf_spikes = outputs["spikes"]
+        inf_voltages = outputs["voltages"]
+        inf_currents = outputs["currents_recurrent"]
+        inf_currents_FF = outputs["currents_feedforward"]
+        inf_currents_leak = outputs["currents_leak"]
+        inf_conductances = outputs["conductances_recurrent"]
+        inf_conductances_FF = outputs["conductances_feedforward"]
+
         model.use_tqdm = False
+        model.track_variables = False
 
         print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")
 
@@ -674,23 +678,24 @@ def main(
     )
     final_inference_input_spikes, _ = next(iter(final_inference_dataloader))
 
+    # Reset state for independent inference run and switch to batch_size=1
+    model.reset_state(batch_size=1)
+    model.track_variables = True
+
     # Run inference with tqdm progress bar
     model.use_tqdm = True
     with torch.inference_mode():
-        (
-            final_inf_spikes,
-            final_inf_voltages,
-            final_inf_currents,
-            final_inf_currents_FF,
-            final_inf_currents_leak,
-            final_inf_conductances,
-            final_inf_conductances_FF,
-        ) = model.forward(
-            input_spikes=final_inference_input_spikes,
-            initial_v=None,
-            initial_g=None,
-            initial_g_FF=None,
-        )
+        final_outputs = model.forward(input_spikes=final_inference_input_spikes)
+
+    # Extract outputs from dict
+    final_inf_spikes = final_outputs["spikes"]
+    final_inf_voltages = final_outputs["voltages"]
+    final_inf_currents = final_outputs["currents_recurrent"]
+    final_inf_currents_FF = final_outputs["currents_feedforward"]
+    final_inf_currents_leak = final_outputs["currents_leak"]
+    final_inf_conductances = final_outputs["conductances_recurrent"]
+    final_inf_conductances_FF = final_outputs["conductances_feedforward"]
+
     model.use_tqdm = False
 
     print(f"✓ Inference completed ({inference_duration_ms / 1000:.1f}s simulated)")

@@ -33,11 +33,14 @@ class ConductanceLIFNetwork_IO(nn.Module):
         synapse_params: list[dict],
         synapse_params_FF: list[dict],
         surrgrad_scale: float,
+        batch_size: int,
         scaling_factors: FloatArray | None = None,
         scaling_factors_FF: FloatArray | None = None,
         optimisable: OptimisableParams = None,
         connectome_mask: FloatArray | None = None,
         feedforward_mask: FloatArray | None = None,
+        track_variables: bool = False,
+        track_batch_idx: int | None = None,
         use_tqdm: bool = True,
     ):
         """
@@ -49,6 +52,7 @@ class ConductanceLIFNetwork_IO(nn.Module):
             weights_FF (FloatArray): Feedforward weight matrix of shape (n_inputs, n_neurons).
             cell_type_indices (IntArray): Array of shape (n_neurons,) with cell type indices (0, 1, 2, ...).
             cell_type_indices_FF (IntArray): Array of feedforward cell type indices.
+            batch_size (int): Number of parallel simulations to run (batch dimension).
             cell_params (list[dict]): List of cell type parameter dicts. Each dict contains:
                 - 'name' (str): Cell type name (e.g., 'excitatory', 'inhibitory')
                 - 'cell_id' (int): Cell type ID (0, 1, 2, ...)
@@ -83,6 +87,13 @@ class ConductanceLIFNetwork_IO(nn.Module):
                 Required if optimisable="weights". If None, computed from weights != 0.
             feedforward_mask (FloatArray | None): Boolean mask for feedforward connections of shape (n_inputs, n_neurons).
                 Required if optimisable="weights". If None, computed from weights_FF != 0.
+            track_variables (bool): Whether to accumulate and return internal state variables (v, g, I) over time.
+                When False (default), only spikes are returned and memory usage is minimized.
+                When True, all variables are tracked and returned as a dict for analysis/visualization.
+            track_batch_idx (int | None): Which batch index to track when track_variables=True.
+                If None (default), tracks all batch elements. If an integer, only tracks that specific
+                batch index, reducing memory usage by a factor of batch_size. Useful for visualization
+                where only one example is needed. Ignored when track_variables=False.
             use_tqdm (bool): Whether to display tqdm progress bar during forward pass. Default is True.
         """
         super(ConductanceLIFNetwork_IO, self).__init__()
@@ -90,7 +101,10 @@ class ConductanceLIFNetwork_IO(nn.Module):
         # Store optimisation mode
         self.optimisable = optimisable
 
-        # Store tqdm preference
+        # Store batch size and tracking preference
+        self.batch_size = batch_size
+        self.track_variables = track_variables
+        self.track_batch_idx = track_batch_idx
         self.use_tqdm = use_tqdm
 
         # =================================
@@ -399,6 +413,67 @@ class ConductanceLIFNetwork_IO(nn.Module):
                     self.cached_weights_ff_masks.append(mask)
                     self.cached_weights_ff_syn_masks.append(syn_mask)
                     self.cached_weights_ff_indices.append(k)
+
+        # Initialize internal state variables
+        self.reset_state()
+
+    def reset_state(self, batch_size: int | None = None) -> None:
+        """
+        Reset internal state variables to initial conditions.
+
+        This method resets the membrane potentials (v), recurrent conductances (g), and
+        feedforward conductances (g_FF) to their initial states. Call this before starting
+        independent simulations or when changing batch size.
+
+        State variables after reset:
+        - self.v: Membrane potentials set to resting potential (v_rest)
+        - self.g: Recurrent synaptic conductances set to zeros
+        - self.g_FF: Feedforward synaptic conductances set to zeros
+
+        Args:
+            batch_size (int | None): New batch size for state tensors. If None, uses self.batch_size.
+                Use this parameter when switching between training (larger batches) and
+                visualization (typically batch_size=1).
+
+        Example:
+            >>> # Reset for new independent simulation
+            >>> model.reset_state()
+            >>>
+            >>> # Change batch size for visualization
+            >>> model.reset_state(batch_size=1)
+        """
+        if batch_size is not None:
+            self.batch_size = batch_size
+
+        # Initialize membrane potentials to resting potential
+        # Shape: (batch_size, n_neurons)
+        # Explicitly create on self.device to ensure consistency
+        v = torch.full(
+            (self.batch_size, self.n_neurons),
+            fill_value=0.0,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        v[:] = self.U_reset.unsqueeze(0)  # Broadcast resting potential
+        self.register_buffer("v", v, persistent=False)
+
+        # Initialize recurrent synaptic conductances to zeros
+        # Shape: (batch_size, n_neurons, 2, n_synapse_types)
+        g = torch.zeros(
+            (self.batch_size, self.n_neurons, 2, self.n_synapse_types),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.register_buffer("g", g, persistent=False)
+
+        # Initialize feedforward synaptic conductances to zeros
+        # Shape: (batch_size, n_neurons, 2, n_synapse_types_FF)
+        g_FF = torch.zeros(
+            (self.batch_size, self.n_neurons, 2, self.n_synapse_types_FF),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self.register_buffer("g_FF", g_FF, persistent=False)
 
     def _register_parameter_or_buffer(
         self, name: str, value: torch.Tensor | np.ndarray, trainable: bool = False
@@ -997,108 +1072,32 @@ class ConductanceLIFNetwork_IO(nn.Module):
 
         return n_cell_types, n_synapse_types, n_cell_types_FF, n_synapse_types_FF
 
-    def _validate_forward(
-        self,
-        input_spikes: torch.Tensor,
-        initial_v: torch.Tensor | None,
-        initial_g: torch.Tensor | None,
-        initial_g_FF: torch.Tensor | None,
-    ) -> None:
-        """Validate the inputs to the forward method."""
+    def _validate_forward(self, input_spikes: torch.Tensor) -> None:
+        """Validate the inputs to the forward method.
 
-        # Validate input_spikes (now required, not nullable)
+        Args:
+            input_spikes: Input spike tensor to validate
+
+        Raises:
+            AssertionError: If validation fails
+            ValueError: If batch size mismatch
+        """
         assert input_spikes is not None, "input_spikes cannot be None"
         assert isinstance(input_spikes, torch.Tensor), (
             "input_spikes must be a torch.Tensor"
-        )
-        assert input_spikes.dtype == torch.bool, (
-            f"input_spikes must be torch.bool, but got {input_spikes.dtype}"
         )
         assert input_spikes.device == self.device, (
             f"input_spikes must be on device {self.device}, but got {input_spikes.device}"
         )
         assert input_spikes.ndim == 3, (
-            "input_spikes must have 3 dimensions (batch_size, n_steps, n_inputs)."
+            f"input_spikes must have 3 dimensions (batch_size, n_steps, n_inputs), got shape {input_spikes.shape}"
         )
-
-        # Determine batch size and n_steps from input_spikes
-        batch_size = input_spikes.shape[0]
-
         assert input_spikes.shape[2] == self.n_inputs, (
-            "input_spikes must match the number of feedforward inputs."
+            f"input_spikes shape[2] must match n_inputs ({self.n_inputs}), got {input_spikes.shape[2]}"
         )
 
-        # Validate initial conductances if provided
-        if initial_g is not None:
-            assert isinstance(initial_g, torch.Tensor), (
-                "initial_g must be a torch.Tensor"
-            )
-            assert initial_g.dtype == torch.float32, (
-                f"initial_g must be torch.float32, but got {initial_g.dtype}"
-            )
-            assert initial_g.device == self.device, (
-                f"initial_g must be on device {self.device}, but got {initial_g.device}"
-            )
-            assert initial_g.ndim == 4, (
-                "initial_g must have 4 dimensions (batch_size, n_neurons, 2, n_synapse_types)."
-            )
-            assert initial_g.shape[0] == batch_size, (
-                "initial_g batch size must match batch_size."
-            )
-            assert initial_g.shape[1] == self.n_neurons, (
-                "initial_g must match n_neurons."
-            )
-            assert initial_g.shape[2] == 2, (
-                "initial_g must have 2 for rise/decay components."
-            )
-            assert initial_g.shape[3] == self.n_synapse_types, (
-                "initial_g must match the number of synapse types."
-            )
-
-        # Validate initial feedforward conductances if provided
-        if initial_g_FF is not None:
-            assert isinstance(initial_g_FF, torch.Tensor), (
-                "initial_g_FF must be a torch.Tensor"
-            )
-            assert initial_g_FF.dtype == torch.float32, (
-                f"initial_g_FF must be torch.float32, but got {initial_g_FF.dtype}"
-            )
-            assert initial_g_FF.device == self.device, (
-                f"initial_g_FF must be on device {self.device}, but got {initial_g_FF.device}"
-            )
-            assert initial_g_FF.ndim == 4, (
-                "initial_g_FF must have 4 dimensions (batch_size, n_neurons, 2, n_synapse_types_FF)."
-            )
-            assert initial_g_FF.shape[0] == batch_size, (
-                "initial_g_FF batch size must match batch_size."
-            )
-            assert initial_g_FF.shape[1] == self.n_neurons, (
-                "initial_g_FF must match n_neurons."
-            )
-            assert initial_g_FF.shape[2] == 2, (
-                "initial_g_FF must have 2 for rise/decay components."
-            )
-            assert initial_g_FF.shape[3] == self.n_synapse_types_FF, (
-                "initial_g_FF must match the number of feedforward synapse types."
-            )
-
-        # Validate initial membrane potentials if provided
-        if initial_v is not None:
-            assert isinstance(initial_v, torch.Tensor), (
-                "initial_v must be a torch.Tensor"
-            )
-            assert initial_v.dtype == torch.float32, (
-                f"initial_v must be torch.float32, but got {initial_v.dtype}"
-            )
-            assert initial_v.device == self.device, (
-                f"initial_v must be on device {self.device}, but got {initial_v.device}"
-            )
-            assert initial_v.ndim == 2, (
-                "initial_v must have 2 dimensions (batch_size, n_neurons)."
-            )
-            assert initial_v.shape[1] == self.n_neurons, (
-                "initial_v must match n_neurons."
-            )
-            assert initial_v.shape[0] == batch_size, (
-                "initial_v batch size must match batch_size."
+        if input_spikes.shape[0] != self.batch_size:
+            raise ValueError(
+                f"Input batch size ({input_spikes.shape[0]}) does not match "
+                f"model batch size ({self.batch_size}). Call reset_state(batch_size={input_spikes.shape[0]}) first."
             )
