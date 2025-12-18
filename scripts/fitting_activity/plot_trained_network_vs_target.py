@@ -89,19 +89,21 @@ def main(experiment_dir, output_dir, teacher_params_file):
     ]
     assembly_ids = original_network_structure["assembly_ids"]
 
-    # Load PERTURBED network for trained model (from initial_state)
-    initial_state_dir = experiment_dir / "initial_state"
-    perturbed_network_structure = np.load(initial_state_dir / "network_structure.npz")
+    # Load TRAINED network for student model (from final_state)
+    final_state_dir = experiment_dir / "final_state"
+    trained_network_structure = np.load(final_state_dir / "network_structure.npz")
 
-    perturbed_weights = perturbed_network_structure["recurrent_weights"]
-    perturbed_feedforward_weights = perturbed_network_structure["feedforward_weights"]
+    trained_weights = trained_network_structure["recurrent_weights"]
+    trained_feedforward_weights = trained_network_structure["feedforward_weights"]
 
     # Load assembly structure
     n_assemblies = len(np.unique(assembly_ids[assembly_ids >= 0]))
     print(
         f"✓ Loaded original (target) network with {len(cell_type_indices)} neurons ({n_assemblies} assemblies)"
     )
-    print("✓ Loaded perturbed (initial) network for trained model")
+    print(
+        "✓ Loaded trained (final) network weights with learned scaling factors applied"
+    )
 
     # ========================================
     # Generate Odour 1 Firing Rates (repeated)
@@ -257,35 +259,27 @@ def main(experiment_dir, output_dir, teacher_params_file):
     print(f"✓ Generated target spikes (2 runs): {target_spikes_runs[0].shape} each")
 
     # ====================================
-    # Load Best Checkpoint and Run
+    # Initialize Trained Network and Run
     # ====================================
 
-    checkpoint_path = experiment_dir / "checkpoints" / "checkpoint_best.pt"
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Best checkpoint not found at {checkpoint_path}")
+    print("\nInitializing trained network with final weights...")
 
-    print(f"\nLoading best checkpoint from {checkpoint_path}...")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-    # Initialize trained model with PERTURBED weights
-    # The checkpoint contains scaling factors that multiply these perturbed weights
+    # Initialize trained model with TRAINED weights from final_state
+    # These weights already have scaling factors applied (perturbed_weights * learned_scaling_factors)
     trained_model = ConductanceLIFNetwork(
         dt=dt,
-        weights=perturbed_weights,  # Use perturbed weights from initial_state
+        weights=trained_weights,  # Use final trained weights from final_state
         cell_type_indices=cell_type_indices,
         cell_params=recurrent.get_cell_params(),
         synapse_params=recurrent.get_synapse_params(),
-        weights_FF=perturbed_feedforward_weights,  # Use perturbed weights from initial_state
+        weights_FF=trained_feedforward_weights,  # Use final trained weights from final_state
         cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params_FF=feedforward.get_cell_params(),
         synapse_params_FF=feedforward.get_synapse_params(),
         surrgrad_scale=1.0,  # Not used for inference
-        optimisable=None,  # No optimization needed for inference
+        optimisable=None,  # Inference mode - scaling factors already applied to weights
         use_tqdm=False,
     ).to(device)
-
-    # Load trained weights from checkpoint
-    trained_model.load_state_dict(checkpoint["model_state_dict"])
 
     print(
         "  Running trained network simulation (using identical input spikes as target run 1)..."

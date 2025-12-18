@@ -652,13 +652,13 @@ def main(
     # Calculate number of chunks needed for 10s
     chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
 
-    # Collect input spikes from precomputed dataset (batch 0, pattern 0)
+    # Collect input spikes from precomputed dataset (batch 0)
     final_inference_input_spikes_list = []
     for chunk_idx in range(chunks_needed):
         input_chunk, target_chunk = spike_dataset[chunk_idx]
-        # Dataset returns (batch, patterns, time, neurons)
-        # Extract batch 0, pattern 0: (time, neurons)
-        final_inference_input_spikes_list.append(input_chunk[0, 0, :, :])
+        # Dataset returns (batch, time, neurons)
+        # Extract batch 0: (time, neurons)
+        final_inference_input_spikes_list.append(input_chunk[0, :, :])
 
     # Concatenate chunks and truncate to exact duration
     final_inference_input_spikes = torch.cat(final_inference_input_spikes_list, dim=0)[
