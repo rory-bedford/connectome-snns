@@ -150,3 +150,46 @@ class CyclicSampler(Sampler):
     def __len__(self) -> int:
         """Return a very large number to indicate indefinite iteration."""
         return 2**31 - 1  # Effectively infinite
+
+
+def single_neuron_collate_fn(
+    batch: Tuple[torch.Tensor, torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Custom collate function for single-neuron training.
+
+    Concatenates feedforward and recurrent spikes as inputs, extracts neuron 0 as target.
+    Designed for training a single neuron with feedforward-only dynamics where all recurrent
+    neurons become additional inputs alongside feedforward neurons.
+
+    Args:
+        batch: Tuple of (input_spikes, target_spikes) from PrecomputedSpikeDataset
+            input_spikes: (batch, time, n_feedforward) - feedforward neuron spikes
+            target_spikes: (batch, time, n_neurons) - recurrent neuron spikes
+
+    Returns:
+        Tuple of (concatenated_inputs, single_neuron_target)
+            concatenated_inputs: (batch, time, n_feedforward + n_neurons)
+            single_neuron_target: (batch, time, 1)
+
+    Example:
+        >>> dataloader = DataLoader(
+        ...     dataset,
+        ...     batch_size=None,
+        ...     collate_fn=single_neuron_collate_fn
+        ... )
+        >>> for inputs, target in dataloader:
+        ...     # inputs.shape: (batch, time, n_total_inputs)
+        ...     # target.shape: (batch, time, 1)
+    """
+    input_spikes, target_spikes = batch
+
+    # Concatenate feedforward and recurrent spikes along neuron dimension
+    # Shape: (batch, time, n_feedforward + n_neurons)
+    concatenated_inputs = torch.cat([input_spikes, target_spikes], dim=2)
+
+    # Extract only neuron 0 as target
+    # Shape: (batch, time, 1)
+    single_neuron_target = target_spikes[:, :, 0:1]
+
+    return concatenated_inputs, single_neuron_target

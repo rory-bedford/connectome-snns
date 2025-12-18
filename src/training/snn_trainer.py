@@ -125,6 +125,7 @@ class SNNTrainer:
             "conductances": [],
             "conductances_FF": [],
             "input_spikes": [],
+            "target_spikes": [],
         }
 
     def train(
@@ -343,13 +344,20 @@ class SNNTrainer:
                 if "input_spikes" not in chunk_outputs:
                     continue
                 tensor = chunk_outputs["input_spikes"]
+            elif key == "target_spikes":
+                if (
+                    "target_spikes" not in chunk_outputs
+                    or chunk_outputs["target_spikes"] is None
+                ):
+                    continue
+                tensor = chunk_outputs["target_spikes"]
             elif key not in chunk_outputs:
                 continue
             else:
                 tensor = chunk_outputs[key]
 
             # Convert spikes to bool for storage efficiency
-            if key == "spikes":
+            if key in ("spikes", "target_spikes"):
                 tensor = tensor.bool()
 
             # Only store batch 0 to reduce memory usage 100x
@@ -626,20 +634,28 @@ class SNNTrainer:
         stats = {}
         if self.stats_computer:
             # Copy model parameters to numpy (on CPU) for stats computation
-            if self.device == "cuda":
-                model_snapshot = {
-                    "scaling_factors": self.model.scaling_factors.detach()
-                    .cpu()
-                    .numpy(),
-                    "scaling_factors_FF": self.model.scaling_factors_FF.detach()
-                    .cpu()
-                    .numpy(),
-                }
-            else:
-                model_snapshot = {
-                    "scaling_factors": self.model.scaling_factors.detach().numpy(),
-                    "scaling_factors_FF": self.model.scaling_factors_FF.detach().numpy(),
-                }
+            model_snapshot = {}
+
+            # Add scaling factors if they exist (handle both recurrent and feedforward models)
+            if hasattr(self.model, "scaling_factors"):
+                if self.device == "cuda":
+                    model_snapshot["scaling_factors"] = (
+                        self.model.scaling_factors.detach().cpu().numpy()
+                    )
+                else:
+                    model_snapshot["scaling_factors"] = (
+                        self.model.scaling_factors.detach().numpy()
+                    )
+
+            if hasattr(self.model, "scaling_factors_FF"):
+                if self.device == "cuda":
+                    model_snapshot["scaling_factors_FF"] = (
+                        self.model.scaling_factors_FF.detach().cpu().numpy()
+                    )
+                else:
+                    model_snapshot["scaling_factors_FF"] = (
+                        self.model.scaling_factors_FF.detach().numpy()
+                    )
 
             # Compute stats synchronously
             stats = self.stats_computer(spikes, model_snapshot)
@@ -736,6 +752,19 @@ class SNNTrainer:
         # Concatenate plot data
         plot_data = self._concatenate_plot_data()
 
+        # Capture current model state for checkpoint
+        # Handle both recurrent (v, g, g_FF) and feedforward-only (v, g_FF) models
+        initial_states = {}
+        if hasattr(self.model, "v"):
+            initial_states["v"] = self.model.v.cpu().numpy()
+        if hasattr(self.model, "g"):
+            initial_states["g"] = self.model.g.cpu().numpy()
+        else:
+            # Feedforward-only model doesn't have recurrent conductances
+            initial_states["g"] = np.array([])
+        if hasattr(self.model, "g_FF"):
+            initial_states["g_FF"] = self.model.g_FF.cpu().numpy()
+
         # Save checkpoint
         is_best = save_checkpoint(
             output_dir=output_dir,
@@ -743,9 +772,9 @@ class SNNTrainer:
             model=self.model,
             optimiser=self.optimizer,
             scaler=self.scaler,
-            initial_v=self.initial_states["v"].cpu().numpy(),
-            initial_g=self.initial_states["g"].cpu().numpy(),
-            initial_g_FF=self.initial_states["g_FF"].cpu().numpy(),
+            initial_v=initial_states["v"],
+            initial_g=initial_states["g"],
+            initial_g_FF=initial_states["g_FF"],
             input_spikes=plot_data["input_spikes"],
             **losses,
             best_loss=best_loss,
@@ -771,8 +800,15 @@ class SNNTrainer:
             }
 
             # Get weights as separate parameters
-            weights = copy_tensor_optimized(self.model.weights)
-            weights_ff = copy_tensor_optimized(self.model.weights_FF)
+            # Handle both recurrent (weights + weights_FF) and feedforward-only (weights_FF) models
+            if hasattr(self.model, "weights"):
+                weights = copy_tensor_optimized(self.model.weights)
+            else:
+                weights = None
+            if hasattr(self.model, "weights_FF"):
+                weights_ff = copy_tensor_optimized(self.model.weights_FF)
+            else:
+                weights_ff = None
 
             # Add weights and masks to plot_data
             plot_data["weights"] = weights
