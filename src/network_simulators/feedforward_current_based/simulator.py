@@ -114,11 +114,28 @@ class FeedforwardCurrentLIFNetwork(FeedforwardCurrentLIFNetwork_IO):
         # Run simulation
         # ==============
 
-        # Gather cached weight tensors into lists once (outside the loop)
-        cached_ff = [
-            getattr(self, f"cached_ff_{i}")
-            for i in range(len(self.cached_weights_ff_masks))
-        ]
+        # Gather cached weight tensors into lists
+        # If optimizing weights, recompute them each forward pass to avoid reusing stale graphs
+        if self.optimisable == "weights":
+            cached_ff = []
+            for k, (mask, syn_mask) in enumerate(
+                zip(
+                    self.cached_weights_ff_masks,
+                    self.cached_weights_ff_syn_masks,
+                )
+            ):
+                # Get current weights (fresh from log_weights_FF_flat)
+                cell_id = int(self.cell_type_indices_FF[mask][0])
+                weights_for_type = self.weights_FF[mask, :][:, :, None]
+                n_syn_in_mask = syn_mask.sum().item()
+                weights_product = weights_for_type.expand(-1, -1, n_syn_in_mask)
+                cached_ff.append(weights_product)
+        else:
+            # For non-trainable weights, use cached buffers (reused across forward calls)
+            cached_ff = [
+                getattr(self, f"cached_ff_{i}")
+                for i in range(len(self.cached_weights_ff_masks))
+            ]
 
         iterator = range(n_steps)
         if self.use_tqdm:

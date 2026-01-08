@@ -85,6 +85,9 @@ def plot_membrane_voltages(
     # Handle axes parameter
     if ax is None:
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        # Ensure axes is always iterable
+        if n_neurons_plot == 1:
+            axes = [axes]
         return_fig = True
     elif isinstance(ax, list):
         # List of axes provided
@@ -96,6 +99,9 @@ def plot_membrane_voltages(
     else:
         # Single axis provided - create our own figure
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        # Ensure axes is always iterable
+        if n_neurons_plot == 1:
+            axes = [axes]
         return_fig = False
 
     # Time axis for the last n_steps_plot timesteps (aligned to end of simulation)
@@ -156,8 +162,10 @@ def plot_membrane_voltages(
         ylabel = "Membrane Potential (mV)"
         axes[neuron_id].set_ylabel(ylabel, fontsize=10)
         axes[neuron_id].tick_params(labelsize=9)
-        axes[neuron_id].set_ylim(-80, -20)
-        axes[neuron_id].set_yticks([-80, -70, -60, -50, -40, -30, -20])
+        axes[neuron_id].set_ylim(y_min, y_max)
+        # Generate y-ticks based on y_tick_step
+        y_ticks = np.arange(y_min, y_max + y_tick_step / 2, y_tick_step)
+        axes[neuron_id].set_yticks(y_ticks)
         axes[neuron_id].grid(True, alpha=0.3)
 
         # Add legend to first subplot only
@@ -239,10 +247,16 @@ def plot_synaptic_currents(
         return_fig = False
     elif ax is None:
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        # Ensure axes is always iterable
+        if n_neurons_plot == 1:
+            axes = [axes]
         return_fig = True
     else:
         # Single axis provided - treat as legacy behavior
         fig, axes = plt.subplots(n_neurons_plot, 1, figsize=figsize, sharex=True)
+        # Ensure axes is always iterable
+        if n_neurons_plot == 1:
+            axes = [axes]
         return_fig = False
     # Time axis for the last n_steps_plot timesteps (aligned to end of simulation)
     time_axis = (

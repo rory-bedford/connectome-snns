@@ -23,7 +23,14 @@ class VanRossumLoss(nn.Module):
     required_inputs = ["output_spikes"]
     requires_target = True
 
-    def __init__(self, tau: float, dt: float, window_size: int, device: str = "cpu"):
+    def __init__(
+        self,
+        tau: float,
+        dt: float,
+        window_size: int,
+        device: str = "cpu",
+        debug: bool = False,
+    ):
         """
         Van Rossum distance for spike trains with state continuation across chunks.
 
@@ -40,11 +47,14 @@ class VanRossumLoss(nn.Module):
             dt (float): Simulation time step (ms).
             window_size (int): Number of timesteps in each chunk. Used as kernel size.
             device (str, optional): Device to place kernel on. Defaults to "cpu".
+            debug (bool, optional): If True, return (loss, output_smooth, target_smooth).
+                If False, return only loss. Defaults to False.
         """
         super(VanRossumLoss, self).__init__()
         self.tau = tau
         self.dt = dt
         self.kernel_size = window_size
+        self.debug = debug
 
         # Pre-compute exponential kernel
         t = torch.arange(window_size, dtype=torch.float32, device=device) * dt
@@ -62,7 +72,7 @@ class VanRossumLoss(nn.Module):
 
     def forward(
         self, output_spikes: torch.Tensor, target_spikes: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute Van Rossum distance between spike trains.
 
@@ -74,7 +84,8 @@ class VanRossumLoss(nn.Module):
                 Can be bool or float.
 
         Returns:
-            torch.Tensor: Mean Van Rossum loss across all dimensions.
+            torch.Tensor: Mean Van Rossum loss across all dimensions (if debug=False).
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (loss, output_smooth, target_smooth) if debug=True.
         """
         # Convert to float if needed (for convolution operations)
         output_spikes = output_spikes.float()
@@ -134,7 +145,11 @@ class VanRossumLoss(nn.Module):
         self.prev_output_smooth = output_smooth[:, :, -1:].detach()
         self.prev_target_smooth = target_smooth[:, :, -1:].detach()
 
-        return diff.mean()
+        # Return based on debug flag
+        if self.debug:
+            return diff.mean(), output_smooth, target_smooth
+        else:
+            return diff.mean()
 
     def reset_state(self):
         """
