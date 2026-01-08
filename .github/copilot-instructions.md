@@ -29,6 +29,15 @@
 - Use Google-style docstrings for all functions and classes to ensure research reproducibility and clarity.
 - Static typing is used frequently throughout the codebase; annotate functions and variables with type hints.
 
+## CRITICAL: Import Statement Rules
+- **ALL imports MUST go at the top of the file/notebook** - This is an absolute, non-negotiable requirement
+- **NEVER add imports in the middle of code** - Not in function bodies, not in notebook cells after the first cell, nowhere else
+- **For Jupyter notebooks**: ALL imports must be in the very first code cell
+- **For Python files**: ALL imports must be at the top of the file, before any other code
+- This applies to ALL contexts: notebooks, scripts, modules, everywhere
+- If you need a new import, add it to the existing import block at the top
+- Violation of this rule is utterly forbidden
+
 ## Workflows
 - Notebooks in `notebooks/` are used for exploratory analysis and prototyping.
 - Scripts in `scripts/` may automate data preparation, training, or evaluation.
