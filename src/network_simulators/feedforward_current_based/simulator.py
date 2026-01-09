@@ -72,6 +72,11 @@ class FeedforwardCurrentLIFNetwork(FeedforwardCurrentLIFNetwork_IO):
         Raises:
             ValueError: If input_spikes batch size doesn't match self.batch_size
         """
+        # Initialize gradient tracking lists if needed
+        if self.track_gradients:
+            self._tracked_v_list = []
+            self._tracked_s_list = []
+            self._tracked_I_syn_list = []
         # Convert to tensor if needed
         if isinstance(input_spikes, np.ndarray):
             input_spikes = torch.from_numpy(input_spikes).float().to(self.device)
@@ -198,6 +203,18 @@ class FeedforwardCurrentLIFNetwork(FeedforwardCurrentLIFNetwork_IO):
             # Store spike output (spikes need gradients for training!)
             all_s[:, t, :] = s
 
+            # Track gradients if requested (BEFORE reassignment, store references)
+            if self.track_gradients:
+                if self.v.requires_grad:
+                    self.v.retain_grad()
+                if s.requires_grad:
+                    s.retain_grad()
+                if self.I_syn.requires_grad:
+                    self.I_syn.retain_grad()
+                self._tracked_v_list.append(self.v)
+                self._tracked_s_list.append(s)
+                self._tracked_I_syn_list.append(self.I_syn)
+
             # Conditionally store other variables (detach these for logging only)
             if self.track_variables:
                 if self.track_batch_idx is not None:
@@ -230,3 +247,56 @@ class FeedforwardCurrentLIFNetwork(FeedforwardCurrentLIFNetwork_IO):
             }
         else:
             return all_s
+
+    def get_tracked_gradients(self) -> dict[str, torch.Tensor]:
+        """
+        Extract gradients from tracked intermediate variables after backward() has been called.
+
+        Must be called after:
+        1. forward() with track_gradients=True
+        2. loss.backward()
+
+        Returns:
+            dict[str, torch.Tensor]: Dictionary containing:
+                - 'grad_v': Voltage gradients, shape (n_timesteps, batch_size, n_neurons)
+                - 'grad_s': Spike gradients, shape (n_timesteps, batch_size, n_neurons)
+                - 'grad_I_syn': Synaptic current gradients, shape (n_timesteps, batch_size, n_neurons, n_synapse_types)
+
+        Raises:
+            RuntimeError: If track_gradients was not enabled or backward() hasn't been called
+        """
+        if not hasattr(self, "_tracked_v_list") or len(self._tracked_v_list) == 0:
+            raise RuntimeError(
+                "No gradients tracked. Ensure track_gradients=True during forward() call."
+            )
+
+        # Extract gradients and compute absolute values
+        grad_v_list = []
+        grad_s_list = []
+        grad_I_syn_list = []
+
+        for v, s, I_syn in zip(
+            self._tracked_v_list, self._tracked_s_list, self._tracked_I_syn_list
+        ):
+            # Extract gradient magnitude (absolute value)
+            if v.grad is not None:
+                grad_v_list.append(torch.abs(v.grad))
+            else:
+                grad_v_list.append(torch.zeros_like(v))
+
+            if s.grad is not None:
+                grad_s_list.append(torch.abs(s.grad))
+            else:
+                grad_s_list.append(torch.zeros_like(s))
+
+            if I_syn.grad is not None:
+                grad_I_syn_list.append(torch.abs(I_syn.grad))
+            else:
+                grad_I_syn_list.append(torch.zeros_like(I_syn))
+
+        # Stack into tensors: (n_timesteps, batch_size, n_neurons[, n_synapse_types])
+        return {
+            "grad_v": torch.stack(grad_v_list, dim=0),
+            "grad_s": torch.stack(grad_s_list, dim=0),
+            "grad_I_syn": torch.stack(grad_I_syn_list, dim=0),
+        }

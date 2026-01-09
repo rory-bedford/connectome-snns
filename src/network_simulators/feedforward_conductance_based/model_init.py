@@ -36,6 +36,7 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
         optimisable: OptimisableParams = None,
         feedforward_mask: FloatArray | None = None,
         track_variables: bool = False,
+        track_gradients: bool = False,
         track_batch_idx: int | None = None,
         use_tqdm: bool = True,
     ):
@@ -78,6 +79,10 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
             track_variables (bool): Whether to accumulate and return internal state variables (v, g_FF, I) over time.
                 When False (default), only spikes are returned and memory usage is minimized.
                 When True, all variables are tracked and returned as a dict for analysis/visualization.
+            track_gradients (bool): Whether to store intermediate tensors WITH gradient tracking enabled.
+                When False (default), intermediate states are not stored for gradient analysis.
+                When True, stores v, g_FF, s at each timestep without detaching for gradient debugging.
+                Use get_tracked_gradients() after backward() to extract gradient magnitudes.
             track_batch_idx (int | None): Which batch index to track when track_variables=True.
                 If None (default), tracks all batch elements. If an integer, only tracks that specific
                 batch index, reducing memory usage by a factor of batch_size. Useful for visualization
@@ -92,6 +97,7 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
         # Store batch size and tracking preference
         self.batch_size = batch_size
         self.track_variables = track_variables
+        self.track_gradients = track_gradients
         self.track_batch_idx = track_batch_idx
         self.use_tqdm = use_tqdm
 

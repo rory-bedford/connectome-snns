@@ -1,11 +1,11 @@
-"""Defines a straightforward simulator of feedforward-only current-based LIF network"""
+"""Defines a straightforward simulator of feedforward-only decay-only conductance-based LIF network"""
 
 import numpy as np
 import torch
 from typing import List
 from numpy.typing import NDArray
 from tqdm import tqdm
-from network_simulators.feedforward_conductance_based.model_init import (
+from network_simulators.feedforward_conductance_based_decay_only.model_init import (
     FeedforwardConductanceLIFNetwork_IO,
 )
 from optimisation.surrogate_gradients import SurrGradSpike
@@ -117,7 +117,6 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
                     tracking_batch_size,
                     n_steps,
                     self.n_neurons,
-                    2,
                     self.n_synapse_types_FF,
                 ),
                 dtype=torch.float32,
@@ -256,15 +255,15 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
                     all_I[:, t, :, -1] = I_leak[
                         self.track_batch_idx : self.track_batch_idx + 1, :
                     ].detach()
-                    all_g[:, t, :, :, :] = self.g_FF[
-                        self.track_batch_idx : self.track_batch_idx + 1, :, :, :
+                    all_g[:, t, :, :] = self.g_FF[
+                        self.track_batch_idx : self.track_batch_idx + 1, :, :
                     ].detach()
                 else:
                     # Track all batch elements
                     all_v[:, t, :] = self.v.detach()
                     all_I[:, t, :, :-1] = I.detach()
                     all_I[:, t, :, -1] = I_leak.detach()
-                    all_g[:, t, :, :, :] = self.g_FF.detach()
+                    all_g[:, t, :, :] = self.g_FF.detach()
 
         # CRITICAL: Detach state tensors to prevent carrying computation graph to next chunk
         # Without this, chunk N+1 would try to use state from chunk N's (freed) graph
@@ -297,7 +296,7 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         Returns:
             dict containing gradient magnitude tensors:
                 - "grad_v": Shape (time, batch, neurons) - voltage gradients
-                - "grad_g_FF": Shape (time, batch, neurons, 2, n_synapse_types_FF) - conductance gradients
+                - "grad_g_FF": Shape (time, batch, neurons, n_synapse_types_FF) - conductance gradients (decay only)
                 - "grad_s": Shape (time, batch, neurons) - spike gradients
 
         Raises:
@@ -370,24 +369,28 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         # Compute spikes
         s = SurrGradSpike.apply(v - theta, surrgrad_scale)
 
-        # Compute currents
-        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+        # Compute currents (no sum over dimension 2 - single decay component)
+        I = g * (v[:, :, None] - E_syn[None, None, :])
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
         v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
 
-        # Decay conductances
-        g *= alpha
+        # Decay conductances (single exponential)
+        g = g * alpha
 
         # Update conductances (feedforward only) - everything precomputed
         for mask, syn_mask, weights in zip(masks_ff, syn_masks_ff, weights_ff):
-            g[:, :, :, syn_mask] += torch.einsum(
-                "bi,ijkl->bjkl", input_spikes_t[:, mask].float(), weights
+            delta_g = torch.einsum(
+                "bi,ijk->bjk", input_spikes_t[:, mask].float(), weights
             )
+            # Create new tensor to avoid in-place modification
+            g_new = g.clone()
+            g_new[:, :, syn_mask] = g[:, :, syn_mask] + delta_g
+            g = g_new
 
-        # Clip rise and decay components to their physiological peaks
-        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
+        # Clip conductances to physiological range
+        g = torch.clamp(g, min=g_mins[None, None, :], max=g_maxs[None, None, :])
 
         return v, g, s, I, I_leak
 
@@ -418,34 +421,41 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         Uses precomputed scaling_factors * g_scale.
         Weights remain dynamic for gradient flow.
         """
-        # Decay conductances
-        g *= alpha
+        v_in = v
+        g_in = g
 
-        # Update conductances (feedforward only)
+        # Decay conductances (single exponential) - use detached input
+        g = g_in * alpha
+
+        # Update conductances (feedforward only) - keep weight gradient flow
         for mask, syn_mask, k, cached in zip(
             masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
         ):
-            g[:, :, :, syn_mask] += torch.einsum(
-                "bi,ijkl->bjkl",
+            delta_g = torch.einsum(
+                "bi,ijk->bjk",
                 input_spikes_t[:, mask].float(),
-                weights_FF[mask, :][:, :, None, None] * cached[None, :, :, :],
+                weights_FF[mask, :][:, :, None] * cached[None, :, :],
             )
+            # Create new tensor to avoid in-place modification
+            g_new = g.clone()
+            g_new[:, :, syn_mask] = g[:, :, syn_mask] + delta_g
+            g = g_new
 
         # Clip conductances
-        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
+        g = torch.clamp(g, min=g_mins[None, None, :], max=g_maxs[None, None, :])
 
-        # Compute currents
-        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
-        I_leak = (v - E_L) * (1 - beta) * C_m / dt
+        # Compute currents (no sum over dimension 2 - single decay component)
+        I = g * (v_in[:, :, None] - E_syn[None, None, :])
+        I_leak = (v_in - E_L) * (1 - beta) * C_m / dt
 
         # Update voltage (without reset)
-        v_temp = v - (I.sum(dim=2) + I_leak) * dt / C_m
+        v_temp = v_in - (I.sum(dim=2) + I_leak) * dt / C_m
 
         # CHANGE: Check spike on v_temp (AFTER update) not v (BEFORE update)
         s = SurrGradSpike.apply(v_temp - theta, surrgrad_scale)
 
-        # Apply reset to v_temp
-        v = v_temp * (1 - s) + U_reset * s.detach()
+        # Apply reset - detach OUTPUT state to prevent backprop into next timestep
+        v = v_temp.detach() * (1 - s) + U_reset * s.detach()
 
         return v, g, s, I, I_leak
 
@@ -480,26 +490,30 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         # Compute spikes
         s = SurrGradSpike.apply(v - theta, surrgrad_scale)
 
-        # Compute currents
-        I = g.sum(dim=2) * (v[:, :, None] - E_syn[None, None, :])
+        # Compute currents (no sum over dimension 2 - single decay component)
+        I = g * (v[:, :, None] - E_syn[None, None, :])
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
         v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
 
-        # Decay conductances
-        g *= alpha
+        # Decay conductances (single exponential)
+        g = g * alpha
 
         # Update conductances (feedforward only) - scaling_factors stay dynamic
         for mask, syn_mask, k, cached in zip(
             masks_ff, syn_masks_ff, indices_ff, cached_weights_ff
         ):
-            g[:, :, :, syn_mask] += (
-                torch.einsum("bi,ijkl->bjkl", input_spikes_t[:, mask].float(), cached)
-                * scaling_factors_FF[k, cell_type_indices][None, :, None, None]
+            delta_g = (
+                torch.einsum("bi,ijk->bjk", input_spikes_t[:, mask].float(), cached)
+                * scaling_factors_FF[k, cell_type_indices][None, :, None]
             )
+            # Create new tensor to avoid in-place modification
+            g_new = g.clone()
+            g_new[:, :, syn_mask] = g[:, :, syn_mask] + delta_g
+            g = g_new
 
-        # Clip rise and decay components to their physiological peaks
-        g = torch.clamp(g, min=g_mins[None, None, :, :], max=g_maxs[None, None, :, :])
+        # Clip conductances to physiological range
+        g = torch.clamp(g, min=g_mins[None, None, :], max=g_maxs[None, None, :])
 
         return v, g, s, I, I_leak
