@@ -1,0 +1,391 @@
+"""Defines a straightforward simulator of recurrent current-based LIF network"""
+
+import numpy as np
+import torch
+from numpy.typing import NDArray
+from tqdm import tqdm
+from network_simulators.current_based.model_init import (
+    CurrentLIFNetwork_IO,
+)
+from optimisation.surrogate_gradients import SurrGradSpike
+
+# Type aliases for clarity
+IntArray = NDArray[np.int_]
+FloatArray = NDArray[np.float64]
+
+
+class CurrentLIFNetwork(CurrentLIFNetwork_IO):
+    """
+    Recurrent current-based LIF network simulator.
+
+    This simulator maintains internal state variables (v, I_syn, I_syn_FF) that automatically
+    continue across forward() calls, enabling efficient chunked simulation of long
+    time series without explicit state management.
+
+    Uses natural units: membrane potential varies from 0 (reset) to 1 (threshold), R=1.
+
+    State Management:
+        - Internal state automatically continues between forward() calls
+        - Call reset_state() before starting independent simulations
+        - Call reset_state(batch_size=N) to change batch size
+
+    Tracking Modes:
+        - track_variables=False (default): Returns only spikes, minimal memory
+        - track_variables=True: Returns full dict with all variables for analysis/visualization
+
+    Example:
+        >>> # Continuous simulation across chunks
+        >>> model = CurrentLIFNetwork(..., batch_size=10, track_variables=False)
+        >>> for chunk in input_chunks:
+        ...     spikes = model.forward(chunk)  # State continues automatically
+        ...
+        >>> # Independent simulation with full tracking
+        >>> model.reset_state(batch_size=1)
+        >>> model.track_variables = True
+        >>> output_dict = model.forward(input_spikes)
+    """
+
+    def forward(
+        self,
+        input_spikes: torch.Tensor | FloatArray,
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        """
+        Simulate the recurrent network for a given number of time steps.
+
+        Internal state (v, I_syn, I_syn_FF) is updated in-place and continues across calls.
+        Call reset_state() before starting a new independent simulation.
+
+        Args:
+            input_spikes (torch.Tensor | FloatArray): External input spikes of shape
+                (batch_size, n_steps, n_inputs). Batch size must match self.batch_size.
+
+        Returns:
+            When track_variables=False:
+                torch.Tensor: Spike trains of shape (batch_size, n_steps, n_neurons)
+
+            When track_variables=True:
+                dict[str, torch.Tensor]: Dictionary containing:
+                    - "spikes": Spike trains (batch_size, n_steps, n_neurons)
+                    - "voltages": Membrane potentials (batch_size, n_steps, n_neurons)
+                    - "currents_syn_recurrent": Recurrent synaptic currents (batch_size, n_steps, n_neurons, n_synapse_types)
+                    - "currents_syn_feedforward": Feedforward synaptic currents (batch_size, n_steps, n_neurons, n_synapse_types_FF)
+
+        Raises:
+            ValueError: If input_spikes batch size doesn't match self.batch_size
+        """
+        # Initialize gradient tracking lists if needed
+        if self.track_gradients:
+            self._tracked_v_list = []
+            self._tracked_s_list = []
+            self._tracked_I_syn_list = []
+            self._tracked_I_syn_FF_list = []
+
+        # Convert to tensor if needed
+        if isinstance(input_spikes, np.ndarray):
+            input_spikes = torch.from_numpy(input_spikes).float().to(self.device)
+
+        # Validate inputs
+        self._validate_forward(input_spikes)
+
+        n_steps = input_spikes.shape[1]
+
+        # ======================================
+        # Conditionally allocate tracking arrays
+        # ======================================
+
+        if self.track_variables:
+            # Determine batch dimension for tracking
+            tracking_batch_size = (
+                1 if self.track_batch_idx is not None else self.batch_size
+            )
+
+            # Allocate storage for all variables
+            all_v = torch.empty(
+                (tracking_batch_size, n_steps, self.n_neurons),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            all_I_syn = torch.empty(
+                (tracking_batch_size, n_steps, self.n_neurons, self.n_synapse_types),
+                dtype=torch.float32,
+                device=self.device,
+            )
+            all_I_syn_FF = torch.empty(
+                (tracking_batch_size, n_steps, self.n_neurons, self.n_synapse_types_FF),
+                dtype=torch.float32,
+                device=self.device,
+            )
+
+        # Always allocate spike storage
+        all_s = torch.empty(
+            (self.batch_size, n_steps, self.n_neurons),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        # ==============
+        # Run simulation
+        # ==============
+
+        # Gather cached weight tensors into lists
+        # If optimizing weights, recompute them each forward pass to avoid reusing stale graphs
+        if self.optimisable == "weights":
+            # Recurrent weights
+            cached_rec = []
+            for k, (mask, syn_mask) in enumerate(
+                zip(
+                    self.cached_weights_rec_masks,
+                    self.cached_weights_rec_syn_masks,
+                )
+            ):
+                # Get current weights (fresh from log_weights_flat)
+                cell_id = int(self.cell_type_indices[mask][0])
+                weights_for_type = self.weights[mask, :][:, :, None]
+                n_syn_in_mask = syn_mask.sum().item()
+                weights_product = weights_for_type.expand(-1, -1, n_syn_in_mask)
+                cached_rec.append(weights_product)
+
+            # Feedforward weights
+            cached_ff = []
+            for k, (mask, syn_mask) in enumerate(
+                zip(
+                    self.cached_weights_ff_masks,
+                    self.cached_weights_ff_syn_masks,
+                )
+            ):
+                # Get current weights (fresh from log_weights_FF_flat)
+                cell_id = int(self.cell_type_indices_FF[mask][0])
+                weights_for_type = self.weights_FF[mask, :][:, :, None]
+                n_syn_in_mask = syn_mask.sum().item()
+                weights_product = weights_for_type.expand(-1, -1, n_syn_in_mask)
+                cached_ff.append(weights_product)
+        else:
+            # For non-trainable weights, use cached buffers (reused across forward calls)
+            cached_rec = [
+                getattr(self, f"cached_rec_{i}")
+                for i in range(len(self.cached_weights_rec_masks))
+            ]
+            cached_ff = [
+                getattr(self, f"cached_ff_{i}")
+                for i in range(len(self.cached_weights_ff_masks))
+            ]
+
+        iterator = range(n_steps)
+        if self.use_tqdm:
+            iterator = tqdm(
+                iterator, desc="Simulating recurrent current-based network", unit="step"
+            )
+
+        for t in iterator:
+            # Compute spikes (threshold at 1.0 in natural units)
+            s = SurrGradSpike.apply(self.v - 1.0, self.surrgrad_scale)
+
+            # Update synaptic currents: I_syn(t+1) = alpha_syn * I_syn(t) + h(t)
+            # Decay recurrent synapse types
+            # alpha_syn has shape (n_synapse_types,)
+            # I_syn has shape (batch_size, n_neurons, n_synapse_types)
+            self.I_syn = self.alpha_syn[None, None, :] * self.I_syn
+
+            # Decay feedforward synapse types
+            # alpha_syn_FF has shape (n_synapse_types_FF,)
+            # I_syn_FF has shape (batch_size, n_neurons, n_synapse_types_FF)
+            self.I_syn_FF = self.alpha_syn_FF[None, None, :] * self.I_syn_FF
+
+            # Add recurrent currents per synapse type (loop over recurrent cell types)
+            for mask, syn_mask, weights in zip(
+                self.cached_weights_rec_masks,
+                self.cached_weights_rec_syn_masks,
+                cached_rec,
+            ):
+                # s[:, mask] has shape (batch_size, n_neurons_in_type)
+                # weights has shape (n_neurons_in_type, n_neurons, n_synapse_types_in_mask)
+                # Result: (batch_size, n_neurons, n_synapse_types_in_mask)
+                h = torch.einsum(
+                    "bi,ijk->bjk",
+                    s[:, mask].float(),
+                    weights,
+                )
+
+                # Apply scaling factors if optimizing them
+                if self.optimisable in [
+                    "scaling_factors",
+                    "scaling_factors_recurrent",
+                ]:
+                    # Get the cell_id for this cell type
+                    cell_id = int(self.cell_type_indices[mask][0])
+                    # scaling_factors has shape (n_cell_types, n_cell_types)
+                    # Apply scaling per neuron based on target cell type
+                    scaling = self.scaling_factors[
+                        cell_id, self.cell_type_indices
+                    ]  # (n_neurons,)
+                    h = h * scaling[None, :, None]
+
+                # Add to appropriate synapse types
+                self.I_syn[:, :, syn_mask] += h
+
+            # Add feedforward currents per synapse type (loop over input cell types)
+            for mask, syn_mask, weights in zip(
+                self.cached_weights_ff_masks,
+                self.cached_weights_ff_syn_masks,
+                cached_ff,
+            ):
+                # input_spikes[:, t, mask] has shape (batch_size, n_inputs_in_type)
+                # weights has shape (n_inputs_in_type, n_neurons, n_synapse_types_in_mask)
+                # Result: (batch_size, n_neurons, n_synapse_types_in_mask)
+                h = torch.einsum(
+                    "bi,ijk->bjk",
+                    input_spikes[:, t, mask].float(),
+                    weights,
+                )
+
+                # Apply scaling factors if optimizing them
+                if self.optimisable in [
+                    "scaling_factors",
+                    "scaling_factors_feedforward",
+                ]:
+                    # Get the cell_id for this input type
+                    cell_id = int(self.cell_type_indices_FF[mask][0])
+                    # scaling_factors_FF has shape (n_cell_types_FF, n_cell_types)
+                    # Apply scaling per neuron based on target cell type
+                    scaling = self.scaling_factors_FF[
+                        cell_id, self.cell_type_indices
+                    ]  # (n_neurons,)
+                    h = h * scaling[None, :, None]
+
+                # Add to appropriate synapse types
+                self.I_syn_FF[:, :, syn_mask] += h
+
+            # Sum currents across all synapse types with signs applied
+            # sign has shape (n_synapse_types,) with +1 for excitatory, -1 for inhibitory
+            # I_syn has shape (batch_size, n_neurons, n_synapse_types)
+            # sign_FF has shape (n_synapse_types_FF,) with +1 for excitatory, -1 for inhibitory
+            # I_syn_FF has shape (batch_size, n_neurons, n_synapse_types_FF)
+            I_total_rec = (self.I_syn * self.sign[None, None, :]).sum(dim=2)
+            I_total_ff = (self.I_syn_FF * self.sign_FF[None, None, :]).sum(dim=2)
+            I_total = I_total_rec + I_total_ff
+            # Shape: (batch_size, n_neurons)
+
+            # Update membrane potential: v(t+1) = (beta_mem * v(t) + I_total(t)) * (1 - s(t))
+            # Reset mask: (1 - s) zeros out voltage for spiking neurons
+            self.v = (self.beta_mem[None, :] * self.v + I_total) * (1.0 - s.detach())
+
+            # Store spike output (spikes need gradients for training!)
+            all_s[:, t, :] = s
+
+            # Track gradients if requested (BEFORE reassignment, store references)
+            if self.track_gradients:
+                if self.v.requires_grad:
+                    self.v.retain_grad()
+                if s.requires_grad:
+                    s.retain_grad()
+                if self.I_syn.requires_grad:
+                    self.I_syn.retain_grad()
+                if self.I_syn_FF.requires_grad:
+                    self.I_syn_FF.retain_grad()
+                self._tracked_v_list.append(self.v)
+                self._tracked_s_list.append(s)
+                self._tracked_I_syn_list.append(self.I_syn)
+                self._tracked_I_syn_FF_list.append(self.I_syn_FF)
+
+            # Conditionally store other variables (detach these for logging only)
+            if self.track_variables:
+                if self.track_batch_idx is not None:
+                    # Only track specified batch index
+                    all_v[:, t, :] = self.v[
+                        self.track_batch_idx : self.track_batch_idx + 1, :
+                    ].detach()
+                    all_I_syn[:, t, :, :] = self.I_syn[
+                        self.track_batch_idx : self.track_batch_idx + 1, :, :
+                    ].detach()
+                    all_I_syn_FF[:, t, :, :] = self.I_syn_FF[
+                        self.track_batch_idx : self.track_batch_idx + 1, :, :
+                    ].detach()
+                else:
+                    # Track all batch elements
+                    all_v[:, t, :] = self.v.detach()
+                    all_I_syn[:, t, :, :] = self.I_syn.detach()
+                    all_I_syn_FF[:, t, :, :] = self.I_syn_FF.detach()
+
+        # CRITICAL: Detach state tensors to prevent carrying computation graph to next chunk
+        # Without this, chunk N+1 would try to use state from chunk N's (freed) graph
+        self.v = self.v.detach()
+        self.I_syn = self.I_syn.detach()
+        self.I_syn_FF = self.I_syn_FF.detach()
+
+        # ==============
+        # Return results
+        # ==============
+
+        if self.track_variables:
+            return {
+                "spikes": all_s,
+                "voltages": all_v,
+                "currents_syn_recurrent": all_I_syn,
+                "currents_syn_feedforward": all_I_syn_FF,
+            }
+        else:
+            return all_s
+
+    def get_tracked_gradients(self) -> dict[str, torch.Tensor]:
+        """
+        Extract gradients from tracked intermediate variables after backward() has been called.
+
+        Must be called after:
+        1. forward() with track_gradients=True
+        2. loss.backward()
+
+        Returns:
+            dict[str, torch.Tensor]: Dictionary containing:
+                - 'grad_v': Voltage gradients, shape (n_timesteps, batch_size, n_neurons)
+                - 'grad_s': Spike gradients, shape (n_timesteps, batch_size, n_neurons)
+                - 'grad_I_syn': Recurrent synaptic current gradients, shape (n_timesteps, batch_size, n_neurons, n_synapse_types)
+                - 'grad_I_syn_FF': Feedforward synaptic current gradients, shape (n_timesteps, batch_size, n_neurons, n_synapse_types_FF)
+
+        Raises:
+            RuntimeError: If track_gradients was not enabled or backward() hasn't been called
+        """
+        if not hasattr(self, "_tracked_v_list") or len(self._tracked_v_list) == 0:
+            raise RuntimeError(
+                "No gradients tracked. Ensure track_gradients=True during forward() call."
+            )
+
+        # Extract gradients and compute absolute values
+        grad_v_list = []
+        grad_s_list = []
+        grad_I_syn_list = []
+        grad_I_syn_FF_list = []
+
+        for v, s, I_syn, I_syn_FF in zip(
+            self._tracked_v_list,
+            self._tracked_s_list,
+            self._tracked_I_syn_list,
+            self._tracked_I_syn_FF_list,
+        ):
+            # Extract gradient magnitude (absolute value)
+            if v.grad is not None:
+                grad_v_list.append(torch.abs(v.grad))
+            else:
+                grad_v_list.append(torch.zeros_like(v))
+
+            if s.grad is not None:
+                grad_s_list.append(torch.abs(s.grad))
+            else:
+                grad_s_list.append(torch.zeros_like(s))
+
+            if I_syn.grad is not None:
+                grad_I_syn_list.append(torch.abs(I_syn.grad))
+            else:
+                grad_I_syn_list.append(torch.zeros_like(I_syn))
+
+            if I_syn_FF.grad is not None:
+                grad_I_syn_FF_list.append(torch.abs(I_syn_FF.grad))
+            else:
+                grad_I_syn_FF_list.append(torch.zeros_like(I_syn_FF))
+
+        # Stack into tensors: (n_timesteps, batch_size, n_neurons[, n_synapse_types])
+        return {
+            "grad_v": torch.stack(grad_v_list, dim=0),
+            "grad_s": torch.stack(grad_s_list, dim=0),
+            "grad_I_syn": torch.stack(grad_I_syn_list, dim=0),
+            "grad_I_syn_FF": torch.stack(grad_I_syn_FF_list, dim=0),
+        }
