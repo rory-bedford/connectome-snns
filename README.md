@@ -54,7 +54,7 @@ To use these features, you need to write and run your python scripts as follows:
 * `workspace/experiment.toml` is a template you can use to configure your experiments
 * We recommend you make a `workspace/` folder which will be gitignored (already done), and copy this template in there alongside any parameter files you wish to modify on the fly
 * Make sure the repository has all changes committed (files in `workspace/` are automatically ignored)
-* You can then run your script using `./run` or `uv run python run_experiment.py`
+* You can then run your script using `./run` or `uv run python scripts/run_experiment.py`
 
 Note the experiment running scripts can be passed a filepath to your `experiment.toml` file as input, and will use the editable version under `workspace/experiment.toml` by default.
 
@@ -96,7 +96,7 @@ For examples of usage please see `scripts/`.
 
 To run a grid search over parameters reproducibly, please do the following:
 
-* Copy the `run_grid_search.py` script into your workspace folder
+* Copy the `scripts/run_grid_search.py` script into your workspace folder
 * Edit the generator in python to any custom search functionality you wish
 * This should always yield your full parameter dictionary and a brief unique description string for naming folders
 * Edit the visible devices if running on GPUs

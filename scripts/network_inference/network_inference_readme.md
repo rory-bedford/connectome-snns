@@ -49,7 +49,7 @@ The simulation consists of six main steps:
 ### Basic Usage (via experiment runner)
 
 ```bash
-python run_experiment.py parameters/conductance-based-Dp.toml
+python scripts/run_experiment.py parameters/conductance-based-Dp.toml
 ```
 
 ### Direct Usage

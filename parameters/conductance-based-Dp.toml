@@ -6,10 +6,10 @@
 # ========================
 
 [simulation]
-dt = 0.5                               # ms - Time resolution of the simulation
+dt = 1.0                               # ms - Time resolution of the simulation
 duration = 10000.0                     # ms - Total simulation duration
-seed = 42                              # Random seed for reproducibility
-chunk_size = 1000                      # Number steps to run per chunk
+seed = 43                              # Random seed for reproducibility
+chunk_size = 10000                     # Number steps to run per chunk
 
 # ==========================
 # FEEDFORWARD LAYER TOPOLOGY
@@ -22,15 +22,15 @@ proportion = [1]                       # Relative proportions of each cell type
 [feedforward.topology]
 num_neurons = 1500                     # Total number of input neurons
 conn_inputs = [                        # Connection probabilities to connectome layers
-    [0.02, 0.02],
+    [0.05, 0.05],
 ]
 
 [feedforward.weights]
 w_mu = [                               # Mean for input synapse strengths
-    [0.4, 0.4],
+    [0.5, 0.2],
 ]
 w_sigma = [                            # Std dev for input synapse strengths
-    [0.2, 0.2],
+    [0.1, 0.1],
 ]
 
 # =======================================
@@ -45,7 +45,7 @@ names = ['AMPA', 'NMDA']
 tau_rise = [0.1, 10.0]                 # ms - Synaptic rise time constants
 tau_decay = [5.0, 70.0]                # ms - Synaptic decay time constants
 E_syn = [0.0, 0.0]                     # mV - Synaptic reversal potentials
-g_bar = [0.4177, 0.0448]               # nS - Synaptic conductances (per spike)
+g_bar = [0.4177, 0.0448]               # nS - Maximum synaptic conductances
 
 # ========================
 # RECURRENT LAYER TOPOLOGY 
@@ -65,18 +65,18 @@ conn_within = [                        # Connection probabilities within assembl
 ]
 
 conn_between = [                       # Connection probabilities between assemblies
-    [0.02, 0.02],
-    [0.02, 0.02],
+    [0.05, 0.05],
+    [0.05, 0.05],
 ]
 
 [recurrent.weights]
 w_mu = [                               # Mean synapse strengths
     [0.4, 0.4],
-    [0.6, 0.3],
+    [0.4, 0.4],
 ]
 w_sigma = [                            # Standard-deviation synapse strengths
-    [0.2, 0.2],
-    [0.2, 0.1],
+    [0.1, 0.1],
+    [0.1, 0.1],
 ]
 
 # =======================================

@@ -100,7 +100,11 @@ class ExperimentTracker:
         return toml.load(self.config_path)
 
     def _check_git_status(self):
-        """Check if there are uncommitted changes and get current commit hash."""
+        """Check if there are uncommitted changes and get current commit hash.
+
+        Allows uncommitted changes to parameters/*.toml and workspace/* files,
+        but requires all code files to be committed for reproducibility.
+        """
         try:
             # If skipping git checks, still get commit info but don't validate cleanliness
             if self.skip_git_check:
@@ -115,11 +119,45 @@ class ExperimentTracker:
                 )
 
                 if result.stdout.strip():
-                    print("ERROR: You have uncommitted changes:")
-                    print(result.stdout)
-                    print("\nPlease commit all changes before running experiments.")
-                    print("Or use --no-commit flag to skip this check.")
-                    sys.exit(1)
+                    # Parse dirty files
+                    dirty_files = []
+                    for line in result.stdout.strip().split("\n"):
+                        if line:
+                            # Format: "XY filename" where X and Y are status codes
+                            # We want the filename part (everything after first 3 chars)
+                            filename = line[3:].strip()
+                            dirty_files.append(filename)
+
+                    # Filter out allowed dirty files (parameters and workspace)
+                    code_dirty_files = [
+                        f
+                        for f in dirty_files
+                        if not f.startswith("parameters/")
+                        and not f.startswith("workspace/")
+                    ]
+
+                    if code_dirty_files:
+                        print("ERROR: You have uncommitted changes in code files:")
+                        for f in code_dirty_files:
+                            print(f"  {f}")
+                        print(
+                            "\nPlease commit code changes before running experiments."
+                        )
+                        print(
+                            "Note: Changes to parameters/*.toml and workspace/* files are allowed."
+                        )
+                        print("Or use --no-commit flag to skip this check entirely.")
+                        sys.exit(1)
+                    elif dirty_files:
+                        # Only parameter/workspace files are dirty - this is fine
+                        print("ℹ️  Uncommitted parameter files detected (allowed):")
+                        param_files = [
+                            f
+                            for f in dirty_files
+                            if f.startswith("parameters/") or f.startswith("workspace/")
+                        ]
+                        for f in param_files:
+                            print(f"  {f}")
 
             # Get current commit hash
             result = subprocess.run(

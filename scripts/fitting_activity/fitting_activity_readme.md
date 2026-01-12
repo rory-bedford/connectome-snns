@@ -108,7 +108,7 @@ Resumes student training from a checkpoint after interruption.
 
 ```bash
 # Run with default parameters
-python run_experiment.py parameters/fitting-activity.toml
+python scripts/run_experiment.py parameters/fitting-activity.toml
 ```
 
 ### Resuming from Checkpoint

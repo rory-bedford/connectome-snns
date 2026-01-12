@@ -7,18 +7,18 @@
 
 [simulation]
 seed = 44                              # Random seed for reproducibility
-chunk_size = 50                        # Number of timesteps per chunk
+chunk_size = 200                       # Number of timesteps per chunk
 
 # ======================
 # TRAINING CONFIGURATION
 # ======================
 
 [training]
-epochs = 10                            # Total number of loops through the training data
-chunks_per_update = 10                 # Number of loss calculations per gradient step
+epochs = 20                            # Total number of loops through the training data
+chunks_per_update = 5                  # Number of loss calculations per gradient step
 log_interval = 10                      # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 2000             # Save model checkpoints and generate plots every N chunks
-plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
+checkpoint_interval = 500              # Save model checkpoints and generate plots every N chunks
+plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
 grad_norm_clip = 1.0                   # Maximum norm for gradient clipping (None to disable)
@@ -29,7 +29,7 @@ optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "s
 # ===============
 
 [hyperparameters]
-surrgrad_scale = 200.0                  # Scale for surrogate gradient fast sigmoid function
+surrgrad_scale = 500.0                 # Scale for surrogate gradient fast sigmoid function
 learning_rate = 1e-3                   # Learning rate for ADAM optimiser
 van_rossum_tau = 10.0                  # ms - Exponential temporal kernel in van Rossum loss
 
@@ -92,10 +92,10 @@ g_bar = [ 8.139,]                      # nS - Synaptic conductances (per spike)
 
 [scaling_factors]
 recurrent = [
-    [1.33, 0.69],
-    [0.71, 1.75],
+    [1.0, 1.0],
+    [1.0, 1.0],
 ]
 
 feedforward = [
-    [1.67, 1.81],
+    [1.0, 1.0],
 ]

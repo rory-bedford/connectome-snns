@@ -50,7 +50,7 @@ Resumes gradient-based homeostatic plasticity training from a checkpoint.
 
 ```bash
 # Run with default parameters
-python run_experiment.py parameters/homeostatic-plasticity.toml
+python scripts/run_experiment.py parameters/homeostatic-plasticity.toml
 ```
 
 ### Resuming from Checkpoint

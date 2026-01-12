@@ -42,21 +42,21 @@ done
 if [ -n "$GRID" ]; then
     if [ -z "$CONFIG_FILE" ]; then
         # No additional input, use default grid config
-        uv run python workspace/run_grid_search.py workspace/experiment.toml
+        uv run python scripts/run_grid_search.py workspace/experiment.toml
     else
         # Use provided config for grid search
-        uv run python workspace/run_grid_search.py "$CONFIG_FILE"
+        uv run python scripts/run_grid_search.py "$CONFIG_FILE"
     fi
 else
     # Determine config file
     if [ -z "$CONFIG_FILE" ]; then
         CONFIG_FILE="workspace/experiment.toml"
     fi
-    
+
     # Run experiment with appropriate flags
     if [ -n "$NO_COMMIT" ]; then
-        uv run python run_experiment.py "$CONFIG_FILE" --no-commit
+        uv run python scripts/run_experiment.py "$CONFIG_FILE" --no-commit
     else
-        uv run python run_experiment.py "$CONFIG_FILE"
+        uv run python scripts/run_experiment.py "$CONFIG_FILE"
     fi
 fi

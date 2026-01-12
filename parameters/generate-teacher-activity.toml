@@ -8,9 +8,9 @@
 [simulation]
 seed = 43                              # Random seed for reproducibility
 dt = 1.0                               # ms - Time resolution of the simulation
-duration = 20000.0                     # ms - Total duration of the simulation
+duration = 10000.0                    # ms - Total duration of the simulation
 chunk_size = 100                       # Number of timesteps per chunk
-batch_size = 1                        # Number of batches
+batch_size = 50                        # Number of batches
 plot_size = 200                        # Number of chunks to save for plotting
 
 # ==========================
