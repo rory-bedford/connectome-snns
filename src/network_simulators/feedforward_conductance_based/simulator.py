@@ -268,9 +268,8 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
 
         # CRITICAL: Detach state tensors to prevent carrying computation graph to next chunk
         # Without this, chunk N+1 would try to use state from chunk N's (freed) graph
-        # TEMPORARILY DISABLED FOR GRADIENT DEBUGGING
-        # self.v = self.v.detach()
-        # self.g_FF = self.g_FF.detach()
+        self.v = self.v.detach()
+        self.g_FF = self.g_FF.detach()
 
         # ==============
         # Return results
