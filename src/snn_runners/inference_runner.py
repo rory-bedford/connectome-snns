@@ -143,7 +143,7 @@ class SNNInference:
 
         # Store dt if model has it
         if hasattr(self.model, "dt"):
-            self.zarr_root.attrs["dt"] = self.model.dt
+            self.zarr_root.attrs["dt"] = float(self.model.dt)
 
     def _create_zarr_datasets(
         self,
