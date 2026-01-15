@@ -15,10 +15,10 @@ chunk_size = 10000                     # Number of timesteps per chunk
 
 [training]
 epochs = 20                            # Total number of loops through the training data
-chunks_per_update = 5                  # Number of loss calculations per gradient step
-log_interval = 10                      # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 500              # Save model checkpoints and generate plots every N chunks
-plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
+chunks_per_update = 1                  # Number of loss calculations per gradient step
+log_interval = 1                       # Log metrics to CSV and wandb every N chunks
+checkpoint_interval = 5                # Save model checkpoints and generate plots every N chunks
+plot_size = 1                          # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
