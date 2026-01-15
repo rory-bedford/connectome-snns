@@ -375,7 +375,9 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (
+            1 - s.detach()
+        ) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -445,7 +447,7 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         s = SurrGradSpike.apply(v_temp - theta, surrgrad_scale)
 
         # Apply reset to v_temp
-        v = v_temp * (1 - s) + U_reset * s.detach()
+        v = v_temp * (1 - s.detach()) + U_reset * s.detach()
 
         return v, g, s, I, I_leak
 
@@ -485,7 +487,9 @@ class FeedforwardConductanceLIFNetwork(FeedforwardConductanceLIFNetwork_IO):
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (
+            1 - s.detach()
+        ) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha

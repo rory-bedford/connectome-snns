@@ -329,7 +329,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (
+            1 - s.detach()
+        ) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -392,7 +394,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (
+            1 - s.detach()
+        ) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha
@@ -466,7 +470,9 @@ class ConductanceLIFNetwork(ConductanceLIFNetwork_IO):
         I_leak = (v - E_L) * (1 - beta) * C_m / dt
 
         # Update membrane potential with reset
-        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (1 - s) + U_reset * s.detach()
+        v = (v - (I.sum(dim=2) + I_leak) * dt / C_m) * (
+            1 - s.detach()
+        ) + U_reset * s.detach()
 
         # Decay conductances
         g *= alpha

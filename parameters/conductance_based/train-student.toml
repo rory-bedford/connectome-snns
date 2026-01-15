@@ -21,7 +21,7 @@ checkpoint_interval = 500              # Save model checkpoints and generate plo
 plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
-grad_norm_clip = 1.0                   # Maximum norm for gradient clipping (None to disable)
+grad_norm_clip = None                  # Maximum norm for gradient clipping (None to disable)
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 
 # ===============
@@ -29,8 +29,8 @@ optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "s
 # ===============
 
 [hyperparameters]
-surrgrad_scale = 500.0                 # Scale for surrogate gradient fast sigmoid function
-learning_rate = 1e-3                   # Learning rate for ADAM optimiser
+surrgrad_scale = 0.2                   # Scale for surrogate gradient fast sigmoid function
+learning_rate = 5e-2                   # Learning rate for ADAM optimiser
 van_rossum_tau = 10.0                  # ms - Exponential temporal kernel in van Rossum loss
 
 loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.005-0.01)
