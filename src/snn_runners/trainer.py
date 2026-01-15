@@ -835,33 +835,33 @@ class SNNTrainer:
 
         # Extract gradient norms for main parameters
         if (
-            hasattr(self.model, "scaling_factors")
-            and self.model.scaling_factors.grad is not None
+            hasattr(self.model, "log_scaling_factors")
+            and self.model.log_scaling_factors.grad is not None
         ):
-            grad_norm = self.model.scaling_factors.grad.norm().item()
-            grad_stats["gradients/scaling_factors_norm"] = grad_norm
+            grad_norm = self.model.log_scaling_factors.grad.norm().item()
+            grad_stats["gradients/log_scaling_factors_norm"] = grad_norm
 
         if (
-            hasattr(self.model, "scaling_factors_FF")
-            and self.model.scaling_factors_FF.grad is not None
+            hasattr(self.model, "log_scaling_factors_FF")
+            and self.model.log_scaling_factors_FF.grad is not None
         ):
-            grad_norm = self.model.scaling_factors_FF.grad.norm().item()
-            grad_stats["gradients/scaling_factors_FF_norm"] = grad_norm
+            grad_norm = self.model.log_scaling_factors_FF.grad.norm().item()
+            grad_stats["gradients/log_scaling_factors_FF_norm"] = grad_norm
 
         # Also track weight gradients if they exist
         if (
-            hasattr(self.model, "log_weights")
-            and self.model.log_weights.grad is not None
+            hasattr(self.model, "log_weights_flat")
+            and self.model.log_weights_flat.grad is not None
         ):
-            grad_norm = self.model.log_weights.grad.norm().item()
-            grad_stats["gradients/log_weights_norm"] = grad_norm
+            grad_norm = self.model.log_weights_flat.grad.norm().item()
+            grad_stats["gradients/log_weights_flat_norm"] = grad_norm
 
         if (
-            hasattr(self.model, "log_weights_FF")
-            and self.model.log_weights_FF.grad is not None
+            hasattr(self.model, "log_weights_FF_flat")
+            and self.model.log_weights_FF_flat.grad is not None
         ):
-            grad_norm = self.model.log_weights_FF.grad.norm().item()
-            grad_stats["gradients/log_weights_FF_norm"] = grad_norm
+            grad_norm = self.model.log_weights_FF_flat.grad.norm().item()
+            grad_stats["gradients/log_weights_FF_flat_norm"] = grad_norm
 
         return grad_stats
 
