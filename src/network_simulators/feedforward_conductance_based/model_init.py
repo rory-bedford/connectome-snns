@@ -197,7 +197,7 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
         # OPTIMISABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
         # ===========================================================
 
-        # Register scaling factors (trainable if optimising scaling_factors)
+        # Register scaling factors with log parameterization if optimising
         # Initialize to ones if not provided
         if scaling_factors_FF is None:
             scaling_factors_FF = np.ones(
@@ -211,11 +211,21 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
             "scaling_factors_recurrent",
         ]
 
-        self._register_parameter_or_buffer(
-            "scaling_factors_FF",
-            scaling_factors_FF,
-            trainable=is_optimizing_scaling_factors,
-        )
+        if is_optimizing_scaling_factors:
+            # Convert to log space for optimization
+            eps = 1e-8
+            log_scaling_factors_FF = np.log(scaling_factors_FF + eps)
+            self._register_parameter_or_buffer(
+                "log_scaling_factors_FF",
+                log_scaling_factors_FF,
+                trainable=True,
+            )
+        else:
+            self._register_parameter_or_buffer(
+                "_scaling_factors_FF_buffer",
+                scaling_factors_FF,
+                trainable=False,
+            )
 
         # ======================================================================
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
@@ -496,14 +506,29 @@ class FeedforwardConductanceLIFNetwork_IO(nn.Module):
             return self._buffers["_weights_FF_buffer"]
 
     @property
+    def scaling_factors_FF(self) -> torch.Tensor:
+        """Get feedforward scaling factors in linear space (converts from log if optimising scaling factors)."""
+        if self.optimisable in [
+            "scaling_factors",
+            "scaling_factors_feedforward",
+            "scaling_factors_recurrent",
+        ]:
+            return torch.exp(self.log_scaling_factors_FF)
+        else:
+            return self._buffers["_scaling_factors_FF_buffer"]
+
+    @property
     def device(self):
         """Get the device the model is on"""
         if self.optimisable == "weights":
             return self.log_weights_FF_flat.device
-        elif self.optimisable == "scaling_factors":
-            return self.scaling_factors_FF.device
+        elif self.optimisable in [
+            "scaling_factors",
+            "scaling_factors_feedforward",
+            "scaling_factors_recurrent",
+        ]:
+            return self.log_scaling_factors_FF.device
         else:
-            # Get device from weights buffer
             return self._buffers["_weights_FF_buffer"].device
 
     def set_timestep(self, dt: float) -> None:

@@ -231,33 +231,49 @@ class CurrentLIFNetwork_IO(nn.Module):
         # OPTIMISABLE PARAMETERS (TRAINABLE - STORED AS nn.Parameter)
         # ===========================================================
 
-        # Register scaling factors (trainable based on optimisable mode)
+        # Register scaling factors with log parameterization if optimising
         # Initialize to ones if not provided
         if scaling_factors is None:
             scaling_factors = np.ones(
                 (self.n_cell_types, self.n_cell_types), dtype=np.float32
             )
 
-        self._register_parameter_or_buffer(
-            "scaling_factors",
-            scaling_factors,
-            trainable=(
-                self.optimisable in ["scaling_factors", "scaling_factors_recurrent"]
-            ),
-        )
+        if self.optimisable in ["scaling_factors", "scaling_factors_recurrent"]:
+            # Convert to log space for optimization
+            eps = 1e-8
+            log_scaling_factors = np.log(scaling_factors + eps)
+            self._register_parameter_or_buffer(
+                "log_scaling_factors",
+                log_scaling_factors,
+                trainable=True,
+            )
+        else:
+            self._register_parameter_or_buffer(
+                "_scaling_factors_buffer",
+                scaling_factors,
+                trainable=False,
+            )
 
         if scaling_factors_FF is None:
             scaling_factors_FF = np.ones(
                 (self.n_cell_types_FF, self.n_cell_types), dtype=np.float32
             )
 
-        self._register_parameter_or_buffer(
-            "scaling_factors_FF",
-            scaling_factors_FF,
-            trainable=(
-                self.optimisable in ["scaling_factors", "scaling_factors_feedforward"]
-            ),
-        )
+        if self.optimisable in ["scaling_factors", "scaling_factors_feedforward"]:
+            # Convert to log space for optimization
+            eps = 1e-8
+            log_scaling_factors_FF = np.log(scaling_factors_FF + eps)
+            self._register_parameter_or_buffer(
+                "log_scaling_factors_FF",
+                log_scaling_factors_FF,
+                trainable=True,
+            )
+        else:
+            self._register_parameter_or_buffer(
+                "_scaling_factors_FF_buffer",
+                scaling_factors_FF,
+                trainable=False,
+            )
 
         # ======================================================================
         # HYPERPARAMETERS (CONFIGURATION VALUES - STORED AS INSTANCE ATTRIBUTES)
@@ -686,6 +702,22 @@ class CurrentLIFNetwork_IO(nn.Module):
             return self._buffers["_weights_FF_buffer"]
 
     @property
+    def scaling_factors(self) -> torch.Tensor:
+        """Get recurrent scaling factors in linear space (converts from log if optimising scaling factors)."""
+        if self.optimisable in ["scaling_factors", "scaling_factors_recurrent"]:
+            return torch.exp(self.log_scaling_factors)
+        else:
+            return self._buffers["_scaling_factors_buffer"]
+
+    @property
+    def scaling_factors_FF(self) -> torch.Tensor:
+        """Get feedforward scaling factors in linear space (converts from log if optimising scaling factors)."""
+        if self.optimisable in ["scaling_factors", "scaling_factors_feedforward"]:
+            return torch.exp(self.log_scaling_factors_FF)
+        else:
+            return self._buffers["_scaling_factors_FF_buffer"]
+
+    @property
     def device(self):
         """Get the device the model is on"""
         if self.optimisable == "weights":
@@ -695,7 +727,7 @@ class CurrentLIFNetwork_IO(nn.Module):
             "scaling_factors_recurrent",
             "scaling_factors_feedforward",
         ]:
-            return self.scaling_factors.device
+            return self.log_scaling_factors.device
         else:
             # Get device from weights buffer
             return self._buffers["_weights_buffer"].device
