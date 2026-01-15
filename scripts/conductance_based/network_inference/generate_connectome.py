@@ -24,7 +24,7 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from src.dataloaders.unsupervised import HomogeneousPoissonSpikeDataLoader
+from dataloaders.unsupervised import HomogeneousPoissonSpikeDataLoader
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from snn_runners import SNNInference
 import torch

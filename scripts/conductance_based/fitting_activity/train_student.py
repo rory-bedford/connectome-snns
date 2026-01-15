@@ -15,7 +15,7 @@ surrogate gradients.
 """
 
 import numpy as np
-from src.dataloaders.supervised import (
+from dataloaders.supervised import (
     PrecomputedSpikeDataset,
     CyclicSampler,
 )

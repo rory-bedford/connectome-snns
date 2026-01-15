@@ -13,11 +13,11 @@ import torch
 import toml
 import zarr
 import matplotlib.pyplot as plt
-from src.dataloaders.unsupervised import (
+from dataloaders.unsupervised import (
     InhomogeneousPoissonSpikeDataLoader,
 )
-from src.dataloaders.rate_processes import OrnsteinUhlenbeckRateProcess
-from src.dataloaders.odourants import (
+from dataloaders.rate_processes import OrnsteinUhlenbeckRateProcess
+from dataloaders.odourants import (
     generate_odour_firing_rates,
 )
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork

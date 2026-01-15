@@ -10,7 +10,7 @@ single-neuron learning dynamics.
 """
 
 import numpy as np
-from src.dataloaders.supervised import (
+from dataloaders.supervised import (
     PrecomputedSpikeDataset,
     CyclicSampler,
     single_neuron_collate_fn,

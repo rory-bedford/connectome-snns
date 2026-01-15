@@ -26,7 +26,7 @@ from synthetic_connectome import (
     weight_assigners,
     cell_types,
 )
-from src.dataloaders.unsupervised import (
+from dataloaders.unsupervised import (
     HomogeneousPoissonSpikeDataLoader,
 )
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork

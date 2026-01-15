@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from configs import SimulationConfig
 from configs.conductance_based import RecurrentLayerConfig, FeedforwardLayerConfig
 import toml
-from src.dataloaders.unsupervised import HomogeneousPoissonSpikeDataLoader
+from dataloaders.unsupervised import HomogeneousPoissonSpikeDataLoader
 from network_simulators.conductance_based.simulator import ConductanceLIFNetwork
 from snn_runners import SNNInference
 from analysis import compute_network_statistics
