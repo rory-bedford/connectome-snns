@@ -419,6 +419,21 @@ def main(
         total=num_epochs,
     )
 
+    # Build wandb config dict if wandb is enabled
+    wandb_config_dict = None
+    if wandb_config:
+        wandb_config_dict = {
+            "simulation": simulation.model_dump(),
+            "training": training.model_dump(),
+            "hyperparameters": hyperparameters.model_dump(),
+            "recurrent": recurrent.model_dump(),
+            "feedforward": feedforward.model_dump(),
+            "scaling_factors": scaling_factors,
+            "output_dir": str(output_dir),
+            "device": device,
+            **wandb_config,  # Include W&B project/entity/tags from experiment.toml
+        }
+
     # Create trainer
     trainer = SNNTrainer(
         model=model,
@@ -437,7 +452,7 @@ def main(
         plot_size=plot_size,
         mixed_precision=mixed_precision,
         grad_norm_clip=grad_norm_clip,
-        wandb_config=wandb_config,
+        wandb_config=wandb_config_dict,
         progress_bar=pbar,
         plot_generator=plot_generator,
         stats_computer=stats_computer,
