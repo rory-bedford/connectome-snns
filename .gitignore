@@ -214,5 +214,4 @@ results/
 logs/
 
 # Workspace directory for editable experiment configs
-workspace/
 activate

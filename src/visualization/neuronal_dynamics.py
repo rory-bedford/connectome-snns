@@ -5,7 +5,7 @@ from matplotlib.patches import Patch
 import numpy as np
 from numpy.typing import NDArray
 
-from parameter_loaders import (
+from configs.conductance_based import (
     EXCITATORY_SYNAPSE_TYPES,
     INHIBITORY_SYNAPSE_TYPES,
 )

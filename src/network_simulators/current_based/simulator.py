@@ -7,7 +7,7 @@ from tqdm import tqdm
 from network_simulators.current_based.model_init import (
     CurrentLIFNetwork_IO,
 )
-from optimisation.surrogate_gradients import SurrGradSpike
+from training_utils.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]

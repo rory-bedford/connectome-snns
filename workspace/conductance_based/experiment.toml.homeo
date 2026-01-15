@@ -1,0 +1,25 @@
+
+# =================
+# EXPERIMENT CONFIG
+# =================
+
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/homeostatic_plasticity/backprop_hp.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/homeostatic-plasticity/weight-regularisation"
+parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/homeostatic-plasticity.toml"
+log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
+description = "Running parameter set 1 with updates: lower variance configuration algorithm, weights constrained to be positive, new loss to enhance recurrent/feedforward weight ratio"
+
+# ===================
+# DATA CONFIGURATION
+# ===================
+
+# ===================
+# WANDB CONFIGURATION
+# ===================
+
+[wandb]
+enabled = true                         # Whether to use Weights & Biases for logging
+project = "homeostatic-plasticity"     # W&B project name
+entity = ""                            # W&B entity (username or team name), leave empty to use default
+tags = []                              # List of tags for organizing runs
+notes = "weight-regularisation"        # Notes about this experiment run

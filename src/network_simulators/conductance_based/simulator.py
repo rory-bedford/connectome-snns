@@ -6,7 +6,7 @@ from typing import List
 from numpy.typing import NDArray
 from tqdm import tqdm
 from network_simulators.conductance_based.model_init import ConductanceLIFNetwork_IO
-from optimisation.surrogate_gradients import SurrGradSpike
+from training_utils.surrogate_gradients import SurrGradSpike
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]

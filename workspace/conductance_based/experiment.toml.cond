@@ -1,0 +1,25 @@
+
+# =================
+# EXPERIMENT CONFIG
+# =================
+
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/network_inference/conductance_based_Dp.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/debug"
+parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/conductance-based-Dp.toml"
+log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
+description = "Generating teacher activity for training student network"
+
+# ===================
+# DATA CONFIGURATION
+# ===================
+
+# ===================
+# WANDB CONFIGURATION
+# ===================
+
+[wandb]
+enabled = false                        # Whether to use Weights & Biases for logging
+project = ""                           # W&B project name
+entity = ""                            # W&B entity (username or team name), leave empty to use default
+tags = []                              # List of tags for organizing runs
+notes = ""                             # Notes about this experiment run

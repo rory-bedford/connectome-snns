@@ -1,0 +1,31 @@
+
+# =================
+# EXPERIMENT CONFIG
+# =================
+
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/generate_teacher_activity.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/debug"
+parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/generate-teacher-activity.toml"
+log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
+description = "Generating teacher activity with Ornstein-Uhlenbeck modulation of assembly-targeted odourants for training student network"
+
+# ===================
+# DATA CONFIGURATION
+# ===================
+
+[data]
+
+[[data.inputs]]
+path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/homeostatic-plasticity/weight-regularisation/best_state/network_structure.npz"
+strategy = "copy"
+
+# ===================
+# WANDB CONFIGURATION
+# ===================
+
+[wandb]
+enabled = false                        # Whether to use Weights & Biases for logging
+project = ""                           # W&B project name
+entity = ""                            # W&B entity (username or team name), leave empty to use default
+tags = []                              # List of tags for organizing runs
+notes = ""                             # Notes about this experiment run
