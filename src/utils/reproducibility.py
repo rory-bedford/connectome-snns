@@ -124,9 +124,12 @@ class ExperimentTracker:
                     for line in result.stdout.strip().split("\n"):
                         if line:
                             # Format: "XY filename" where X and Y are status codes
-                            # We want the filename part (everything after first 3 chars)
-                            filename = line[3:].strip()
-                            dirty_files.append(filename)
+                            # XY is exactly 2 chars; find first space/whitespace after that
+                            # to handle edge cases more robustly
+                            rest = line[2:]  # Skip the 2 status chars
+                            filename = rest.lstrip().strip()
+                            if filename:
+                                dirty_files.append(filename)
 
                     # Filter out allowed dirty files (parameters and workspace)
                     code_dirty_files = [
