@@ -21,7 +21,6 @@ checkpoint_interval = 500              # Save model checkpoints and generate plo
 plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
-grad_norm_clip = None                  # Maximum norm for gradient clipping (None to disable)
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 
 # ===============
