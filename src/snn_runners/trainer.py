@@ -151,7 +151,7 @@ class SNNTrainer:
             import wandb
 
             # Build wandb config from training parameters
-            wandb_config_dict = {
+            trainer_config = {
                 "num_epochs": self.num_epochs,
                 "chunks_per_update": self.chunks_per_update,
                 "log_interval": self.log_interval,
@@ -162,12 +162,17 @@ class SNNTrainer:
                 "device": self.device,
             }
 
+            # Merge trainer config with user-provided config
+            # Extract 'config' from wandb_config if it exists, otherwise use empty dict
+            user_config = self.wandb_config.pop("config", {})
+            merged_config = {**user_config, **trainer_config}
+
             # Build init kwargs with only non-None optional parameters
             wandb_init_kwargs = {
                 "name": output_dir.name if output_dir else "snn_training",
-                "config": wandb_config_dict,
+                "config": merged_config,
                 "dir": str(output_dir) if output_dir else None,
-                **self.wandb_config,
+                **self.wandb_config,  # project, entity, tags, etc.
             }
 
             print("\n" + "=" * 60)
