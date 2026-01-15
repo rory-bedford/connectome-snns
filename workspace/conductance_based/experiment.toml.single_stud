@@ -1,5 +1,5 @@
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_single_neuron.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/single-neuron-higher-lr"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/single-neuron-higher-chunksize"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Relearning scale factors for a single neuron, using all feedforward and recurrent inputs"
@@ -19,4 +19,4 @@ enabled = true
 project = "training-single-neuron"
 entity = ""
 tags = []
-notes = "neuron-1"
+notes = "neuron-1-lr-0.01-chunksize-10000"
