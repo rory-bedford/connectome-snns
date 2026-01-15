@@ -564,16 +564,19 @@ def main(
     # Build wandb config dict if wandb is enabled
     wandb_config_dict = None
     if wandb_config:
+        # Separate wandb init kwargs (project, entity, tags, etc.) from config parameters
         wandb_config_dict = {
-            "simulation": simulation.model_dump(),
-            "training": training.model_dump(),
-            "hyperparameters": hyperparameters.model_dump(),
-            "recurrent": recurrent.model_dump(),
-            "feedforward": feedforward.model_dump(),
-            "scaling_factors": scaling_factors,
-            "output_dir": str(output_dir),
-            "device": device,
-            **wandb_config,  # Include W&B project/entity/tags from experiment.toml
+            **wandb_config,  # W&B initialization kwargs (project, entity, tags, etc.)
+            "config": {  # Nest all experiment parameters under 'config'
+                "simulation": simulation.model_dump(),
+                "training": training.model_dump(),
+                "hyperparameters": hyperparameters.model_dump(),
+                "recurrent": recurrent.model_dump(),
+                "feedforward": feedforward.model_dump(),
+                "scaling_factors": scaling_factors,
+                "output_dir": str(output_dir),
+                "device": device,
+            },
         }
 
     # Create trainer with all initialized components
