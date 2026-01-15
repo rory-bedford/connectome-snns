@@ -34,6 +34,7 @@ AVAILABLE_SCRIPTS = [
     "train_student",
     "train_single_neuron",
     "train_feedforward",
+    "train_feedforward_poisson_inputs",
 ]
 
 

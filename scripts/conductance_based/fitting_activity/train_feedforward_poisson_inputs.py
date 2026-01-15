@@ -1,19 +1,27 @@
 """
-Training all neurons with feedforward dynamics to match target activity.
+Training all neurons with feedforward dynamics using Poisson inputs.
 
 This script trains all neurons from a connectome-constrained network using
-feedforward-only dynamics. It concatenates recurrent and feedforward neurons as
-inputs to create a unified feedforward architecture, transforming the recurrent
-network into a feedforward one where teacher spiketrains become additional inputs.
+feedforward-only dynamics, similar to train_feedforward.py, but with one key
+difference: the feedforward (external) inputs are replaced with Poisson spike
+trains matching the average firing rate of the original inputs.
 
-The loss is Van Rossum distance computed on all neurons simultaneously.
+The recurrent neuron spikes (teacher activity) are still loaded exactly from disk
+and used as additional feedforward inputs. This tests whether the network can learn
+the correct dynamics when the external input statistics are preserved but the exact
+spike timing is randomized.
+
+Architecture:
+    - Poisson spikes (generated on-the-fly) replace original feedforward inputs
+    - Exact teacher recurrent spikes become additional feedforward inputs
+    - Combined: [Poisson FF, exact recurrent] -> feedforward network -> output
+    - Loss: Van Rossum distance on all neurons vs teacher recurrent spikes
 """
 
 import numpy as np
 from dataloaders.supervised import (
-    PrecomputedSpikeDataset,
+    PoissonInputSpikeDataset,
     CyclicSampler,
-    feedforward_collate_fn,
 )
 from network_simulators.feedforward_conductance_based.simulator import (
     FeedforwardConductanceLIFNetwork,
@@ -44,7 +52,12 @@ def main(
     wandb_config=None,
     resume_from=None,
 ):
-    """Train all neurons to match target spike train activity using feedforward dynamics.
+    """Train all neurons with Poisson inputs to match target spike train activity.
+
+    This function trains a feedforward-unraveled network where:
+    - Original feedforward inputs are replaced with Poisson spikes (same avg rate)
+    - Teacher recurrent spikes are used as exact additional inputs
+    - The network learns to reproduce teacher activity using Van Rossum loss
 
     Args:
         input_dir (Path): Directory containing teacher data (network_structure.npz, spike_data.zarr)
@@ -129,10 +142,10 @@ def main(
 
     concatenated_mask = np.concatenate([feedforward_mask, recurrent_mask], axis=0)
 
-    print("\n✓ Feedforward network setup:")
+    print("\n✓ Feedforward network setup (Poisson inputs):")
     print(f"  - Output neurons: {n_neurons}")
     print(
-        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} FF + {n_neurons} recurrent)"
+        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} Poisson FF + {n_neurons} exact recurrent)"
     )
     print(f"  - Weight matrix shape: {concatenated_weights.shape}")
     print(f"  - Active connections: {concatenated_mask.sum()}")
@@ -232,12 +245,14 @@ def main(
         feedforward_scaling_factors=target_scaling_factors_FF,
     )
 
-    # ======================
-    # Load Dataset from Disk
-    # ======================
+    # =============================================
+    # Load Dataset with Poisson Input Generation
+    # =============================================
 
-    # Load precomputed spike data from zarr
-    spike_dataset = PrecomputedSpikeDataset(
+    # Load spike dataset that generates Poisson inputs on-the-fly
+    # This computes average firing rate from original FF spikes and replaces them
+    # with Poisson spikes, while keeping recurrent spikes exact
+    spike_dataset = PoissonInputSpikeDataset(
         spike_data_path=input_dir / "spike_data.zarr",
         chunk_size=chunk_size,
         device=device,
@@ -246,14 +261,15 @@ def main(
     batch_size = spike_dataset.batch_size
 
     print(f"\n✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batch size")
+    print(f"✓ Poisson input firing rate: {spike_dataset.avg_firing_rate:.2f} Hz")
+    print("  (computed from average of original feedforward spike data)")
 
-    # DataLoader with custom collate function for concatenation
+    # DataLoader - no collate function needed, dataset already concatenates inputs
     spike_dataloader = DataLoader(
         spike_dataset,
         batch_size=None,
         sampler=CyclicSampler(spike_dataset),
         num_workers=0,
-        collate_fn=feedforward_collate_fn,
     )
 
     # ==============================================
@@ -339,7 +355,7 @@ def main(
             n_neurons_plot=2 * n_plot,
             fraction=1.0,
             random_seed=None,
-            title=f"Feedforward Network: Target vs Trained (first {n_plot} neurons)",
+            title=f"Poisson Inputs: Target vs Trained (first {n_plot} neurons)",
             ylabel="Neuron",
             figsize=(14, 8),
         )
@@ -365,6 +381,7 @@ def main(
             "firing_rate/std": float(firing_rates.std()),
             "firing_rate/min": float(firing_rates.min()),
             "firing_rate/max": float(firing_rates.max()),
+            "poisson_input_rate": spike_dataset.avg_firing_rate,
         }
 
         # Add scaling factor tracking with proper cell type names
@@ -429,6 +446,7 @@ def main(
                 "scaling_factors": scaling_factors,
                 "output_dir": str(output_dir),
                 "device": device,
+                "poisson_input_rate": spike_dataset.avg_firing_rate,
             },
         }
 
@@ -472,6 +490,7 @@ def main(
     print(f"Epochs: {epochs}")
     print(f"Batch size: {batch_size}")
     print(f"Training all {n_neurons} neurons with Van Rossum loss")
+    print(f"Feedforward inputs: Poisson @ {spike_dataset.avg_firing_rate:.2f} Hz")
 
     model.reset_state(batch_size=batch_size)
     model.track_variables = False
@@ -500,6 +519,7 @@ def main(
         cell_type_indices=cell_type_indices,
         feedforward_cell_type_indices=concatenated_cell_type_indices,
         scaling_factors_FF=model.scaling_factors_FF.detach().cpu().numpy(),
+        poisson_input_rate=spike_dataset.avg_firing_rate,
     )
 
     # Close logger
@@ -513,3 +533,4 @@ def main(
     print(f"✓ Figures: {output_dir / 'figures'}")
     print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")
+    print(f"✓ Poisson input rate used: {spike_dataset.avg_firing_rate:.2f} Hz")

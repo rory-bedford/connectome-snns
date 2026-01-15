@@ -125,6 +125,180 @@ class PrecomputedSpikeDataset(Dataset):
         return SpikeData(input_spikes=input_tensor, target_spikes=target_tensor)
 
 
+class PoissonInputSpikeDataset(Dataset):
+    """
+    Dataset that replaces feedforward inputs with Poisson spikes while preserving recurrent targets.
+
+    This dataset is designed for training feedforward-unraveled networks where:
+    - The original feedforward (external) inputs are replaced with Poisson spike trains
+    - The recurrent neuron spikes (teacher activity) are loaded exactly from disk
+    - Both are concatenated to form the model input
+    - The recurrent spikes also serve as the training target
+
+    The Poisson firing rate is computed as the average rate across all feedforward neurons
+    and all time points in the dataset. This rate is computed once during initialization
+    by scanning through the stored spike data.
+
+    This enables testing whether the network can learn from statistically similar but
+    not identical input patterns, separating the role of exact spike timing in the
+    feedforward inputs from the learning of recurrent dynamics.
+
+    Args:
+        spike_data_path (Path): Path to zarr directory containing spike data.
+            Must contain 'input_spikes' (feedforward) and 'output_spikes' (recurrent).
+        chunk_size (int): Number of timesteps per chunk.
+        device (Union[str, torch.device]): Device to load data to. Default: "cpu".
+        firing_rate_override (float, optional): If provided, use this firing rate (Hz)
+            instead of computing from the data. Useful for experiments varying the rate.
+
+    Attributes:
+        dt (float): Timestep in milliseconds, loaded from zarr attributes.
+        batch_size (int): Number of samples in the batch dimension.
+        total_time (int): Total number of timesteps in the full spike data.
+        n_input_neurons (int): Number of feedforward input neurons.
+        n_neurons (int): Number of recurrent/target neurons.
+        avg_firing_rate (float): Average firing rate (Hz) used for Poisson generation.
+        num_chunks (int): Total number of chunks available.
+
+    Example:
+        >>> dataset = PoissonInputSpikeDataset(
+        ...     spike_data_path=Path("results/spike_data.zarr"),
+        ...     chunk_size=1000,
+        ...     device="cuda"
+        ... )
+        >>> print(f"Using Poisson rate: {dataset.avg_firing_rate:.2f} Hz")
+        >>>
+        >>> # Each access generates fresh Poisson spikes
+        >>> batch = dataset[0]
+        >>> batch.input_spikes.shape  # (batch_size, chunk_size, n_ff + n_rec)
+        >>> batch.target_spikes.shape  # (batch_size, chunk_size, n_rec)
+        >>>
+        >>> # Use with DataLoader
+        >>> dataloader = DataLoader(
+        ...     dataset,
+        ...     batch_size=None,
+        ...     sampler=CyclicSampler(dataset),
+        ... )
+    """
+
+    def __init__(
+        self,
+        spike_data_path: Union[Path, str],
+        chunk_size: int,
+        device: Union[str, torch.device] = "cpu",
+        firing_rate_override: float = None,
+    ):
+        self.spike_data_path = Path(spike_data_path)
+        self.chunk_size = chunk_size
+        self.device = device
+
+        # Open zarr group (read-only)
+        root = zarr.open_group(self.spike_data_path, mode="r")
+
+        # Load dt from zarr attributes
+        if "dt" not in root.attrs:
+            raise ValueError(
+                f"Zarr file at {spike_data_path} does not contain 'dt' attribute. "
+                "Ensure the data was generated with a version that saves dt to zarr."
+            )
+        self.dt = float(root.attrs["dt"])
+
+        self.input_spike_data = root["input_spikes"]
+        self.target_spike_data = root["output_spikes"]
+
+        # Shape: (batch_size, total_time, n_neurons)
+        self.batch_size, self.total_time, self.n_input_neurons = (
+            self.input_spike_data.shape
+        )
+        _, _, self.n_neurons = self.target_spike_data.shape
+
+        self.num_chunks = self.total_time // chunk_size
+
+        if self.total_time % chunk_size != 0:
+            print(
+                f"Warning: total_time ({self.total_time}) not divisible by chunk_size ({chunk_size})"
+            )
+
+        # Compute or use provided firing rate
+        if firing_rate_override is not None:
+            self.avg_firing_rate = firing_rate_override
+        else:
+            self.avg_firing_rate = self._compute_average_firing_rate()
+
+        # Pre-compute spike probability for Poisson generation
+        # p = rate (Hz) * dt (ms) * 1e-3 (ms to s conversion)
+        self.spike_prob = self.avg_firing_rate * self.dt * 1e-3
+
+    def _compute_average_firing_rate(self) -> float:
+        """
+        Compute the average firing rate across all feedforward neurons and time.
+
+        Scans through the entire input spike dataset to compute the mean firing rate.
+        This is done once during initialization.
+
+        Returns:
+            float: Average firing rate in Hz.
+        """
+        # Load all input spikes (this may use significant memory for large datasets)
+        # For very large datasets, could implement chunked computation
+        all_input_spikes = self.input_spike_data[:]  # (batch, time, n_ff)
+
+        # Count total spikes and compute rate
+        total_spikes = all_input_spikes.sum()
+        total_neuron_time_ms = (
+            self.batch_size * self.total_time * self.n_input_neurons * self.dt
+        )
+        total_neuron_time_s = total_neuron_time_ms / 1000.0
+
+        avg_rate = total_spikes / total_neuron_time_s
+
+        return float(avg_rate)
+
+    def __len__(self) -> int:
+        """Total number of chunks."""
+        return self.num_chunks
+
+    def __getitem__(self, idx: int) -> SpikeData:
+        """
+        Get a chunk with Poisson-generated feedforward inputs and exact recurrent spikes.
+
+        For each access, fresh Poisson spikes are generated for the feedforward inputs,
+        while the recurrent spikes are loaded exactly from disk. Both are concatenated
+        to form the model input.
+
+        Args:
+            idx (int): Chunk index (0 to num_chunks-1).
+
+        Returns:
+            SpikeData named tuple with fields:
+                - input_spikes: torch.Tensor of shape (batch_size, chunk_size, n_ff + n_rec)
+                    Concatenation of [Poisson FF spikes, exact recurrent spikes]
+                - target_spikes: torch.Tensor of shape (batch_size, chunk_size, n_rec)
+                    Exact recurrent spikes (same as second half of input_spikes)
+        """
+        # Extract recurrent spikes from zarr
+        start_t = idx * self.chunk_size
+        end_t = start_t + self.chunk_size
+
+        target_chunk = self.target_spike_data[:, start_t:end_t, :]
+
+        # Convert to torch tensor
+        target_tensor = torch.from_numpy(target_chunk).bool().to(self.device)
+
+        # Generate fresh Poisson spikes for feedforward inputs
+        # Shape: (batch_size, chunk_size, n_input_neurons)
+        random_vals = torch.rand(
+            self.batch_size, self.chunk_size, self.n_input_neurons, device=self.device
+        )
+        poisson_spikes = random_vals < self.spike_prob
+
+        # Concatenate: [Poisson FF, exact recurrent] -> model input
+        # Shape: (batch_size, chunk_size, n_ff + n_rec)
+        concatenated_inputs = torch.cat([poisson_spikes, target_tensor], dim=2)
+
+        return SpikeData(input_spikes=concatenated_inputs, target_spikes=target_tensor)
+
+
 class CyclicSampler(Sampler):
     """
     Sampler that cycles through indices infinitely.
@@ -154,6 +328,50 @@ class CyclicSampler(Sampler):
     def __len__(self) -> int:
         """Return a very large number to indicate indefinite iteration."""
         return 2**31 - 1  # Effectively infinite
+
+
+def feedforward_collate_fn(batch: SpikeData) -> SpikeData:
+    """
+    Custom collate function for feedforward training on all neurons.
+
+    Transforms a recurrent network into a feedforward architecture by concatenating
+    feedforward and recurrent spikes as inputs. The recurrent spikes (teacher activity)
+    become additional known inputs, allowing the network to be trained with feedforward
+    dynamics only.
+
+    This is used when "unraveling" a recurrent network: instead of neurons receiving
+    recurrent input from other neurons in the network, they receive the pre-recorded
+    teacher spike trains as additional feedforward inputs.
+
+    Args:
+        batch: SpikeData named tuple from PrecomputedSpikeDataset
+            input_spikes: (batch, time, n_feedforward) - feedforward neuron spikes
+            target_spikes: (batch, time, n_neurons) - recurrent neuron spikes (teacher)
+
+    Returns:
+        SpikeData named tuple with fields:
+            input_spikes: (batch, time, n_feedforward + n_neurons) - concatenated inputs
+            target_spikes: (batch, time, n_neurons) - unchanged recurrent targets
+
+    Example:
+        >>> dataloader = DataLoader(
+        ...     dataset,
+        ...     batch_size=None,
+        ...     collate_fn=feedforward_collate_fn
+        ... )
+        >>> for batch_data in dataloader:
+        ...     # batch_data.input_spikes.shape: (batch, time, n_ff + n_rec)
+        ...     # batch_data.target_spikes.shape: (batch, time, n_rec)
+    """
+    # Concatenate feedforward and recurrent spikes along neuron dimension
+    # Shape: (batch, time, n_feedforward + n_neurons)
+    concatenated_inputs = torch.cat([batch.input_spikes, batch.target_spikes], dim=2)
+
+    # Keep all neurons as target
+    # Shape: (batch, time, n_neurons)
+    return SpikeData(
+        input_spikes=concatenated_inputs, target_spikes=batch.target_spikes
+    )
 
 
 def single_neuron_collate_fn(
