@@ -37,3 +37,4 @@ project = "connectome-snns"            # W&B project name
 entity = ""                            # W&B entity (username or team name), leave empty to use default
 tags = []                              # List of tags for organizing runs
 notes = ""                             # Notes about this experiment run
+# test1
