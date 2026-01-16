@@ -116,7 +116,9 @@ def run_on_gpu(args):
     }
 
 
-def run_custom_search(experiment_config_path, config_generator, cuda_devices):
+def run_custom_search(
+    experiment_config_path, config_generator, cuda_devices, grid_script_path=None
+):
     """
     Run custom grid search in parallel across GPUs.
 
@@ -124,6 +126,7 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
         experiment_config_path: Path to experiment.toml
         config_generator: Generator function(base_params) that yields (params_dict, description)
         cuda_devices: List of GPU IDs (e.g., [0, 1])
+        grid_script_path: Path to the grid search script (for copying to output dir)
     """
     # Load experiment config and base parameters
     experiment_config = toml.load(experiment_config_path)
@@ -134,14 +137,12 @@ def run_custom_search(experiment_config_path, config_generator, cuda_devices):
     grid_parent = parent_output.parent / parent_output.name
     grid_parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy the run_grid_search.py script to the target directory
-    repo_root = get_repo_root()
-    grid_search_script = repo_root / "run_grid_search.py"
-    if grid_search_script.exists():
-        shutil.copy2(grid_search_script, grid_parent / "run_grid_search.py")
-        print(f"✓ Copied {grid_search_script.name} to {grid_parent}")
-    else:
-        print(f"⚠ Warning: {grid_search_script} not found, skipping copy")
+    # Copy the grid search script to the target directory for reproducibility
+    if grid_script_path:
+        grid_script_path = Path(grid_script_path)
+        if grid_script_path.exists():
+            shutil.copy2(grid_script_path, grid_parent / "run_grid_search.py")
+            print(f"✓ Copied {grid_script_path} to {grid_parent}")
 
     print(f"\nGrid search parent: {grid_parent}")
 

@@ -64,4 +64,5 @@ if __name__ == "__main__":
         experiment_config_path=config_path,
         config_generator=custom_config_generator,
         cuda_devices=CUDA_VISIBLE_DEVICES,
+        grid_script_path=__file__,
     )
