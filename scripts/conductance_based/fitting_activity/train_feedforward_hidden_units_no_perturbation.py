@@ -99,10 +99,10 @@ def make_hidden_collate_fn(
             dtype=torch.float32,
         )
 
-        # Visible neurons: use actual teacher spikes
+        # Visible neurons: use actual teacher spikes (convert to float)
         recurrent_inputs[:, :, visible_indices_tensor] = batch.target_spikes[
             :, :, visible_indices_tensor
-        ]
+        ].float()
 
         # Hidden neurons: use constant fractional rates
         if len(hidden_indices) > 0:

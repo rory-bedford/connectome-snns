@@ -1,8 +1,8 @@
-script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_poisson_inputs.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-constant-inputs"
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_hidden_units.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-hidden-units-0.1-constant-inputs"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student-hidden.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
-description = "Relearning scale factors for the feedforward network with feedforward units replaced by constant firing rates"
+description = "Relearning scale factors for the feedforward network with some recurrent units hidden and replaced with cell-type firing rates"
 
 [data]
 
@@ -16,7 +16,7 @@ strategy = "symlink"
 
 [wandb]
 enabled = true
-project = "training-feedforward-network"
+project = "training-hidden-units"
 entity = ""
 tags = []
-notes = "constant-inputs"
+notes = "hidden-fraction-0.1-constant-rates"
