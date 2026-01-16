@@ -1,5 +1,5 @@
-script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_hidden_units.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-hidden-units"
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_hidden_units_no_perturbation.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-hidden-units-no-perturbation"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student-hidden.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Relearning scale factors for the feedforward network with some recurrent units hidden"
@@ -19,4 +19,4 @@ enabled = true
 project = "training-hidden-units"
 entity = ""
 tags = []
-notes = ""
+notes = "no-perturbation"

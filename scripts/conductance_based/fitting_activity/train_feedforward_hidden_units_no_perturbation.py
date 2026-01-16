@@ -285,8 +285,11 @@ def main(
     )
 
     # ============================================
-    # Concatenate Scaling Factors (NO PERTURBATION)
+    # Concatenate and Perturb Scaling Factors
     # ============================================
+
+    # Re-add weight_perturbation_variance since we need it
+    weight_perturbation_variance = training.weight_perturbation_variance
 
     # Get scaling factors from config
     # Shape: (n_ff_types, n_rec_types) and (n_rec_types, n_rec_types)
@@ -299,14 +302,33 @@ def main(
         [sf_feedforward, sf_recurrent], axis=0
     )
 
-    # NO PERTURBATION: Student starts at the target
-    # Use original weights without perturbation
+    # Apply weight perturbation to create target scaling factors
+    # Sample scaling factors from log-normal distribution
+    sigma = np.sqrt(weight_perturbation_variance)
+    mu = -(sigma**2) / 2.0
+
+    # Generate perturbation factors matching scaling factor shape
+    perturbation_factors = np.random.lognormal(
+        mean=mu, sigma=sigma, size=concatenated_scaling_factors.shape
+    )
+
+    # Apply perturbation to weights for all visible neurons
     perturbed_weights = concatenated_weights.copy()
+    for input_idx in range(n_total_inputs):
+        input_type = concatenated_cell_type_indices[input_idx]
+        for output_idx in range(n_neurons):
+            output_type = cell_type_indices_visible[output_idx]
+            perturbed_weights[input_idx, output_idx] *= perturbation_factors[
+                input_type, output_type
+            ]
 
-    # Target scaling factors are 1.0 (matching initial scaling factors)
-    target_scaling_factors_FF = np.ones_like(concatenated_scaling_factors)
+    # Target scaling factors are reciprocals of perturbation
+    target_scaling_factors_FF = 1.0 / perturbation_factors
 
-    print("\n✓ NO PERTURBATION TEST: Student starts at teacher's scaling factors")
+    # STABILITY TEST: Initialize student at the target (instead of 1.0)
+    concatenated_scaling_factors = target_scaling_factors_FF.copy()
+
+    print("\n✓ STABILITY TEST: Student initialized at target scaling factors")
 
     # Save targets and hidden neuron info
     targets_dir = output_dir / "targets"
@@ -579,6 +601,28 @@ def main(
     model.reset_state(batch_size=batch_size)
     model.track_variables = False
     model.use_tqdm = False
+
+    # Log initial scaling factors at step 0
+    if trainer.wandb_logger:
+        initial_sf = model.scaling_factors_FF.detach().cpu().numpy()
+        input_cell_type_names = (
+            feedforward.cell_types.names + recurrent.cell_types.names
+        )
+        output_cell_type_names = recurrent.cell_types.names
+
+        initial_stats = {}
+        for source_idx in range(initial_sf.shape[0]):
+            source_type_name = input_cell_type_names[source_idx]
+            for target_idx in range(initial_sf.shape[1]):
+                target_type_name = output_cell_type_names[target_idx]
+                synapse_name = f"{source_type_name}_to_{target_type_name}"
+                initial_stats[f"scaling_factors/{synapse_name}/value"] = float(
+                    initial_sf[source_idx, target_idx]
+                )
+                initial_stats[f"scaling_factors/{synapse_name}/target"] = float(
+                    target_scaling_factors_FF[source_idx, target_idx]
+                )
+        wandb.log(initial_stats, step=0)
 
     best_loss = trainer.train(output_dir=output_dir)
 

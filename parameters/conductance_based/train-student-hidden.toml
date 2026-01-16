@@ -9,7 +9,7 @@
 [simulation]
 seed = 44                              # Random seed for reproducibility
 chunk_size = 200                       # Number of timesteps per chunk
-hidden_cell_fraction = 0.0             # Fraction of recurrent cells to hide (0.0 = none, 0.5 = half)
+hidden_cell_fraction = 0.1             # Fraction of recurrent cells to hide (0.0 = none, 0.5 = half)
 
 # ======================
 # TRAINING CONFIGURATION
