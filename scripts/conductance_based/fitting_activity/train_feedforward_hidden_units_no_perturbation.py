@@ -602,8 +602,34 @@ def main(
     model.track_variables = False
     model.use_tqdm = False
 
-    # Log initial scaling factors at step 0
-    if trainer.wandb_logger:
+    # Initialize wandb early so we can log initial scaling factors at step 0
+    if wandb_config_dict:
+        # Build wandb init kwargs
+        trainer_config = {
+            "num_epochs": num_epochs,
+            "chunks_per_update": chunks_per_update,
+            "log_interval": log_interval,
+            "checkpoint_interval": checkpoint_interval,
+            "mixed_precision": mixed_precision,
+            "grad_norm_clip": grad_norm_clip,
+            "output_dir": str(output_dir),
+            "device": device,
+        }
+        user_config = wandb_config_dict.pop("config", {})
+        merged_config = {**user_config, **trainer_config}
+
+        wandb_init_kwargs = {
+            "name": output_dir.name,
+            "config": merged_config,
+            "dir": str(output_dir),
+            **wandb_config_dict,
+        }
+
+        print("\n" + "=" * 60)
+        trainer.wandb_logger = wandb.init(**wandb_init_kwargs)
+        print("=" * 60 + "\n")
+
+        # Log initial scaling factors at step 0
         initial_sf = model.scaling_factors_FF.detach().cpu().numpy()
         input_cell_type_names = (
             feedforward.cell_types.names + recurrent.cell_types.names
