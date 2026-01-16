@@ -1,9 +1,16 @@
 """
 Simple parallel grid search with GPU assignment and custom config modification.
 
-COPY THIS FILE INTO workspace/ and EDIT THE custom_config_generator FUNCTION.
-Then run with:
-    ./run --grid
+Setup:
+    1. Copy this file to workspace/run_grid_search.py
+    2. Edit the custom_config_generator function to define your parameter sweep
+    3. Edit CUDA_VISIBLE_DEVICES to match your available GPUs
+
+Run:
+    ./run --grid path/to/your/experiment.toml
+
+The ./run script automatically uses workspace/run_grid_search.py if it exists,
+otherwise falls back to this template in scripts/.
 """
 
 import sys

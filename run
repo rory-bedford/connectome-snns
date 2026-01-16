@@ -3,11 +3,17 @@
 # Executable wrapper for running experiments with uv.
 #
 # Usage:
-#   ./run                     # Uses default experiment.toml
-#   ./run path/to/config.toml # Uses specified config file
-#   ./run --grid              # Runs grid search script
-#   ./run --no-commit         # Skip git commit check with default config
-#   ./run --no-commit config.toml # Skip git commit check with specified config
+#   ./run                              # Uses workspace/experiment.toml
+#   ./run path/to/config.toml          # Uses specified config file
+#   ./run --grid                       # Runs workspace/run_grid_search.py with workspace/experiment.toml
+#   ./run --grid path/to/config.toml   # Runs workspace/run_grid_search.py with specified config
+#   ./run --no-commit                  # Skip git commit check with default config
+#   ./run --no-commit config.toml      # Skip git commit check with specified config
+#
+# Grid search setup:
+#   1. Copy scripts/run_grid_search.py to workspace/run_grid_search.py
+#   2. Edit the custom_config_generator function in workspace/run_grid_search.py
+#   3. Run: ./run --grid path/to/your/experiment.toml
 
 set -e
 
@@ -40,12 +46,19 @@ done
 
 # Check for --grid flag
 if [ -n "$GRID" ]; then
+    # Determine which grid search script to use (workspace version takes priority)
+    if [ -f "workspace/run_grid_search.py" ]; then
+        GRID_SCRIPT="workspace/run_grid_search.py"
+    else
+        GRID_SCRIPT="scripts/run_grid_search.py"
+    fi
+
     if [ -z "$CONFIG_FILE" ]; then
-        # No additional input, use default grid config
-        uv run python scripts/run_grid_search.py workspace/experiment.toml
+        # No config specified, use default
+        uv run python "$GRID_SCRIPT" workspace/experiment.toml
     else
         # Use provided config for grid search
-        uv run python scripts/run_grid_search.py "$CONFIG_FILE"
+        uv run python "$GRID_SCRIPT" "$CONFIG_FILE"
     fi
 else
     # Determine config file
