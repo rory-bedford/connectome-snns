@@ -88,7 +88,7 @@ def run_on_gpu(args):
     print(f"Running: {description} on GPU {gpu_id}")
     env = {**subprocess.os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
     result = subprocess.run(
-        ["python", "run_experiment.py", str(experiment_config_path)],
+        ["python", "scripts/run_experiment.py", str(experiment_config_path)],
         capture_output=True,
         text=True,
         env=env,

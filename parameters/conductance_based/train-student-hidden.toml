@@ -16,7 +16,7 @@ hidden_cell_fraction = 0.0             # Fraction of recurrent cells to hide (0.
 # ======================
 
 [training]
-epochs = 100                           # Total number of loops through the training data
+epochs = 40                            # Total number of loops through the training data
 chunks_per_update = 5                  # Number of loss calculations per gradient step
 log_interval = 5                       # Log metrics to CSV and wandb every N chunks
 checkpoint_interval = 50               # Save model checkpoints and generate plots every N chunks

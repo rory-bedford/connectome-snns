@@ -3,17 +3,17 @@
 # Executable wrapper for running experiments with uv.
 #
 # Usage:
-#   ./run                              # Uses workspace/experiment.toml
-#   ./run path/to/config.toml          # Uses specified config file
-#   ./run --grid                       # Runs workspace/run_grid_search.py with workspace/experiment.toml
-#   ./run --grid path/to/config.toml   # Runs workspace/run_grid_search.py with specified config
-#   ./run --no-commit                  # Skip git commit check with default config
-#   ./run --no-commit config.toml      # Skip git commit check with specified config
+#   ./run                                            # Uses workspace/experiment.toml
+#   ./run path/to/config.toml                        # Uses specified config file
+#   ./run --grid config.toml                         # Grid search with auto-detected script
+#   ./run --grid grid_script.py config.toml          # Grid search with custom script
+#   ./run --no-commit                                # Skip git commit check
+#   ./run --no-commit config.toml                    # Skip git commit check with config
 #
-# Grid search setup:
-#   1. Copy scripts/run_grid_search.py to workspace/run_grid_search.py
-#   2. Edit the custom_config_generator function in workspace/run_grid_search.py
-#   3. Run: ./run --grid path/to/your/experiment.toml
+# Grid search:
+#   If only one path is given after --grid, it's the experiment config.
+#   If two paths are given, first is the grid script, second is the config.
+#   Auto-detection uses workspace/run_grid_search.py if it exists, else scripts/run_grid_search.py
 
 set -e
 
@@ -26,7 +26,7 @@ cd "$SCRIPT_DIR"
 # Parse arguments
 NO_COMMIT=""
 GRID=""
-CONFIG_FILE=""
+POSITIONAL_ARGS=()
 
 for arg in "$@"; do
     case $arg in
@@ -38,7 +38,7 @@ for arg in "$@"; do
             ;;
         *)
             if [[ $arg != --* ]]; then
-                CONFIG_FILE="$arg"
+                POSITIONAL_ARGS+=("$arg")
             fi
             ;;
     esac
@@ -46,24 +46,36 @@ done
 
 # Check for --grid flag
 if [ -n "$GRID" ]; then
-    # Determine which grid search script to use (workspace version takes priority)
-    if [ -f "workspace/run_grid_search.py" ]; then
-        GRID_SCRIPT="workspace/run_grid_search.py"
+    # Parse positional args for grid mode
+    if [ ${#POSITIONAL_ARGS[@]} -eq 0 ]; then
+        # No args: auto-detect grid script, use default config
+        if [ -f "workspace/run_grid_search.py" ]; then
+            GRID_SCRIPT="workspace/run_grid_search.py"
+        else
+            GRID_SCRIPT="scripts/run_grid_search.py"
+        fi
+        CONFIG_FILE="workspace/experiment.toml"
+    elif [ ${#POSITIONAL_ARGS[@]} -eq 1 ]; then
+        # One arg: auto-detect grid script, arg is config
+        if [ -f "workspace/run_grid_search.py" ]; then
+            GRID_SCRIPT="workspace/run_grid_search.py"
+        else
+            GRID_SCRIPT="scripts/run_grid_search.py"
+        fi
+        CONFIG_FILE="${POSITIONAL_ARGS[0]}"
     else
-        GRID_SCRIPT="scripts/run_grid_search.py"
+        # Two args: first is grid script, second is config
+        GRID_SCRIPT="${POSITIONAL_ARGS[0]}"
+        CONFIG_FILE="${POSITIONAL_ARGS[1]}"
     fi
 
-    if [ -z "$CONFIG_FILE" ]; then
-        # No config specified, use default
-        uv run python "$GRID_SCRIPT" workspace/experiment.toml
-    else
-        # Use provided config for grid search
-        uv run python "$GRID_SCRIPT" "$CONFIG_FILE"
-    fi
+    uv run python "$GRID_SCRIPT" "$CONFIG_FILE"
 else
-    # Determine config file
-    if [ -z "$CONFIG_FILE" ]; then
+    # Determine config file from positional args
+    if [ ${#POSITIONAL_ARGS[@]} -eq 0 ]; then
         CONFIG_FILE="workspace/experiment.toml"
+    else
+        CONFIG_FILE="${POSITIONAL_ARGS[0]}"
     fi
 
     # Run experiment with appropriate flags
