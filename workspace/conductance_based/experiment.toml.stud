@@ -1,8 +1,8 @@
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_student.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/debug"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/recurrent-network"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
-description = "Relearning scale factors from fully connected, fully observed connectome, with exact input spikes, and teacher activity with assembly-targeted odourant inputs, optimising just the feedforward scaling factors."
+description = "Relearning scale factors for the recurrent network, using all feedforward and recurrent inputs"
 
 [data]
 
@@ -15,8 +15,8 @@ path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/teac
 strategy = "symlink"
 
 [wandb]
-enabled = false
+enabled = true
 project = "training-student"
 entity = ""
 tags = []
-notes = ""
+notes = "gradient-explosion-fixed"

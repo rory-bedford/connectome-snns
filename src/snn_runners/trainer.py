@@ -48,6 +48,8 @@ class SNNTrainer:
         stats_computer (Optional[Callable]): Optional function for computing network stats
         connectome_mask (Optional[torch.Tensor]): Binary mask for recurrent connectivity constraints
         feedforward_mask (Optional[torch.Tensor]): Binary mask for feedforward connectivity constraints
+        chunks_per_data_epoch (Optional[int]): Number of chunks in one full pass through the dataset.
+            When using a cyclic dataloader, this enables automatic state reset at data epoch boundaries.
     """
 
     def __init__(
@@ -72,6 +74,7 @@ class SNNTrainer:
         stats_computer: Optional[Callable] = None,
         connectome_mask: Optional[torch.Tensor] = None,
         feedforward_mask: Optional[torch.Tensor] = None,
+        chunks_per_data_epoch: Optional[int] = None,
     ):
         """Initialize the trainer with pre-configured components."""
         self.model = model
@@ -98,6 +101,7 @@ class SNNTrainer:
         self.stats_computer = stats_computer
         self.connectome_mask = connectome_mask
         self.feedforward_mask = feedforward_mask
+        self.chunks_per_data_epoch = chunks_per_data_epoch
 
         # Loggers (initialized in train() method)
         self.metrics_logger = None
@@ -204,6 +208,14 @@ class SNNTrainer:
         # Main training loop
         for epoch in range(self.current_epoch, self.num_epochs):
             self.current_epoch = epoch
+
+            # Reset states at data epoch boundaries (when cycling back to start of dataset)
+            # This ensures model and loss internal states match the conditions when data was generated
+            if (
+                self.chunks_per_data_epoch is not None
+                and epoch % self.chunks_per_data_epoch == 0
+            ):
+                self._reset_states_for_data_epoch()
 
             # Update progress bar at start of iteration
             if self.pbar:
@@ -964,3 +976,22 @@ class SNNTrainer:
         """
         self.current_epoch = epoch
         self.best_loss = best_loss
+
+    def _reset_states_for_data_epoch(self) -> None:
+        """
+        Reset model and loss function states at data epoch boundaries.
+
+        When using a cyclic dataloader, the original data was generated with the model
+        starting from zero internal state at chunk 0. To maintain consistency during
+        training, we reset states when cycling back to the start of the dataset.
+        """
+        # Reset model internal state (voltages, conductances)
+        if hasattr(self.model, "reset_state"):
+            # Get batch size from model if available
+            batch_size = getattr(self.model, "batch_size", 1)
+            self.model.reset_state(batch_size=batch_size)
+
+        # Reset loss function internal states
+        for loss_fn in self.loss_functions.values():
+            if hasattr(loss_fn, "reset_state"):
+                loss_fn.reset_state()

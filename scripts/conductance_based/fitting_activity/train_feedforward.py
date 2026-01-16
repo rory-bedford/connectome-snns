@@ -458,6 +458,7 @@ def main(
         feedforward_mask=torch.from_numpy(concatenated_mask.astype(np.float32)).to(
             device
         ),
+        chunks_per_data_epoch=spike_dataset.num_chunks,  # Reset states at data epoch boundaries
     )
 
     # =================

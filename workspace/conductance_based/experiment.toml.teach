@@ -4,7 +4,7 @@
 # =================
 
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/generate_teacher_activity.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/debug"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/teacher-activity-bk"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/generate-teacher-activity.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Generating teacher activity with Ornstein-Uhlenbeck modulation of assembly-targeted odourants for training student network"
