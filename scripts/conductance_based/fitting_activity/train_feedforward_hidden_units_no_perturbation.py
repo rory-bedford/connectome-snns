@@ -39,42 +39,78 @@ import wandb
 from visualization.neuronal_dynamics import plot_spike_trains
 
 
-def make_hidden_collate_fn(visible_indices: np.ndarray):
+def make_hidden_collate_fn(
+    visible_indices: np.ndarray,
+    hidden_indices: np.ndarray,
+    cell_type_indices: np.ndarray,
+    firing_rate_by_cell_type: np.ndarray,
+    dt: float,
+):
     """
-    Create a collate function that filters spikes to only visible neurons.
+    Create a collate function that handles hidden neurons specially.
+
+    For targets: only visible neurons are used.
+    For inputs: visible neurons use actual spikes, hidden neurons use constant
+    fractional values based on their cell type's average firing rate.
 
     Args:
-        visible_indices: Array of indices for visible (non-hidden) neurons
-
-    Returns:
-        Collate function for DataLoader
+        visible_indices: Array of indices for visible neurons
+        hidden_indices: Array of indices for hidden neurons
+        cell_type_indices: Cell type index for each neuron (full network)
+        firing_rate_by_cell_type: Average firing rate (Hz) for each cell type
+        dt: Timestep in ms
     """
     visible_indices_tensor = torch.from_numpy(visible_indices).long()
+    hidden_indices_tensor = torch.from_numpy(hidden_indices).long()
+
+    # Compute fractional spike value per timestep for each hidden neuron
+    # firing_rate (Hz) * dt (ms) / 1000 = expected spikes per timestep
+    if len(hidden_indices) > 0:
+        hidden_cell_types = cell_type_indices[hidden_indices]
+        hidden_fractional_rates = (
+            firing_rate_by_cell_type[hidden_cell_types] * dt / 1000.0
+        )
+        hidden_fractional_rates_tensor = torch.from_numpy(
+            hidden_fractional_rates.astype(np.float32)
+        )
+    else:
+        hidden_fractional_rates_tensor = torch.tensor([])
+
+    n_neurons = len(cell_type_indices)
 
     def hidden_collate_fn(batch: SpikeData) -> SpikeData:
         """
-        Custom collate function for feedforward training with hidden neurons.
-
-        Filters target spikes to only include visible neurons and concatenates
-        feedforward spikes with visible recurrent spikes as inputs.
-
-        Args:
-            batch: SpikeData named tuple from PrecomputedSpikeDataset
-                input_spikes: (batch, time, n_feedforward) - feedforward neuron spikes
-                target_spikes: (batch, time, n_neurons) - recurrent neuron spikes (teacher)
-
-        Returns:
-            SpikeData named tuple with fields:
-                input_spikes: (batch, time, n_feedforward + n_visible) - concatenated inputs
-                target_spikes: (batch, time, n_visible) - visible neuron targets only
+        For targets: filters to visible neurons only.
+        For inputs: visible get actual spikes, hidden get constant fractional rates.
         """
-        # Filter target spikes to only visible neurons
+        batch_size, time_steps, _ = batch.target_spikes.shape
+        device = batch.target_spikes.device
+
+        # Filter target spikes to only visible neurons (for loss computation)
         visible_target_spikes = batch.target_spikes[:, :, visible_indices_tensor]
 
-        # Concatenate feedforward spikes with visible recurrent spikes
-        concatenated_inputs = torch.cat(
-            [batch.input_spikes, visible_target_spikes], dim=2
+        # Build recurrent input spikes: visible get actual spikes, hidden get fractional rates
+        recurrent_inputs = torch.zeros(
+            batch_size,
+            time_steps,
+            n_neurons,
+            device=device,
+            dtype=batch.target_spikes.dtype,
         )
+
+        # Visible neurons: use actual teacher spikes
+        recurrent_inputs[:, :, visible_indices_tensor] = batch.target_spikes[
+            :, :, visible_indices_tensor
+        ]
+
+        # Hidden neurons: use constant fractional rates
+        if len(hidden_indices) > 0:
+            recurrent_inputs[:, :, hidden_indices_tensor] = (
+                hidden_fractional_rates_tensor.to(device)
+            )
+
+        # Concatenate feedforward spikes with recurrent inputs
+        concatenated_inputs = torch.cat([batch.input_spikes, recurrent_inputs], dim=2)
 
         return SpikeData(
             input_spikes=concatenated_inputs,
@@ -191,48 +227,49 @@ def main(
     print(f"  - Visible neurons: {n_visible}")
 
     # ===============================================
-    # Filter Network to Only Visible Neurons
+    # Filter Network: All Inputs -> Visible Outputs
     # ===============================================
+    # Hidden neurons are still used as inputs (with fractional rates), but not as outputs
 
-    # Filter recurrent weights: (n_visible, n_visible)
-    # Keep only connections between visible neurons
-    weights_visible = weights[np.ix_(visible_indices, visible_indices)]
+    # Recurrent weights: (n_neurons_full, n_visible)
+    # All neurons can provide input, but only visible neurons receive output
+    weights_to_visible = weights[:, visible_indices]
 
     # Filter feedforward weights: (n_feedforward, n_visible)
-    # Keep only connections to visible neurons
     feedforward_weights_visible = feedforward_weights[:, visible_indices]
 
-    # Filter cell type indices
+    # Cell type indices for visible neurons (outputs)
     cell_type_indices_visible = cell_type_indices[visible_indices]
 
-    # Filter connectivity masks
-    recurrent_mask_visible = recurrent_mask[np.ix_(visible_indices, visible_indices)]
+    # Connectivity masks: all inputs -> visible outputs
+    recurrent_mask_to_visible = recurrent_mask[:, visible_indices]
     feedforward_mask_visible = feedforward_mask[:, visible_indices]
 
-    n_neurons = n_visible
-    n_total_inputs = n_feedforward + n_neurons
+    n_neurons = n_visible  # Output neurons
+    n_total_inputs = n_feedforward + n_neurons_full  # All neurons as inputs
 
     # ===============================================
-    # Construct Feedforward Weights from Visible Network
+    # Construct Feedforward Weights (All Inputs -> Visible)
     # ===============================================
 
     # Concatenate feedforward weights (top) and recurrent weights (bottom)
-    # Feedforward weights: (n_feedforward, n_visible) - inputs from FF to visible neurons
-    # Recurrent weights: (n_visible, n_visible) - inputs from visible recurrent to visible neurons
-    # Combined: (n_feedforward + n_visible, n_visible)
+    # Feedforward weights: (n_feedforward, n_visible)
+    # Recurrent weights: (n_neurons_full, n_visible) - ALL recurrent neurons as inputs
+    # Combined: (n_feedforward + n_neurons_full, n_visible)
     concatenated_weights = np.concatenate(
-        [feedforward_weights_visible, weights_visible], axis=0
+        [feedforward_weights_visible, weights_to_visible], axis=0
     )
 
     concatenated_mask = np.concatenate(
-        [feedforward_mask_visible, recurrent_mask_visible], axis=0
+        [feedforward_mask_visible, recurrent_mask_to_visible], axis=0
     )
 
-    print("\n✓ Feedforward network setup (visible neurons only):")
-    print(f"  - Output neurons: {n_neurons}")
+    print("\n✓ Feedforward network setup (all inputs -> visible outputs):")
+    print(f"  - Output neurons: {n_neurons} (visible only)")
     print(
-        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} FF + {n_neurons} recurrent)"
+        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} FF + {n_neurons_full} recurrent)"
     )
+    print("  - Hidden neurons provide fractional rate inputs")
     print(f"  - Weight matrix shape: {concatenated_weights.shape}")
     print(f"  - Active connections: {concatenated_mask.sum()}")
 
@@ -247,10 +284,10 @@ def main(
     n_ff_cell_types = len(feedforward_cell_params)
     n_rec_cell_types = len(recurrent_cell_params)
 
-    # Concatenate cell type indices: feedforward + recurrent (with offset)
-    # Recurrent indices need to be offset by number of feedforward types
+    # Concatenate cell type indices: feedforward + ALL recurrent (with offset)
+    # Use full cell_type_indices since all neurons provide input
     concatenated_cell_type_indices = np.concatenate(
-        [feedforward_cell_type_indices, cell_type_indices_visible + n_ff_cell_types]
+        [feedforward_cell_type_indices, cell_type_indices + n_ff_cell_types]
     )
 
     # Concatenate cell params: feedforward + recurrent (with offset cell_ids)
@@ -359,11 +396,53 @@ def main(
     )
 
     batch_size = spike_dataset.batch_size
+    dt = spike_dataset.dt
 
     print(f"\n✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batch size")
 
-    # DataLoader with custom collate function that filters to visible neurons
-    hidden_collate_fn = make_hidden_collate_fn(visible_indices)
+    # =============================================
+    # Compute Average Firing Rates by Cell Type
+    # =============================================
+    # Used to replace hidden neuron spikes with fractional rate inputs
+
+    print("\nComputing average firing rates by cell type...")
+    n_sample_chunks = min(10, spike_dataset.num_chunks)
+    total_spikes_by_type = np.zeros(n_rec_cell_types)
+    total_time_by_type = np.zeros(n_rec_cell_types)
+
+    for chunk_idx in range(n_sample_chunks):
+        sample_data = spike_dataset[chunk_idx]
+        spikes_np = sample_data.target_spikes.cpu().numpy()
+
+        for cell_type in range(n_rec_cell_types):
+            type_mask = cell_type_indices == cell_type
+            total_spikes_by_type[cell_type] += spikes_np[:, :, type_mask].sum()
+            total_time_by_type[cell_type] += (
+                spikes_np.shape[0] * spikes_np.shape[1] * type_mask.sum()
+            )
+
+    # Compute firing rate in Hz
+    firing_rate_by_cell_type = np.zeros(n_rec_cell_types)
+    for cell_type in range(n_rec_cell_types):
+        if total_time_by_type[cell_type] > 0:
+            time_seconds = total_time_by_type[cell_type] * dt / 1000.0
+            firing_rate_by_cell_type[cell_type] = (
+                total_spikes_by_type[cell_type] / time_seconds
+            )
+
+    print("✓ Average firing rates by cell type:")
+    for cell_type in range(n_rec_cell_types):
+        type_name = recurrent.cell_types.names[cell_type]
+        print(f"  - {type_name}: {firing_rate_by_cell_type[cell_type]:.2f} Hz")
+
+    # DataLoader with custom collate function that handles hidden neurons
+    hidden_collate_fn = make_hidden_collate_fn(
+        visible_indices=visible_indices,
+        hidden_indices=hidden_indices,
+        cell_type_indices=cell_type_indices,
+        firing_rate_by_cell_type=firing_rate_by_cell_type,
+        dt=dt,
+    )
     spike_dataloader = DataLoader(
         spike_dataset,
         batch_size=None,

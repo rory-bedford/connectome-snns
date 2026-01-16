@@ -1,27 +1,29 @@
 """
-Training all neurons with feedforward dynamics using Poisson inputs.
+Training all neurons with feedforward dynamics using constant rate inputs.
 
 This script trains all neurons from a connectome-constrained network using
 feedforward-only dynamics, similar to train_feedforward.py, but with one key
-difference: the feedforward (external) inputs are replaced with Poisson spike
-trains matching the average firing rate of the original inputs.
+difference: the feedforward (external) inputs are replaced with constant fractional
+values representing the average firing rate of the original inputs.
 
 The recurrent neuron spikes (teacher activity) are still loaded exactly from disk
 and used as additional feedforward inputs. This tests whether the network can learn
-the correct dynamics when the external input statistics are preserved but the exact
-spike timing is randomized.
+the correct dynamics when the external input timing is replaced with constant rate
+estimates.
 
 Architecture:
-    - Poisson spikes (generated on-the-fly) replace original feedforward inputs
+    - Constant fractional rates replace original feedforward inputs
+      (value = firing_rate_hz * dt / 1000 at each timestep)
     - Exact teacher recurrent spikes become additional feedforward inputs
-    - Combined: [Poisson FF, exact recurrent] -> feedforward network -> output
+    - Combined: [constant rate FF, exact recurrent] -> feedforward network -> output
     - Loss: Van Rossum distance on all neurons vs teacher recurrent spikes
 """
 
 import numpy as np
 from dataloaders.supervised import (
-    PoissonInputSpikeDataset,
+    PrecomputedSpikeDataset,
     CyclicSampler,
+    SpikeData,
 )
 from network_simulators.feedforward_conductance_based.simulator import (
     FeedforwardConductanceLIFNetwork,
@@ -45,6 +47,56 @@ import wandb
 from visualization.neuronal_dynamics import plot_spike_trains
 
 
+def make_constant_rate_collate_fn(
+    n_feedforward: int,
+    feedforward_fractional_rate: float,
+):
+    """
+    Create a collate function that replaces feedforward inputs with constant rates.
+
+    For feedforward neurons: instead of binary spikes, use constant fractional values
+    representing the probability of spiking per timestep.
+
+    For recurrent neurons: keep exact teacher spikes as additional inputs.
+
+    Args:
+        n_feedforward: Number of feedforward input neurons
+        feedforward_fractional_rate: Constant fractional rate for feedforward inputs
+                                     (firing_rate_hz * dt / 1000)
+
+    Returns:
+        Collate function for DataLoader
+    """
+
+    def collate_fn(batch: SpikeData) -> SpikeData:
+        """Replace feedforward inputs with constant rates."""
+        # batch.input_spikes: (batch, time, n_feedforward) - teacher feedforward spikes
+        # batch.target_spikes: (batch, time, n_neurons) - teacher recurrent spikes
+
+        device = batch.input_spikes.device
+        batch_size, time_steps, _ = batch.input_spikes.shape
+
+        # Create constant rate tensor for feedforward inputs
+        # Shape: (batch, time, n_feedforward)
+        constant_ff_inputs = torch.full(
+            (batch_size, time_steps, n_feedforward),
+            feedforward_fractional_rate,
+            dtype=torch.float32,
+            device=device,
+        )
+
+        # Concatenate: [constant rate FF, exact recurrent spikes]
+        # Shape: (batch, time, n_feedforward + n_neurons)
+        combined_inputs = torch.cat([constant_ff_inputs, batch.target_spikes], dim=2)
+
+        return SpikeData(
+            input_spikes=combined_inputs,
+            target_spikes=batch.target_spikes,
+        )
+
+    return collate_fn
+
+
 def main(
     input_dir,
     output_dir,
@@ -52,10 +104,10 @@ def main(
     wandb_config=None,
     resume_from=None,
 ):
-    """Train all neurons with Poisson inputs to match target spike train activity.
+    """Train all neurons with constant rate inputs to match target spike train activity.
 
     This function trains a feedforward-unraveled network where:
-    - Original feedforward inputs are replaced with Poisson spikes (same avg rate)
+    - Original feedforward inputs are replaced with constant fractional rates
     - Teacher recurrent spikes are used as exact additional inputs
     - The network learns to reproduce teacher activity using Van Rossum loss
 
@@ -142,10 +194,10 @@ def main(
 
     concatenated_mask = np.concatenate([feedforward_mask, recurrent_mask], axis=0)
 
-    print("\n✓ Feedforward network setup (Poisson inputs):")
+    print("\n✓ Feedforward network setup (constant rate inputs):")
     print(f"  - Output neurons: {n_neurons}")
     print(
-        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} Poisson FF + {n_neurons} exact recurrent)"
+        f"  - Total inputs per neuron: {n_total_inputs} ({n_feedforward} constant rate FF + {n_neurons} exact recurrent)"
     )
     print(f"  - Weight matrix shape: {concatenated_weights.shape}")
     print(f"  - Active connections: {concatenated_mask.sum()}")
@@ -246,13 +298,11 @@ def main(
     )
 
     # =============================================
-    # Load Dataset with Poisson Input Generation
+    # Load Dataset and Compute Average Firing Rate
     # =============================================
 
-    # Load spike dataset that generates Poisson inputs on-the-fly
-    # This computes average firing rate from original FF spikes and replaces them
-    # with Poisson spikes, while keeping recurrent spikes exact
-    spike_dataset = PoissonInputSpikeDataset(
+    # Load spike dataset (raw spikes from disk)
+    spike_dataset = PrecomputedSpikeDataset(
         spike_data_path=input_dir / "spike_data.zarr",
         chunk_size=chunk_size,
         device=device,
@@ -261,14 +311,46 @@ def main(
     batch_size = spike_dataset.batch_size
 
     print(f"\n✓ Loaded {spike_dataset.num_chunks} chunks × {batch_size} batch size")
-    print(f"✓ Poisson input firing rate: {spike_dataset.avg_firing_rate:.2f} Hz")
-    print("  (computed from average of original feedforward spike data)")
 
-    # DataLoader - no collate function needed, dataset already concatenates inputs
+    # Compute average firing rate from feedforward spikes
+    # Sample 10 chunks to estimate the average firing rate
+    print("Computing average firing rate from feedforward spikes...")
+    n_sample_chunks = min(10, spike_dataset.num_chunks)
+    total_ff_spikes = 0
+    total_ff_time_steps = 0
+    for i in range(n_sample_chunks):
+        batch = spike_dataset[i]
+        # input_spikes: (batch, time, n_feedforward)
+        total_ff_spikes += batch.input_spikes.sum().item()
+        total_ff_time_steps += (
+            batch.input_spikes.shape[0]
+            * batch.input_spikes.shape[1]
+            * batch.input_spikes.shape[2]
+        )
+
+    # Compute average firing rate in Hz
+    avg_spikes_per_neuron_per_timestep = total_ff_spikes / total_ff_time_steps
+    avg_firing_rate_hz = avg_spikes_per_neuron_per_timestep * 1000.0 / spike_dataset.dt
+
+    # Compute fractional rate (probability of spike per timestep)
+    feedforward_fractional_rate = avg_firing_rate_hz * spike_dataset.dt / 1000.0
+
+    print(f"✓ Average feedforward firing rate: {avg_firing_rate_hz:.2f} Hz")
+    print(f"✓ Fractional rate per timestep: {feedforward_fractional_rate:.4f}")
+    print("  (constant value used for all feedforward inputs)")
+
+    # Create collate function that replaces FF inputs with constant rates
+    collate_fn = make_constant_rate_collate_fn(
+        n_feedforward=n_feedforward,
+        feedforward_fractional_rate=feedforward_fractional_rate,
+    )
+
+    # DataLoader with collate function that replaces FF inputs with constant rates
     spike_dataloader = DataLoader(
         spike_dataset,
         batch_size=None,
         sampler=CyclicSampler(spike_dataset),
+        collate_fn=collate_fn,
         num_workers=0,
     )
 
@@ -355,7 +437,7 @@ def main(
             n_neurons_plot=2 * n_plot,
             fraction=1.0,
             random_seed=None,
-            title=f"Poisson Inputs: Target vs Trained (first {n_plot} neurons)",
+            title=f"Constant Rate Inputs: Target vs Trained (first {n_plot} neurons)",
             ylabel="Neuron",
             figsize=(14, 8),
         )
@@ -381,7 +463,7 @@ def main(
             "firing_rate/std": float(firing_rates.std()),
             "firing_rate/min": float(firing_rates.min()),
             "firing_rate/max": float(firing_rates.max()),
-            "poisson_input_rate": spike_dataset.avg_firing_rate,
+            "constant_rate_input_rate": avg_firing_rate_hz,
         }
 
         # Add scaling factor tracking with proper cell type names
@@ -446,7 +528,7 @@ def main(
                 "scaling_factors": scaling_factors,
                 "output_dir": str(output_dir),
                 "device": device,
-                "poisson_input_rate": spike_dataset.avg_firing_rate,
+                "constant_rate_input_rate": avg_firing_rate_hz,
             },
         }
 
@@ -491,7 +573,7 @@ def main(
     print(f"Epochs: {epochs}")
     print(f"Batch size: {batch_size}")
     print(f"Training all {n_neurons} neurons with Van Rossum loss")
-    print(f"Feedforward inputs: Poisson @ {spike_dataset.avg_firing_rate:.2f} Hz")
+    print(f"Feedforward inputs: constant rate @ {avg_firing_rate_hz:.2f} Hz")
 
     model.reset_state(batch_size=batch_size)
     model.track_variables = False
@@ -520,7 +602,7 @@ def main(
         cell_type_indices=cell_type_indices,
         feedforward_cell_type_indices=concatenated_cell_type_indices,
         scaling_factors_FF=model.scaling_factors_FF.detach().cpu().numpy(),
-        poisson_input_rate=spike_dataset.avg_firing_rate,
+        constant_rate_input_rate=avg_firing_rate_hz,
     )
 
     # Close logger
@@ -534,4 +616,4 @@ def main(
     print(f"✓ Figures: {output_dir / 'figures'}")
     print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")
-    print(f"✓ Poisson input rate used: {spike_dataset.avg_firing_rate:.2f} Hz")
+    print(f"✓ Constant rate input used: {avg_firing_rate_hz:.2f} Hz")
