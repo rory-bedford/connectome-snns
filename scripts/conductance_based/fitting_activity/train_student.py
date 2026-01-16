@@ -42,6 +42,7 @@ from visualization.dashboards import (
     create_connectivity_dashboard,
     create_activity_dashboard,
 )
+from visualization.neuronal_dynamics import plot_spike_trains
 from training_utils.weight_perturbers import perturb_weights_scaling_factor
 from analysis.firing_statistics import compute_spike_train_cv
 
@@ -274,12 +275,13 @@ def main(
         currents_FF,
         currents_leak,
         input_spikes,
+        target_spikes,
         weights,
         feedforward_weights,
         connectome_mask,
         feedforward_mask,
     ):
-        """Generate connectivity and activity dashboards."""
+        """Generate connectivity and activity dashboards plus spike comparison."""
         # Calculate mean membrane potential by cell type from voltage traces
         recurrent_V_mem_by_type = {}
         for i, cell_type_name in enumerate(recurrent.cell_types.names):
@@ -328,9 +330,39 @@ def main(
             random_seed=42,
         )
 
+        # Generate spike comparison plot (target vs trained)
+        # spikes: (batch, time, n_neurons) - trained network
+        # target_spikes: (batch, time, n_neurons) - target spikes
+        n_plot = min(10, spikes.shape[2])
+
+        # Interleave target and trained for comparison
+        # Shape: (1, time, 2*n_plot) alternating [target0, trained0, target1, trained1, ...]
+        interleaved = np.zeros((1, spikes.shape[1], 2 * n_plot))
+        for i in range(n_plot):
+            interleaved[0, :, 2 * i] = target_spikes[0, :, i]
+            interleaved[0, :, 2 * i + 1] = spikes[0, :, i]
+
+        # Create cell type indices for coloring (0=target, 1=trained)
+        cell_type_indices_plot = np.array([0, 1] * n_plot)
+        cell_type_names_plot = ["Target", "Trained"]
+
+        spike_comparison_fig = plot_spike_trains(
+            spikes=interleaved,
+            dt=spike_dataset.dt,
+            cell_type_indices=cell_type_indices_plot,
+            cell_type_names=cell_type_names_plot,
+            n_neurons_plot=2 * n_plot,
+            fraction=1.0,
+            random_seed=None,
+            title=f"Recurrent Network: Target vs Trained (first {n_plot} neurons)",
+            ylabel="Neuron",
+            figsize=(14, 8),
+        )
+
         return {
             "connectivity_dashboard": connectivity_fig,
             "activity_dashboard": activity_fig,
+            "spike_comparison": spike_comparison_fig,
         }
 
     # Define stats computer function (captures model and target scaling factors in closure)
@@ -463,18 +495,24 @@ def main(
 
         # Collect input and target spikes from precomputed dataset (batch=0)
         inference_input_spikes_list = []
+        inference_target_spikes_list = []
         for chunk_idx in range(chunks_needed):
             batch_data = spike_dataset[chunk_idx]
             # Dataset returns named tuple with input_spikes: (batch, time, neurons)
             # Extract batch 0: (time, neurons)
             inference_input_spikes_list.append(batch_data.input_spikes[0, :, :])
+            inference_target_spikes_list.append(batch_data.target_spikes[0, :, :])
 
         # Concatenate chunks and truncate to exact duration
         inference_input_spikes = torch.cat(inference_input_spikes_list, dim=0)[
             :inference_timesteps, :
         ]
+        inference_target_spikes = torch.cat(inference_target_spikes_list, dim=0)[
+            :inference_timesteps, :
+        ]
         # Add batch dimension for model: (1, time, n_neurons)
         inference_input_spikes = inference_input_spikes.unsqueeze(0)
+        inference_target_spikes = inference_target_spikes.unsqueeze(0)
 
         # Reset state for independent inference run and switch to batch_size=1
         model.reset_state(batch_size=1)
@@ -515,6 +553,10 @@ def main(
                 "currents_FF": inf_currents_FF[0:1, ...].detach().cpu().numpy(),
                 "currents_leak": inf_currents_leak[0:1, ...].detach().cpu().numpy(),
                 "input_spikes": inference_input_spikes[0:1, ...].detach().cpu().numpy(),
+                "target_spikes": inference_target_spikes[0:1, ...]
+                .detach()
+                .cpu()
+                .numpy(),
                 "weights": model.weights.detach().cpu().numpy(),
                 "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
                 "connectome_mask": connectivity_graph,
@@ -535,6 +577,7 @@ def main(
         # Clean up inference data
         del (
             inference_input_spikes,
+            inference_target_spikes,
             inf_spikes,
             inf_voltages,
             inf_currents,
@@ -697,20 +740,26 @@ def main(
     # Calculate number of chunks needed for 10s
     chunks_needed = int(np.ceil(inference_timesteps / spike_dataset.chunk_size))
 
-    # Collect input spikes from precomputed dataset (batch 0)
+    # Collect input and target spikes from precomputed dataset (batch 0)
     final_inference_input_spikes_list = []
+    final_inference_target_spikes_list = []
     for chunk_idx in range(chunks_needed):
         batch_data = spike_dataset[chunk_idx]
         # Dataset returns named tuple with input_spikes: (batch, time, neurons)
         # Extract batch 0: (time, neurons)
         final_inference_input_spikes_list.append(batch_data.input_spikes[0, :, :])
+        final_inference_target_spikes_list.append(batch_data.target_spikes[0, :, :])
 
     # Concatenate chunks and truncate to exact duration
     final_inference_input_spikes = torch.cat(final_inference_input_spikes_list, dim=0)[
         :inference_timesteps, :
     ]
+    final_inference_target_spikes = torch.cat(
+        final_inference_target_spikes_list, dim=0
+    )[:inference_timesteps, :]
     # Add batch dimension for model: (1, time, n_neurons)
     final_inference_input_spikes = final_inference_input_spikes.unsqueeze(0)
+    final_inference_target_spikes = final_inference_target_spikes.unsqueeze(0)
 
     # Reset state for independent inference run and switch to batch_size=1
     model.reset_state(batch_size=1)
@@ -756,8 +805,14 @@ def main(
             .detach()
             .cpu()
             .numpy(),
+            "target_spikes": final_inference_target_spikes[0:1, ...]
+            .detach()
+            .cpu()
+            .numpy(),
             "weights": model.weights.detach().cpu().numpy(),
             "feedforward_weights": model.weights_FF.detach().cpu().numpy(),
+            "connectome_mask": connectivity_graph,
+            "feedforward_mask": feedforward_connectivity_graph,
         }
 
         # Generate plots
@@ -774,6 +829,7 @@ def main(
     # Clean up inference data
     del (
         final_inference_input_spikes,
+        final_inference_target_spikes,
         final_inf_spikes,
         final_inf_voltages,
         final_inf_currents,

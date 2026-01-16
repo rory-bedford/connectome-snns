@@ -7,7 +7,7 @@
 
 [simulation]
 seed = 44                              # Random seed for reproducibility
-chunk_size = 200                       # Number of timesteps per chunk
+chunk_size = 50                       # Number of timesteps per chunk
 
 # ======================
 # TRAINING CONFIGURATION
@@ -15,10 +15,10 @@ chunk_size = 200                       # Number of timesteps per chunk
 
 [training]
 epochs = 100                           # Total number of loops through the training data
-chunks_per_update = 5                  # Number of loss calculations per gradient step
-log_interval = 5                       # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 50               # Save model checkpoints and generate plots every N chunks
-plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
+chunks_per_update = 10                 # Number of loss calculations per gradient step
+log_interval = 10                      # Log metrics to CSV and wandb every N chunks
+checkpoint_interval = 200              # Save model checkpoints and generate plots every N chunks
+plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
@@ -28,7 +28,7 @@ optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "s
 # ===============
 
 [hyperparameters]
-surrgrad_scale = 0.2                   # Scale for surrogate gradient fast sigmoid function
+surrgrad_scale = 0.5                   # Scale for surrogate gradient fast sigmoid function
 learning_rate = 5e-2                   # Learning rate for ADAM optimiser
 van_rossum_tau = 100.0                 # ms - Exponential temporal kernel in van Rossum loss
 

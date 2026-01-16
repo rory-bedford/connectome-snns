@@ -779,6 +779,7 @@ class SNNTrainer:
             currents_FF=plot_data["currents_FF"],
             currents_leak=plot_data["currents_leak"],
             input_spikes=plot_data["input_spikes"],
+            target_spikes=plot_data.get("target_spikes"),
             weights=self.model.weights.detach().cpu().numpy(),
             feedforward_weights=self.model.weights_FF.detach().cpu().numpy(),
             connectome_mask=self.connectome_mask.detach().cpu().numpy()

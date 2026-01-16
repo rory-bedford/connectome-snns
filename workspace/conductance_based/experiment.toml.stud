@@ -1,5 +1,5 @@
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_student.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/recurrent-network"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/recurrent-network-surrgrad-0.5"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Relearning scale factors for the recurrent network, using all feedforward and recurrent inputs"
@@ -19,4 +19,4 @@ enabled = true
 project = "training-student"
 entity = ""
 tags = []
-notes = "gradient-explosion-fixed"
+notes = "recurrent-network-surrgrad-0.5"
