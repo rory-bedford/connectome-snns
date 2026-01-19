@@ -1,0 +1,109 @@
+# Parameters for training feedforward student networks with noisy initial weights
+# Based on train-student.toml, adds Gaussian noise to weight matrix
+
+# ========================
+# SIMULATION CONFIGURATION
+# ========================
+
+[simulation]
+seed = 44                              # Random seed for reproducibility
+chunk_size = 50                       # Number of timesteps per chunk
+
+# ======================
+# TRAINING CONFIGURATION
+# ======================
+
+[training]
+epochs = 100                           # Total number of loops through the training data
+chunks_per_update = 10                 # Number of loss calculations per gradient step
+log_interval = 10                      # Log metrics to CSV and wandb every N chunks
+checkpoint_interval = 200              # Save model checkpoints and generate plots every N chunks
+plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
+mixed_precision = true                 # Whether to train with mixed precision
+weight_perturbation_variance = 0.1     # Variance of log-normal distribution for weight perturbation
+optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
+
+# ===================
+# WEIGHT NOISE CONFIG
+# ===================
+
+[weight_noise]
+noise_frac = 0.1                       # Fraction of weight magnitude for Gaussian noise (0.1 = 10% noise)
+                                       # Noise is multiplicative: w_noisy = w * clip(1 + noise_frac * N(0,1), 0, 2)
+                                       # Symmetric clipping ensures unbiased noise while keeping weights positive
+
+# ===============
+# HYPERPARAMETERS
+# ===============
+
+[hyperparameters]
+surrgrad_scale = 0.5                   # Scale for surrogate gradient fast sigmoid function
+learning_rate = 5e-2                   # Learning rate for ADAM optimiser
+van_rossum_tau = 100.0                 # ms - Exponential temporal kernel in van Rossum loss
+
+loss_weight.van_rossum = 100.0         # Weight for van Rossum spike distance metric (typical unweighted ~0.005-0.01)
+
+# ==========================
+# FEEDFORWARD LAYER SYNAPSES
+# ==========================
+
+[feedforward.cell_types]
+names = [ "mitral",]                   # Cell type names
+
+[feedforward.synapses.mitral]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 4.177, 0.448,]               # nS - Maximum synaptic conductances
+
+# =======================================
+# RECURRENT LAYER PHYSIOLOGY AND SYNAPSES
+# =======================================
+
+[recurrent.cell_types]
+names = [ "excitatory", "inhibitory",] # Cell type names
+
+[recurrent.physiology.excitatory]
+tau_mem = 85.0                         # ms - Membrane time constant
+theta = -38.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset potential after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 1.35                             # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.excitatory]
+names = [ "AMPA", "NMDA",]
+tau_rise = [ 0.1, 10.0,]               # ms - Synaptic rise time constants
+tau_decay = [ 5.0, 70.0,]              # ms - Synaptic decay time constants
+E_syn = [ 0.0, 0.0,]                   # mV - Synaptic reversal potentials
+g_bar = [ 4.177, 0.448,]               # nS - Synaptic conductances (per spike)
+
+[recurrent.physiology.inhibitory]
+tau_mem = 50.0                         # ms - Membrane time constant
+theta = -45.0                          # mV - Spike threshold voltage
+U_reset = -60.0                        # mV - Reset voltage after spike
+E_L = -60.0                            # mV - Leak reversal potential
+g_L = 0.9                              # nS - Leak conductance
+tau_ref = 8.0                          # ms - Refractory period
+
+[recurrent.synapses.inhibitory]
+names = [ "GABA_A",]
+tau_rise = [ 1.0,]                     # ms - Synaptic rise time constants
+tau_decay = [ 6.0,]                    # ms - Synaptic decay time constants
+E_syn = [ -70.0,]                      # mV - Synaptic reversal potentials
+g_bar = [ 8.139,]                      # nS - Synaptic conductances (per spike)
+
+# ========================
+# SCALING FACTORS
+# ========================
+
+[scaling_factors]
+recurrent = [
+    [1.0, 1.0],
+    [1.0, 1.0],
+]
+
+feedforward = [
+    [1.0, 1.0],
+]
