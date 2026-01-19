@@ -459,7 +459,6 @@ def main(
     # ====================================
 
     # Only save initial state and run inference if starting from scratch
-    resume_from = "Debug"
     if resume_from is None:
         section = "Running 10s inference with initial scaling factors..."
         print("\n" + "=" * len(section))
@@ -590,8 +589,6 @@ def main(
             torch.cuda.empty_cache()
 
         print("=" * 60 + "\n")
-
-    resume_from = None
 
     # Calculate total number of training iterations
     num_epochs = epochs * spike_dataset.num_chunks
@@ -855,5 +852,5 @@ def main(
     print(f"\n✓ Checkpoints: {output_dir / 'checkpoints'}")
     print(f"✓ Figures: {output_dir / 'figures'}")
     print(f"✓ Metrics: {output_dir / 'training_metrics.csv'}")
-    print(f"✓ Initial state: {initial_state_dir / 'network_structure.npz'}")
+    print(f"✓ Initial state: {output_dir / 'initial_state' / 'network_structure.npz'}")
     print(f"✓ Final state: {final_state_dir / 'network_structure.npz'}")
