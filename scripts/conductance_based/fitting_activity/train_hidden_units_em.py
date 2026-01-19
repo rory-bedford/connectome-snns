@@ -93,10 +93,10 @@ def make_em_collate_fn(
         # Hidden: inferred spikes from zarr file
         start_t = chunk_counter[0] * time_steps
         end_t = start_t + time_steps
+        # Read all neurons from zarr, then select hidden ones
+        inferred_chunk = inferred_spikes_zarr[:, start_t:end_t, :]
         hidden_spikes_chunk = (
-            torch.from_numpy(
-                np.array(inferred_spikes_zarr[:, start_t:end_t, hidden_indices])
-            )
+            torch.from_numpy(np.array(inferred_chunk[:, :, hidden_indices]))
             .float()
             .to(device)
         )
