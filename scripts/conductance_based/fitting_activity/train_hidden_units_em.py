@@ -49,6 +49,7 @@ def make_em_collate_fn(
     inferred_spikes_zarr_path: Path,
     chunk_size: int,
     n_neurons_full: int,
+    num_chunks: int,
 ):
     """
     Collate function for EM training that reads inferred spikes from zarr.
@@ -63,6 +64,7 @@ def make_em_collate_fn(
         inferred_spikes_zarr_path: Path to zarr file with inferred spikes
         chunk_size: Number of timesteps per chunk
         n_neurons_full: Total number of neurons in the full network
+        num_chunks: Number of chunks in the zarr file (for cycling)
     """
     visible_tensor = torch.from_numpy(visible_indices).long()
     hidden_tensor = torch.from_numpy(hidden_indices).long()
@@ -90,8 +92,9 @@ def make_em_collate_fn(
             :, :, visible_tensor
         ].float()
 
-        # Hidden: inferred spikes from zarr file
-        start_t = chunk_counter[0] * time_steps
+        # Hidden: inferred spikes from zarr file (cycle through zarr for multiple epochs)
+        chunk_idx = chunk_counter[0] % num_chunks
+        start_t = chunk_idx * time_steps
         end_t = start_t + time_steps
         # Read all neurons from zarr, then select hidden ones
         inferred_chunk = inferred_spikes_zarr[:, start_t:end_t, :]
@@ -680,6 +683,7 @@ def main(
             inferred_spikes_zarr_path=inferred_spikes_path,
             chunk_size=chunk_size,
             n_neurons_full=n_neurons_full,
+            num_chunks=num_chunks,
         )
 
         # Create fresh optimizer for this M-step
