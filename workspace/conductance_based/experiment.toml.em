@@ -19,4 +19,4 @@ enabled = true
 project = "hidden-units-em"
 entity = ""
 tags = ["em", "hidden-units"]
-notes = "EM algorithm: 10 iterations, 5 epochs per M-step, 50% hidden neurons"
+notes = ""

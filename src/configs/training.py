@@ -80,6 +80,24 @@ class StudentTrainingConfig(BaseModel):
         return self.checkpoint_interval * chunk_duration_s
 
 
+class EMTrainingConfig(BaseModel):
+    """Training config for EM-based training (no epochs needed)."""
+
+    chunks_per_update: int
+    log_interval: int
+    checkpoint_interval: int
+    plot_size: int
+    mixed_precision: bool
+    weight_perturbation_variance: float
+    grad_norm_clip: Optional[float] = None
+    optimisable: Literal[
+        "weights",
+        "scaling_factors",
+        "scaling_factors_recurrent",
+        "scaling_factors_feedforward",
+    ]
+
+
 class LossWeights(BaseModel):
     """Loss function weights for homeostatic plasticity."""
 

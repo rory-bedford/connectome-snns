@@ -30,7 +30,7 @@ from training_utils.losses import (
 )
 from configs import (
     StudentSimulationConfig,
-    StudentTrainingConfig,
+    EMTrainingConfig,
     StudentHyperparameters,
 )
 from configs.conductance_based import RecurrentLayerConfig, FeedforwardLayerConfig
@@ -214,7 +214,7 @@ def main(
 
     # Load configuration sections
     simulation = StudentSimulationConfig(**data["simulation"])
-    training = StudentTrainingConfig(**data["training"])
+    training = EMTrainingConfig(**data["training"])
     hyperparameters = StudentHyperparameters(**data["hyperparameters"])
     recurrent = RecurrentLayerConfig(**data["recurrent"])
     feedforward = FeedforwardLayerConfig(**data["feedforward"])

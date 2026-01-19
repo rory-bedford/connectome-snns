@@ -18,6 +18,7 @@ from .simulation import SimulationConfig, StudentSimulationConfig
 from .training import (
     TrainingConfig,
     StudentTrainingConfig,
+    EMTrainingConfig,
     LossWeights,
     StudentLossWeights,
     Hyperparameters,
@@ -43,6 +44,7 @@ __all__ = [
     # Training
     "TrainingConfig",
     "StudentTrainingConfig",
+    "EMTrainingConfig",
     "LossWeights",
     "StudentLossWeights",
     "Hyperparameters",
