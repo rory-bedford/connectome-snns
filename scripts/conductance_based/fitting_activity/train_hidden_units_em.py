@@ -10,6 +10,7 @@ while iteratively refining hidden unit estimates through the EM iterations.
 """
 
 import numpy as np
+from pathlib import Path
 from dataloaders.supervised import (
     PrecomputedSpikeDataset,
     CyclicSampler,
@@ -35,35 +36,41 @@ from configs import (
 )
 from configs.conductance_based import RecurrentLayerConfig, FeedforwardLayerConfig
 from snn_runners import SNNTrainer
+from snn_runners.inference_runner import SNNInference
 import toml
 import wandb
+import zarr
 from visualization.neuronal_dynamics import plot_spike_trains
 
 
 def make_em_collate_fn(
     visible_indices: np.ndarray,
     hidden_indices: np.ndarray,
-    inferred_spikes: np.ndarray,
+    inferred_spikes_zarr_path: Path,
     chunk_size: int,
     n_neurons_full: int,
 ):
     """
-    Collate function for EM training.
+    Collate function for EM training that reads inferred spikes from zarr.
 
     For each chunk:
-    - Inputs: FF spikes + visible teacher spikes + inferred hidden spikes
+    - Inputs: FF spikes + visible teacher spikes + inferred hidden spikes (from zarr)
     - Targets: visible teacher spikes ONLY (loss computed on visible neurons)
 
     Args:
         visible_indices: Array of indices for visible neurons
         hidden_indices: Array of indices for hidden neurons
-        inferred_spikes: Inferred spikes from recurrent model (batch, total_time, n_neurons_full)
+        inferred_spikes_zarr_path: Path to zarr file with inferred spikes
         chunk_size: Number of timesteps per chunk
         n_neurons_full: Total number of neurons in the full network
     """
     visible_tensor = torch.from_numpy(visible_indices).long()
     hidden_tensor = torch.from_numpy(hidden_indices).long()
     chunk_counter = [0]  # Mutable to track chunk index
+
+    # Open zarr file for reading
+    zarr_root = zarr.open_group(inferred_spikes_zarr_path, mode="r")
+    inferred_spikes_zarr = zarr_root["output_spikes"]
 
     def em_collate_fn(batch: SpikeData) -> SpikeData:
         batch_size, time_steps, _ = batch.target_spikes.shape
@@ -83,11 +90,13 @@ def make_em_collate_fn(
             :, :, visible_tensor
         ].float()
 
-        # Hidden: inferred spikes from recurrent model
+        # Hidden: inferred spikes from zarr file
         start_t = chunk_counter[0] * time_steps
         end_t = start_t + time_steps
         hidden_spikes_chunk = (
-            torch.from_numpy(inferred_spikes[:, start_t:end_t, :][:, :, hidden_indices])
+            torch.from_numpy(
+                np.array(inferred_spikes_zarr[:, start_t:end_t, hidden_indices])
+            )
             .float()
             .to(device)
         )
@@ -110,39 +119,6 @@ def make_em_collate_fn(
         chunk_counter[0] = 0
 
     return em_collate_fn, reset_counter
-
-
-def run_inference(model, dataset, num_chunks, device):
-    """
-    Run inference through the recurrent model and return all output spikes.
-
-    Args:
-        model: ConductanceLIFNetwork model for inference
-        dataset: PrecomputedSpikeDataset
-        num_chunks: Number of chunks to process
-        device: Device to run on
-
-    Returns:
-        np.ndarray: All output spikes (batch, total_time, n_neurons)
-    """
-    model.reset_state()
-    all_spikes = []
-
-    with torch.inference_mode():
-        for chunk_idx in tqdm(
-            range(num_chunks), desc="E-step: Inference", unit="chunk"
-        ):
-            batch = dataset[chunk_idx]
-            input_spikes = batch.input_spikes.to(device)
-            target_spikes = batch.target_spikes.to(device)
-
-            # Concatenate FF + recurrent (teacher) spikes as inputs
-            concatenated_inputs = torch.cat([input_spikes, target_spikes], dim=2)
-
-            spikes = model.forward(input_spikes=concatenated_inputs)
-            all_spikes.append(spikes.bool().cpu().numpy())
-
-    return np.concatenate(all_spikes, axis=1)  # (batch, total_time, n_neurons)
 
 
 def transfer_scaling_factors(
@@ -365,7 +341,6 @@ def main(
     # Apply perturbation to ALL weights (full recurrent network)
     n_total_inputs = n_feedforward + n_neurons_full
     concatenated_weights_full = np.concatenate([feedforward_weights, weights], axis=0)
-    concatenated_mask_full = np.concatenate([feedforward_mask, recurrent_mask], axis=0)
 
     perturbed_weights_full = concatenated_weights_full.copy()
     for input_idx in range(n_total_inputs):
@@ -451,18 +426,18 @@ def main(
         weights=perturbed_rec_weights,
         weights_FF=perturbed_ff_weights,
         cell_type_indices=cell_type_indices,
-        cell_type_indices_FF=concatenated_cell_type_indices,
+        cell_type_indices_FF=feedforward_cell_type_indices,
         cell_params=recurrent_cell_params,
-        cell_params_FF=combined_cell_params_FF,
+        cell_params_FF=feedforward_cell_params,
         synapse_params=recurrent_synapse_params,
-        synapse_params_FF=combined_synapse_params_FF,
+        synapse_params_FF=feedforward_synapse_params,
         surrgrad_scale=surrgrad_scale,
         batch_size=batch_size,
         scaling_factors=sf_recurrent.copy(),  # Start with unperturbed
-        scaling_factors_FF=concatenated_scaling_factors.copy(),  # Start with unperturbed
+        scaling_factors_FF=sf_feedforward.copy(),  # Start with unperturbed
         optimisable=None,  # No optimization - just inference
         connectome_mask=recurrent_mask,
-        feedforward_mask=concatenated_mask_full,
+        feedforward_mask=feedforward_mask,
         track_variables=False,
         use_tqdm=False,
     )
@@ -656,26 +631,53 @@ def main(
         print("\n--- E-Step: Running inference to get hidden unit activities ---")
         recurrent_model.reset_state(batch_size=batch_size)
 
-        inferred_spikes = run_inference(
-            model=recurrent_model,
-            dataset=spike_dataset,
-            num_chunks=num_chunks,
-            device=device,
+        # Save inferred spikes to zarr for M-step
+        inferred_spikes_path = output_dir / f"em_iter_{em_iter}_inferred_spikes.zarr"
+
+        # Create dataloader for inference
+        inference_dataloader = DataLoader(
+            spike_dataset,
+            batch_size=None,
+            sampler=CyclicSampler(spike_dataset),
+            num_workers=0,
         )
 
-        print(f"  Inferred spikes shape: {inferred_spikes.shape}")
-        print(f"  Mean firing rate: {inferred_spikes.mean() * 1000 / dt:.2f} Hz")
+        # Run inference and save to zarr
+        inference_runner = SNNInference(
+            model=recurrent_model,
+            dataloader=inference_dataloader,
+            device=device,
+            output_mode="zarr",
+            zarr_path=inferred_spikes_path,
+            save_tracked_variables=False,
+            max_chunks=num_chunks,
+            progress_bar=True,
+        )
+
+        inference_runner.run()
+        print(f"  Inferred spikes saved to: {inferred_spikes_path}")
+
+        # Load metadata to report statistics
+        zarr_root = zarr.open_group(inferred_spikes_path, mode="r")
+        inferred_spikes_zarr = zarr_root["output_spikes"]
+        print(f"  Inferred spikes shape: {inferred_spikes_zarr.shape}")
+
+        # Compute mean firing rate from a sample (to avoid loading all into memory)
+        sample_size = min(10000, inferred_spikes_zarr.shape[1])
+        sample_spikes = np.array(inferred_spikes_zarr[:, :sample_size, :])
+        mean_rate = sample_spikes.mean() * 1000 / dt
+        print(f"  Mean firing rate (sampled): {mean_rate:.2f} Hz")
 
         # ===== M-STEP: TRAINING =====
         print(
             f"\n--- M-Step: Training feedforward network for {epochs_per_update} epochs ---"
         )
 
-        # Create EM collate function with current inferred spikes
+        # Create EM collate function that reads inferred spikes from zarr
         em_collate_fn, reset_counter = make_em_collate_fn(
             visible_indices=visible_indices,
             hidden_indices=hidden_indices,
-            inferred_spikes=inferred_spikes,
+            inferred_spikes_zarr_path=inferred_spikes_path,
             chunk_size=chunk_size,
             n_neurons_full=n_neurons_full,
         )
@@ -793,7 +795,6 @@ def main(
         global_chunk_counter += num_chunks_m_step
 
         # Clean up
-        del inferred_spikes
         if device == "cuda":
             torch.cuda.empty_cache()
 
