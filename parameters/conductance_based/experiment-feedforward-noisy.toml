@@ -1,0 +1,31 @@
+# Experiment config for feedforward training with noisy weights
+
+# =================
+# EXPERIMENT CONFIG
+# =================
+
+script = "scripts/conductance_based/fitting_activity/train_feedforward_noisy.py"
+output_dir = "results/feedforward-noisy"
+parameters_file = "parameters/conductance_based/train-feedforward-noisy.toml"
+log_file = "logs/feedforward_noisy_log.jsonl"
+description = "Training feedforward student network with Gaussian noise on weights"
+
+# ===================
+# DATA CONFIGURATION
+# ===================
+
+[data]
+[[data.inputs]]
+path = "results/teacher-activity"  # Adjust to your teacher data location
+strategy = "symlink"
+
+# ============
+# WANDB CONFIG
+# ============
+
+[wandb]
+enabled = false
+project = "connectome-snns"
+entity = ""
+tags = ["feedforward", "noisy-weights"]
+notes = ""

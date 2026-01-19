@@ -1,6 +1,6 @@
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_noisy.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-noisy-units-0.1"
-parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-student-hidden.toml"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-noisy-units"
+parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-feedforward-noisy.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Relearning scale factors for the feedforward network with noisy weights given to teacher"
 
@@ -19,4 +19,4 @@ enabled = true
 project = "training-noisy-weights"
 entity = ""
 tags = []
-notes = "noise-fraction-0.05"
+notes = ""
