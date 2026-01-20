@@ -7,6 +7,10 @@ and unbiased:
     w_noisy = w * clip(1 + noise_frac * N(0,1), 0, 2)
 
 The symmetric clipping ensures the noise has zero mean while keeping weights positive.
+
+TODO: Log teacher firing rate metrics (mean, std, min, max) to the training CSV.
+      Currently we only log learned firing rates, which makes post-hoc analysis harder
+      since we need to load the zarr file to compute teacher rates.
 """
 
 import numpy as np
