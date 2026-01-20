@@ -31,8 +31,8 @@ def custom_config_generator(base_params):
     Yields:
         (params_dict, description_string) tuples
     """
-    # Altering fraction hidden units from 0.0 to 0.5
-    for fraction in np.arange(0.0, 0.6, 0.1):
+    # Altering fraction hidden units from 0.1 to 0.5 (skip 0.0 to avoid division by zero)
+    for fraction in np.arange(0.1, 0.6, 0.1):
         params = deepcopy(base_params)
         params["simulation"]["hidden_cell_fraction"] = float(fraction)
         yield params, f"hidden-fraction-{fraction:.2f}"

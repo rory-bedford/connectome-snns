@@ -70,16 +70,23 @@ def make_em_collate_fn(
         em_collate_fn: Collate function for dataloader
         reset_counter: Function to reset chunk counter
         chunk_counter: Mutable list with current chunk index (shared reference)
+        set_model: Function to set model reference for state resets
     """
     visible_tensor = torch.from_numpy(visible_indices).long()
     hidden_tensor = torch.from_numpy(hidden_indices).long()
     chunk_counter = [0]  # Mutable to track chunk index
+    model_ref = [None]  # Will hold reference to model for state resets
 
     # Open zarr file for reading
     zarr_root = zarr.open_group(inferred_spikes_zarr_path, mode="r")
     inferred_spikes_zarr = zarr_root["output_spikes"]
 
     def em_collate_fn(batch: SpikeData) -> SpikeData:
+        # Reset model state when cycling back to chunk 0 (prevents artifacts)
+        if chunk_counter[0] % num_chunks == 0 and chunk_counter[0] > 0:
+            if model_ref[0] is not None:
+                model_ref[0].reset_state(batch_size=batch.target_spikes.shape[0])
+
         batch_size, time_steps, _ = batch.target_spikes.shape
         device = batch.target_spikes.device
 
@@ -125,7 +132,11 @@ def make_em_collate_fn(
     def reset_counter():
         chunk_counter[0] = 0
 
-    return em_collate_fn, reset_counter, chunk_counter
+    def set_model(model):
+        """Set model reference for state resets during cycling."""
+        model_ref[0] = model
+
+    return em_collate_fn, reset_counter, chunk_counter, set_model
 
 
 def make_estep_collate_fn(
@@ -947,7 +958,7 @@ def main(
         )
 
         # Create EM collate function that reads inferred spikes from zarr
-        em_collate_fn, reset_counter, chunk_counter_ref = make_em_collate_fn(
+        em_collate_fn, reset_counter, chunk_counter_ref, set_model = make_em_collate_fn(
             visible_indices=visible_indices,
             hidden_indices=hidden_indices,
             inferred_spikes_zarr_path=inferred_spikes_path,
@@ -955,6 +966,9 @@ def main(
             n_neurons_full=n_neurons_full,
             num_chunks=num_chunks,
         )
+
+        # Pass model reference to collate function so it can reset state when cycling
+        set_model(feedforward_model)
 
         # Create callbacks with access to inferred spikes and chunk counter
         plot_generator = make_plot_generator(inferred_spikes_path, chunk_counter_ref)
