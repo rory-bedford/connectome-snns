@@ -752,30 +752,39 @@ def main(
 
         def stats_computer(spikes, model_snapshot):
             """Compute summary statistics for visible and hidden neurons (student and teacher)."""
-            # Student visible: from model output (spikes)
-            student_visible = spikes[0, :, :]  # (time, n_visible)
+            # Student visible: from model output (spikes accumulated over multiple chunks)
+            student_visible = spikes[0, :, :]  # (time_accumulated, n_visible)
+            n_timesteps_accumulated = student_visible.shape[0]
 
-            # Get current chunk index
-            chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
-            start_t = chunk_idx * chunk_size
-            end_t = start_t + chunk_size
+            duration_s = n_timesteps_accumulated * dt / 1000.0
 
-            duration_s = student_visible.shape[0] * dt / 1000.0
+            # Calculate how many zarr chunks this corresponds to
+            n_chunks_accumulated = n_timesteps_accumulated // chunk_size
 
-            # Student hidden: from inferred spikes zarr
-            # Note: inference model now outputs only hidden neurons directly
+            # Get the ending chunk index to extract the corresponding teacher data
+            current_chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
+            start_chunk_idx = max(0, current_chunk_idx - n_chunks_accumulated + 1)
+
+            start_t = start_chunk_idx * chunk_size
+            end_t = start_t + n_timesteps_accumulated
+
+            # Student hidden: from inferred spikes zarr (same time range as student_visible)
             student_hidden = np.array(inferred_spikes_zarr[:1, start_t:end_t, :])[
                 0
-            ]  # (time, n_hidden)
+            ]  # (time_accumulated, n_hidden)
 
             # Teacher spikes: extract all neurons first, then index
             # (zarr fancy indexing doesn't work the same as numpy)
             teacher_all = np.array(teacher_spikes_zarr[:1, start_t:end_t, :])[
                 0
-            ]  # (time, n_all_neurons)
+            ]  # (time_accumulated, n_all_neurons)
 
-            teacher_visible = teacher_all[:, visible_indices]  # (time, n_visible)
-            teacher_hidden = teacher_all[:, hidden_indices]  # (time, n_hidden)
+            teacher_visible = teacher_all[
+                :, visible_indices
+            ]  # (time_accumulated, n_visible)
+            teacher_hidden = teacher_all[
+                :, hidden_indices
+            ]  # (time_accumulated, n_hidden)
 
             # Compute firing rates for all 4 categories
             def compute_firing_rate_stats(spike_data, prefix):
