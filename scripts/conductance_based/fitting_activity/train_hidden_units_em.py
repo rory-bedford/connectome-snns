@@ -98,15 +98,14 @@ def make_em_collate_fn(
         ].float()
 
         # Hidden: inferred spikes from zarr file (cycle through zarr for multiple epochs)
+        # Note: inference model now outputs only hidden neurons directly
         chunk_idx = chunk_counter[0] % num_chunks
         start_t = chunk_idx * time_steps
         end_t = start_t + time_steps
-        # Read all neurons from zarr, then select hidden ones
+        # Read inferred hidden spikes directly (zarr already contains only hidden neurons)
         inferred_chunk = inferred_spikes_zarr[:, start_t:end_t, :]
         hidden_spikes_chunk = (
-            torch.from_numpy(np.array(inferred_chunk[:, :, hidden_indices]))
-            .float()
-            .to(device)
+            torch.from_numpy(np.array(inferred_chunk)).float().to(device)
         )
         recurrent_inputs[:, :, hidden_tensor] = hidden_spikes_chunk
 
@@ -129,41 +128,82 @@ def make_em_collate_fn(
     return em_collate_fn, reset_counter, chunk_counter
 
 
+def make_estep_collate_fn(
+    visible_indices: np.ndarray,
+):
+    """
+    Collate function for E-step inference that provides [FF, visible teacher] as inputs.
+
+    The inference model has:
+    - Inputs: [FF spikes, visible teacher spikes]
+    - Recurrence: hidden → hidden only
+    - Outputs: hidden neuron spikes
+
+    Args:
+        visible_indices: Array of indices for visible neurons
+    """
+    visible_tensor = torch.from_numpy(visible_indices).long()
+
+    def estep_collate_fn(batch: SpikeData) -> SpikeData:
+        # Extract visible teacher spikes
+        visible_teacher_spikes = batch.target_spikes[:, :, visible_tensor].float()
+
+        # Concatenate [FF inputs, visible teacher spikes] as the new input
+        concatenated_inputs = torch.cat(
+            [batch.input_spikes, visible_teacher_spikes], dim=2
+        )
+
+        # Target is not used during inference, but return teacher spikes for compatibility
+        return SpikeData(
+            input_spikes=concatenated_inputs,
+            target_spikes=batch.target_spikes,
+        )
+
+    return estep_collate_fn
+
+
 def transfer_scaling_factors(
     feedforward_model: FeedforwardConductanceLIFNetwork,
-    recurrent_model: ConductanceLIFNetwork,
+    inference_model: ConductanceLIFNetwork,
     n_ff_cell_types: int,
 ):
     """
-    Transfer learned scaling factors from feedforward to recurrent model.
+    Transfer learned scaling factors from feedforward (M-step) to inference (E-step) model.
 
     The feedforward model has concatenated scaling factors [FF part, recurrent part].
-    Split them and update the recurrent model's buffers.
+    The inference model needs:
+    - scaling_factors_FF: [FF part, recurrent part] for [FF, visible] → hidden
+    - scaling_factors: recurrent part for hidden → hidden
 
     Args:
         feedforward_model: Trained feedforward model with learned scaling_factors_FF
-        recurrent_model: Recurrent model to update (has optimisable=None)
+        inference_model: Inference model for E-step (hidden-only recurrence)
         n_ff_cell_types: Number of feedforward cell types
     """
-    # Get learned concatenated scaling factors
+    # Get learned concatenated scaling factors from M-step model
     learned_sf = feedforward_model.scaling_factors_FF.detach().cpu().numpy()
 
     # Split: [FF part, recurrent part]
     new_sf_FF = learned_sf[:n_ff_cell_types, :]  # (n_ff_types, n_rec_types)
     new_sf_rec = learned_sf[n_ff_cell_types:, :]  # (n_rec_types, n_rec_types)
 
-    # Update recurrent model buffers (it has optimisable=None)
-    with torch.no_grad():
-        recurrent_model._buffers["_scaling_factors_FF_buffer"] = torch.from_numpy(
-            new_sf_FF.astype(np.float32)
-        ).to(recurrent_model.device)
+    # For inference model:
+    # - scaling_factors_FF: [FF, recurrent] for [FF, visible] → hidden inputs
+    # - scaling_factors: recurrent part for hidden → hidden recurrence
+    new_inference_sf_FF = np.concatenate([new_sf_FF, new_sf_rec], axis=0)
 
-        recurrent_model._buffers["_scaling_factors_buffer"] = torch.from_numpy(
+    # Update inference model buffers
+    with torch.no_grad():
+        inference_model._buffers["_scaling_factors_FF_buffer"] = torch.from_numpy(
+            new_inference_sf_FF.astype(np.float32)
+        ).to(inference_model.device)
+
+        inference_model._buffers["_scaling_factors_buffer"] = torch.from_numpy(
             new_sf_rec.astype(np.float32)
-        ).to(recurrent_model.device)
+        ).to(inference_model.device)
 
     # CRITICAL: Recompute weight caches with new scaling factors
-    recurrent_model.set_timestep(float(recurrent_model.dt))
+    inference_model.set_timestep(float(inference_model.dt))
 
 
 def main(
@@ -390,6 +430,69 @@ def main(
     )
     print(f"  - Weight matrix shape: {concatenated_weights_visible.shape}")
 
+    # ===============================================
+    # Setup Inference Model Weights (Hidden-Only Recurrence)
+    # ===============================================
+    # For E-step: inputs are [FF, visible teacher], recurrence is hidden→hidden only
+    # This conditions hidden inference on observed visible spikes
+
+    # Weights for feedforward-style inputs → hidden outputs
+    # FF → hidden
+    ff_to_hidden_weights = perturbed_ff_weights[:, hidden_indices]
+    ff_to_hidden_mask = feedforward_mask[:, hidden_indices]
+
+    # Visible → hidden (treated as feedforward input)
+    visible_to_hidden_weights = perturbed_rec_weights[visible_indices, :][
+        :, hidden_indices
+    ]
+    visible_to_hidden_mask = recurrent_mask[visible_indices, :][:, hidden_indices]
+
+    # Concatenate: [FF, visible] → hidden
+    inference_weights_FF = np.concatenate(
+        [ff_to_hidden_weights, visible_to_hidden_weights], axis=0
+    )
+    inference_mask_FF = np.concatenate(
+        [ff_to_hidden_mask, visible_to_hidden_mask], axis=0
+    )
+
+    # Recurrent weights: hidden → hidden only
+    inference_weights_rec = perturbed_rec_weights[hidden_indices, :][:, hidden_indices]
+    inference_mask_rec = recurrent_mask[hidden_indices, :][:, hidden_indices]
+
+    # Cell type indices for hidden outputs
+    cell_type_indices_hidden = cell_type_indices[hidden_indices]
+
+    # Cell type indices for [FF, visible] inputs
+    # FF part: original feedforward indices
+    # Visible part: recurrent cell types (with offset for combined params)
+    inference_cell_type_indices_FF = np.concatenate(
+        [
+            feedforward_cell_type_indices,
+            cell_type_indices[visible_indices] + n_ff_cell_types,
+        ]
+    )
+
+    # Scaling factors for inference model
+    # FF → hidden: same structure as original (n_ff_cell_types, n_rec_cell_types)
+    # Visible → hidden: same as recurrent (n_rec_cell_types, n_rec_cell_types)
+    # Concatenated: (n_ff_cell_types + n_rec_cell_types, n_rec_cell_types)
+    inference_scaling_factors_FF = np.concatenate(
+        [sf_feedforward, sf_recurrent], axis=0
+    )
+    # Hidden → hidden recurrence: (n_rec_cell_types, n_rec_cell_types)
+    inference_scaling_factors_rec = sf_recurrent.copy()
+
+    n_inference_inputs = n_feedforward + n_visible
+
+    print("\n✓ Inference network setup (E-step with hidden-only recurrence):")
+    print(f"  - Output neurons: {n_hidden} (hidden only)")
+    print(
+        f"  - FF inputs: [FF={n_feedforward}, visible={n_visible}] = {n_inference_inputs}"
+    )
+    print(f"  - Recurrent: hidden→hidden only ({n_hidden}×{n_hidden})")
+    print(f"  - Weight matrix FF shape: {inference_weights_FF.shape}")
+    print(f"  - Weight matrix rec shape: {inference_weights_rec.shape}")
+
     # Save targets and hidden neuron info
     targets_dir = output_dir / "targets"
     targets_dir.mkdir(parents=True, exist_ok=True)
@@ -424,35 +527,42 @@ def main(
     print(f"\n✓ Loaded {num_chunks} chunks × {batch_size} batch size")
 
     # ======================================
-    # Initialize RECURRENT Model (Inference)
+    # Initialize INFERENCE Model (E-step)
     # ======================================
+    # This model has:
+    # - Inputs: [FF spikes, visible teacher spikes]
+    # - Recurrence: hidden → hidden only
+    # - Outputs: hidden neurons only
 
-    print("\n✓ Initializing recurrent model for inference (E-step)...")
+    print("\n✓ Initializing inference model for E-step (hidden-only recurrence)...")
 
-    recurrent_model = ConductanceLIFNetwork(
+    inference_model = ConductanceLIFNetwork(
         dt=dt,
-        weights=perturbed_rec_weights,
-        weights_FF=perturbed_ff_weights,
-        cell_type_indices=cell_type_indices,
-        cell_type_indices_FF=feedforward_cell_type_indices,
+        weights=inference_weights_rec,  # hidden → hidden only
+        weights_FF=inference_weights_FF,  # [FF, visible] → hidden
+        cell_type_indices=cell_type_indices_hidden,  # hidden neuron types
+        cell_type_indices_FF=inference_cell_type_indices_FF,  # [FF, visible] input types
         cell_params=recurrent_cell_params,
-        cell_params_FF=feedforward_cell_params,
-        synapse_params=recurrent_synapse_params,
-        synapse_params_FF=feedforward_synapse_params,
+        cell_params_FF=combined_cell_params_FF,  # Combined [FF, recurrent] cell params
+        synapse_params=recurrent_synapse_params,  # For hidden → hidden synapses
+        synapse_params_FF=combined_synapse_params_FF,  # For [FF, visible] → hidden synapses
         surrgrad_scale=surrgrad_scale,
         batch_size=batch_size,
-        scaling_factors=sf_recurrent.copy(),  # Start with unperturbed
-        scaling_factors_FF=sf_feedforward.copy(),  # Start with unperturbed
+        scaling_factors=inference_scaling_factors_rec.copy(),  # hidden → hidden
+        scaling_factors_FF=inference_scaling_factors_FF.copy(),  # [FF, visible] → hidden
         optimisable=None,  # No optimization - just inference
-        connectome_mask=recurrent_mask,
-        feedforward_mask=feedforward_mask,
+        connectome_mask=inference_mask_rec,
+        feedforward_mask=inference_mask_FF,
         track_variables=False,
         use_tqdm=False,
     )
-    recurrent_model.to(device)
+    inference_model.to(device)
 
-    print(f"  - Output neurons: {n_neurons_full}")
-    print(f"  - {n_total_inputs} feedforward inputs per neuron")
+    print(f"  - Output neurons: {n_hidden} (hidden only)")
+    print(
+        f"  - Input neurons: {n_inference_inputs} ({n_feedforward} FF + {n_visible} visible)"
+    )
+    print(f"  - Recurrent connections: {n_hidden}×{n_hidden} (hidden→hidden)")
 
     # ==============================================
     # Initialize FEEDFORWARD Model (Visible Outputs)
@@ -559,9 +669,8 @@ def main(
                 end_t = start_t + chunk_size
 
                 # Get inferred hidden spikes from zarr
-                inferred_hidden = np.array(
-                    inferred_spikes_zarr[:1, start_t:end_t, hidden_indices]
-                )
+                # Note: inference model now outputs only hidden neurons directly
+                inferred_hidden = np.array(inferred_spikes_zarr[:1, start_t:end_t, :])
 
                 # Get teacher hidden spikes from original data
                 teacher_hidden = np.array(
@@ -627,9 +736,10 @@ def main(
             duration_s = student_visible.shape[0] * dt / 1000.0
 
             # Student hidden: from inferred spikes zarr
-            student_hidden = np.array(
-                inferred_spikes_zarr[:1, start_t:end_t, hidden_indices]
-            )[0]  # (time, n_hidden)
+            # Note: inference model now outputs only hidden neurons directly
+            student_hidden = np.array(inferred_spikes_zarr[:1, start_t:end_t, :])[
+                0
+            ]  # (time, n_hidden)
 
             # Teacher visible: from original spike data
             teacher_visible = np.array(
@@ -764,23 +874,31 @@ def main(
         print("=" * 60)
 
         # ===== E-STEP: INFERENCE =====
-        print("\n--- E-Step: Running inference to get hidden unit activities ---")
-        recurrent_model.reset_state(batch_size=batch_size)
+        # Infer hidden unit activities conditioned on visible teacher spikes
+        # Model: [FF, visible] → hidden with hidden→hidden recurrence only
+        print(
+            "\n--- E-Step: Inferring hidden activities conditioned on visible spikes ---"
+        )
+        inference_model.reset_state(batch_size=batch_size)
 
         # Save inferred spikes to zarr for M-step
         inferred_spikes_path = output_dir / f"em_iter_{em_iter}_inferred_spikes.zarr"
 
-        # Create dataloader for inference
+        # Create collate function that provides [FF, visible teacher] as inputs
+        estep_collate_fn = make_estep_collate_fn(visible_indices=visible_indices)
+
+        # Create dataloader for inference with E-step collate function
         inference_dataloader = DataLoader(
             spike_dataset,
             batch_size=None,
             sampler=CyclicSampler(spike_dataset),
             num_workers=0,
+            collate_fn=estep_collate_fn,
         )
 
         # Run inference and save to zarr
         inference_runner = SNNInference(
-            model=recurrent_model,
+            model=inference_model,
             dataloader=inference_dataloader,
             device=device,
             output_mode="zarr",
@@ -791,7 +909,7 @@ def main(
         )
 
         inference_runner.run()
-        print(f"  Inferred spikes saved to: {inferred_spikes_path}")
+        print(f"  Inferred hidden spikes saved to: {inferred_spikes_path}")
 
         # Load metadata to report statistics
         zarr_root = zarr.open_group(inferred_spikes_path, mode="r")
@@ -920,11 +1038,11 @@ def main(
             trainer.metrics_logger.close()
 
         # ===== TRANSFER SCALING FACTORS =====
-        print("\n--- Transferring learned scaling factors to recurrent model ---")
+        print("\n--- Transferring learned scaling factors to inference model ---")
 
         transfer_scaling_factors(
             feedforward_model=feedforward_model,
-            recurrent_model=recurrent_model,
+            inference_model=inference_model,
             n_ff_cell_types=n_ff_cell_types,
         )
 
@@ -968,11 +1086,11 @@ def main(
         cell_type_indices=cell_type_indices_visible,
         feedforward_cell_type_indices=concatenated_cell_type_indices,
         scaling_factors_FF=feedforward_model.scaling_factors_FF.detach().cpu().numpy(),
-        # Recurrent model scaling factors
-        scaling_factors_recurrent=recurrent_model.scaling_factors.detach()
+        # Inference model scaling factors (hidden-only recurrence)
+        scaling_factors_inference_rec=inference_model.scaling_factors.detach()
         .cpu()
         .numpy(),
-        scaling_factors_FF_recurrent=recurrent_model.scaling_factors_FF.detach()
+        scaling_factors_inference_FF=inference_model.scaling_factors_FF.detach()
         .cpu()
         .numpy(),
         # Save mapping back to full network
