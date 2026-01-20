@@ -65,6 +65,11 @@ def make_em_collate_fn(
         chunk_size: Number of timesteps per chunk
         n_neurons_full: Total number of neurons in the full network
         num_chunks: Number of chunks in the zarr file (for cycling)
+
+    Returns:
+        em_collate_fn: Collate function for dataloader
+        reset_counter: Function to reset chunk counter
+        chunk_counter: Mutable list with current chunk index (shared reference)
     """
     visible_tensor = torch.from_numpy(visible_indices).long()
     hidden_tensor = torch.from_numpy(hidden_indices).long()
@@ -121,7 +126,7 @@ def make_em_collate_fn(
     def reset_counter():
         chunk_counter[0] = 0
 
-    return em_collate_fn, reset_counter
+    return em_collate_fn, reset_counter, chunk_counter
 
 
 def transfer_scaling_factors(
@@ -493,84 +498,218 @@ def main(
     }
 
     # ================================================
-    # Create Plotting Function for Spike Comparison
+    # Factory Functions for Callbacks (with access to inferred spikes)
     # ================================================
 
-    def plot_generator(
-        spikes,
-        input_spikes,
-        target_spikes,
-        **kwargs,
-    ):
-        """Generate spike train comparison plot for subset of visible neurons."""
-        n_plot = min(10, spikes.shape[2])
+    def make_plot_generator(inferred_spikes_zarr_path: Path, chunk_counter_ref: list):
+        """
+        Factory function that creates plot_generator with access to inferred spikes.
 
-        interleaved = np.zeros((1, spikes.shape[1], 2 * n_plot))
-        for i in range(n_plot):
-            interleaved[0, :, 2 * i] = target_spikes[0, :, i]
-            interleaved[0, :, 2 * i + 1] = spikes[0, :, i]
+        Args:
+            inferred_spikes_zarr_path: Path to zarr file with inferred spikes
+            chunk_counter_ref: Reference to current chunk counter for indexing
+        """
+        # Open zarr for reading inferred spikes
+        zarr_root = zarr.open_group(inferred_spikes_zarr_path, mode="r")
+        inferred_spikes_zarr = zarr_root["output_spikes"]
 
-        cell_type_indices_plot = np.array([0, 1] * n_plot)
-        cell_type_names_plot = ["Target", "Trained"]
+        # Open original spike data for teacher hidden spikes
+        teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
+        teacher_spikes_zarr = teacher_zarr_root["target_spikes"]
 
-        fig = plot_spike_trains(
-            spikes=interleaved,
-            dt=dt,
-            cell_type_indices=cell_type_indices_plot,
-            cell_type_names=cell_type_names_plot,
-            n_neurons_plot=2 * n_plot,
-            fraction=1.0,
-            random_seed=None,
-            title=f"EM Training: Target vs Trained (first {n_plot} visible neurons, {hidden_cell_fraction:.0%} hidden)",
-            ylabel="Neuron",
-            figsize=(14, 8),
-        )
+        def plot_generator(
+            spikes,
+            input_spikes,
+            target_spikes,
+            **kwargs,
+        ):
+            """Generate spike train comparison plots for visible and hidden neurons."""
+            figs = {}
 
-        return {"spike_comparison": fig}
+            # === VISIBLE NEURONS PLOT (existing) ===
+            n_plot = min(10, spikes.shape[2])
 
-    # ================================================
-    # Create Stats Computer Function
-    # ================================================
+            interleaved = np.zeros((1, spikes.shape[1], 2 * n_plot))
+            for i in range(n_plot):
+                interleaved[0, :, 2 * i] = target_spikes[0, :, i]
+                interleaved[0, :, 2 * i + 1] = spikes[0, :, i]
 
-    def stats_computer(spikes, model_snapshot):
-        """Compute summary statistics for visible neurons."""
-        spikes_np = spikes[0, :, :]
+            cell_type_indices_plot = np.array([0, 1] * n_plot)
+            cell_type_names_plot = ["Target", "Trained"]
 
-        spike_counts = spikes_np.sum(axis=0)
-        duration_s = spikes_np.shape[0] * dt / 1000.0
-        firing_rates = spike_counts / duration_s
+            fig_visible = plot_spike_trains(
+                spikes=interleaved,
+                dt=dt,
+                cell_type_indices=cell_type_indices_plot,
+                cell_type_names=cell_type_names_plot,
+                n_neurons_plot=2 * n_plot,
+                fraction=1.0,
+                random_seed=None,
+                title=f"EM Training: Target vs Trained (first {n_plot} visible neurons, {hidden_cell_fraction:.0%} hidden)",
+                ylabel="Neuron",
+                figsize=(14, 8),
+            )
+            figs["spike_comparison_visible"] = fig_visible
 
-        stats = {
-            "firing_rate/mean": float(firing_rates.mean()),
-            "firing_rate/std": float(firing_rates.std()),
-            "firing_rate/min": float(firing_rates.min()),
-            "firing_rate/max": float(firing_rates.max()),
-            "hidden_cells/fraction": hidden_cell_fraction,
-            "hidden_cells/n_hidden": n_hidden,
-            "hidden_cells/n_visible": n_visible,
-        }
+            # === HIDDEN NEURONS PLOT (new) ===
+            if n_hidden > 0:
+                # Get current chunk index (approximate - use modulo for cycling)
+                chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
+                start_t = chunk_idx * chunk_size
+                end_t = start_t + chunk_size
 
-        current_sf = model_snapshot["scaling_factors_FF"]
-        target_sf = target_scaling_factors_FF
-
-        input_cell_type_names = (
-            feedforward.cell_types.names + recurrent.cell_types.names
-        )
-        output_cell_type_names = recurrent.cell_types.names
-
-        for source_idx in range(current_sf.shape[0]):
-            source_type_name = input_cell_type_names[source_idx]
-            for target_idx in range(current_sf.shape[1]):
-                target_type_name = output_cell_type_names[target_idx]
-                synapse_name = f"{source_type_name}_to_{target_type_name}"
-                stats[f"scaling_factors/{synapse_name}/value"] = float(
-                    current_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/{synapse_name}/target"] = float(
-                    target_sf[source_idx, target_idx]
+                # Get inferred hidden spikes from zarr
+                inferred_hidden = np.array(
+                    inferred_spikes_zarr[:1, start_t:end_t, hidden_indices]
                 )
 
-        return stats
+                # Get teacher hidden spikes from original data
+                teacher_hidden = np.array(
+                    teacher_spikes_zarr[:1, start_t:end_t, hidden_indices]
+                )
+
+                n_plot_hidden = min(10, n_hidden)
+
+                interleaved_hidden = np.zeros(
+                    (1, inferred_hidden.shape[1], 2 * n_plot_hidden)
+                )
+                for i in range(n_plot_hidden):
+                    interleaved_hidden[0, :, 2 * i] = teacher_hidden[0, :, i]
+                    interleaved_hidden[0, :, 2 * i + 1] = inferred_hidden[0, :, i]
+
+                cell_type_indices_hidden = np.array([0, 1] * n_plot_hidden)
+                cell_type_names_hidden = ["Teacher", "Inferred"]
+
+                fig_hidden = plot_spike_trains(
+                    spikes=interleaved_hidden,
+                    dt=dt,
+                    cell_type_indices=cell_type_indices_hidden,
+                    cell_type_names=cell_type_names_hidden,
+                    n_neurons_plot=2 * n_plot_hidden,
+                    fraction=1.0,
+                    random_seed=None,
+                    title=f"EM Training: Teacher vs Inferred (first {n_plot_hidden} hidden neurons, {hidden_cell_fraction:.0%} hidden)",
+                    ylabel="Neuron",
+                    figsize=(14, 8),
+                )
+                figs["spike_comparison_hidden"] = fig_hidden
+
+            return figs
+
+        return plot_generator
+
+    def make_stats_computer(inferred_spikes_zarr_path: Path, chunk_counter_ref: list):
+        """
+        Factory function that creates stats_computer with access to inferred spikes.
+
+        Args:
+            inferred_spikes_zarr_path: Path to zarr file with inferred spikes
+            chunk_counter_ref: Reference to current chunk counter for indexing
+        """
+        # Open zarr for reading inferred spikes
+        zarr_root = zarr.open_group(inferred_spikes_zarr_path, mode="r")
+        inferred_spikes_zarr = zarr_root["output_spikes"]
+
+        # Open original spike data for teacher spikes
+        teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
+        teacher_spikes_zarr = teacher_zarr_root["target_spikes"]
+
+        def stats_computer(spikes, model_snapshot):
+            """Compute summary statistics for visible and hidden neurons (student and teacher)."""
+            # Student visible: from model output (spikes)
+            student_visible = spikes[0, :, :]  # (time, n_visible)
+
+            # Get current chunk index
+            chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
+            start_t = chunk_idx * chunk_size
+            end_t = start_t + chunk_size
+
+            duration_s = student_visible.shape[0] * dt / 1000.0
+
+            # Student hidden: from inferred spikes zarr
+            student_hidden = np.array(
+                inferred_spikes_zarr[:1, start_t:end_t, hidden_indices]
+            )[0]  # (time, n_hidden)
+
+            # Teacher visible: from original spike data
+            teacher_visible = np.array(
+                teacher_spikes_zarr[:1, start_t:end_t, visible_indices]
+            )[0]  # (time, n_visible)
+
+            # Teacher hidden: from original spike data
+            teacher_hidden = np.array(
+                teacher_spikes_zarr[:1, start_t:end_t, hidden_indices]
+            )[0]  # (time, n_hidden)
+
+            # Compute firing rates for all 4 categories
+            def compute_firing_rate_stats(spike_data, prefix):
+                """Compute firing rate statistics for a spike matrix."""
+                spike_counts = spike_data.sum(axis=0)
+                firing_rates = spike_counts / duration_s
+                return {
+                    f"{prefix}/mean": float(firing_rates.mean()),
+                    f"{prefix}/std": float(firing_rates.std()),
+                    f"{prefix}/min": float(firing_rates.min()),
+                    f"{prefix}/max": float(firing_rates.max()),
+                }
+
+            stats = {}
+
+            # Student firing rates
+            stats.update(
+                compute_firing_rate_stats(
+                    student_visible, "firing_rate/student/visible"
+                )
+            )
+            if n_hidden > 0:
+                stats.update(
+                    compute_firing_rate_stats(
+                        student_hidden, "firing_rate/student/hidden"
+                    )
+                )
+
+            # Teacher firing rates
+            stats.update(
+                compute_firing_rate_stats(
+                    teacher_visible, "firing_rate/teacher/visible"
+                )
+            )
+            if n_hidden > 0:
+                stats.update(
+                    compute_firing_rate_stats(
+                        teacher_hidden, "firing_rate/teacher/hidden"
+                    )
+                )
+
+            # Hidden cell configuration
+            stats["hidden_cells/fraction"] = hidden_cell_fraction
+            stats["hidden_cells/n_hidden"] = n_hidden
+            stats["hidden_cells/n_visible"] = n_visible
+
+            # Scaling factors
+            current_sf = model_snapshot["scaling_factors_FF"]
+            target_sf = target_scaling_factors_FF
+
+            input_cell_type_names = (
+                feedforward.cell_types.names + recurrent.cell_types.names
+            )
+            output_cell_type_names = recurrent.cell_types.names
+
+            for source_idx in range(current_sf.shape[0]):
+                source_type_name = input_cell_type_names[source_idx]
+                for target_idx in range(current_sf.shape[1]):
+                    target_type_name = output_cell_type_names[target_idx]
+                    synapse_name = f"{source_type_name}_to_{target_type_name}"
+                    stats[f"scaling_factors/{synapse_name}/value"] = float(
+                        current_sf[source_idx, target_idx]
+                    )
+                    stats[f"scaling_factors/{synapse_name}/target"] = float(
+                        target_sf[source_idx, target_idx]
+                    )
+
+            return stats
+
+        return stats_computer
 
     # ===================
     # EM Training Loop
@@ -584,14 +723,8 @@ def main(
     print(f"  - Total chunks per M-step: {epochs_per_update * num_chunks}")
     print("=" * 60)
 
-    # Track current EM iteration for stats_computer (mutable container for closure)
+    # Track current EM iteration (mutable container for closure)
     current_em_iter = [0]
-
-    # Wrap stats_computer to include EM iteration
-    def stats_computer_with_em(spikes, model_snapshot):
-        stats = stats_computer(spikes, model_snapshot)
-        stats["em/iteration"] = current_em_iter[0] + 1
-        return stats
 
     # Initialize wandb if config provided
     wandb_logger = None
@@ -677,7 +810,7 @@ def main(
         )
 
         # Create EM collate function that reads inferred spikes from zarr
-        em_collate_fn, reset_counter = make_em_collate_fn(
+        em_collate_fn, reset_counter, chunk_counter_ref = make_em_collate_fn(
             visible_indices=visible_indices,
             hidden_indices=hidden_indices,
             inferred_spikes_zarr_path=inferred_spikes_path,
@@ -685,6 +818,16 @@ def main(
             n_neurons_full=n_neurons_full,
             num_chunks=num_chunks,
         )
+
+        # Create callbacks with access to inferred spikes and chunk counter
+        plot_generator = make_plot_generator(inferred_spikes_path, chunk_counter_ref)
+        stats_computer = make_stats_computer(inferred_spikes_path, chunk_counter_ref)
+
+        # Wrap stats_computer to include EM iteration
+        def stats_computer_with_em(spikes, model_snapshot):
+            stats = stats_computer(spikes, model_snapshot)
+            stats["em/iteration"] = current_em_iter[0] + 1
+            return stats
 
         # Create fresh optimizer for this M-step
         optimiser = torch.optim.Adam(feedforward_model.parameters(), lr=learning_rate)
