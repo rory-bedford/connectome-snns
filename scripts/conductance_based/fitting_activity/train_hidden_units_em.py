@@ -678,9 +678,13 @@ def main(
                 inferred_hidden = np.array(inferred_spikes_zarr[:1, start_t:end_t, :])
 
                 # Get teacher hidden spikes from original data
-                teacher_hidden = np.array(
-                    teacher_spikes_zarr[:1, start_t:end_t, hidden_indices]
-                )
+                # Extract all neurons first, then index (zarr fancy indexing issue)
+                teacher_all_plot = np.array(teacher_spikes_zarr[:1, start_t:end_t, :])[
+                    0
+                ]  # (time, n_all_neurons)
+                teacher_hidden = teacher_all_plot[:, hidden_indices][
+                    np.newaxis, :, :
+                ]  # (1, time, n_hidden)
 
                 n_plot_hidden = min(10, n_hidden)
 
@@ -753,15 +757,14 @@ def main(
                 0
             ]  # (time, n_hidden)
 
-            # Teacher visible: from original spike data
-            teacher_visible = np.array(
-                teacher_spikes_zarr[:1, start_t:end_t, visible_indices]
-            )[0]  # (time, n_visible)
+            # Teacher spikes: extract all neurons first, then index
+            # (zarr fancy indexing doesn't work the same as numpy)
+            teacher_all = np.array(teacher_spikes_zarr[:1, start_t:end_t, :])[
+                0
+            ]  # (time, n_all_neurons)
 
-            # Teacher hidden: from original spike data
-            teacher_hidden = np.array(
-                teacher_spikes_zarr[:1, start_t:end_t, hidden_indices]
-            )[0]  # (time, n_hidden)
+            teacher_visible = teacher_all[:, visible_indices]  # (time, n_visible)
+            teacher_hidden = teacher_all[:, hidden_indices]  # (time, n_hidden)
 
             # Compute firing rates for all 4 categories
             def compute_firing_rate_stats(spike_data, prefix):
