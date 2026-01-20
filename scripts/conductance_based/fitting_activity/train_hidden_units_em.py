@@ -689,13 +689,18 @@ def main(
 
             # === HIDDEN NEURONS PLOT (new) ===
             if n_hidden > 0:
-                # Get current chunk index (approximate - use modulo for cycling)
-                chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
-
-                # Use plot_size chunks (same as visible neurons plot)
                 # Match the time range of the visible neurons plot
-                n_timesteps_plot = spikes.shape[1]
-                start_t = chunk_idx * chunk_size
+                # The trainer accumulates plot_size chunks, so we need the same range
+                n_timesteps_plot = spikes.shape[
+                    1
+                ]  # This should be plot_size * chunk_size
+
+                # Calculate the ending chunk index (current chunk counter - 1)
+                end_chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
+                # Calculate starting chunk index (going back plot_size chunks)
+                start_chunk_idx = end_chunk_idx - (n_timesteps_plot // chunk_size) + 1
+
+                start_t = start_chunk_idx * chunk_size
                 end_t = start_t + n_timesteps_plot
 
                 # Get inferred hidden spikes from zarr
@@ -713,52 +718,10 @@ def main(
 
                 n_plot_hidden = min(10, n_hidden)
 
-                # Select hidden neurons randomly, but ensure at least half have above-average firing rates
-                hidden_spike_counts = inferred_hidden.sum(
-                    axis=(0, 1)
-                )  # Sum over batch and time
-                mean_spike_count = hidden_spike_counts.mean()
-
-                above_avg_indices = np.where(hidden_spike_counts >= mean_spike_count)[0]
-                below_avg_indices = np.where(hidden_spike_counts < mean_spike_count)[0]
-
-                n_above = max(n_plot_hidden // 2, 1)  # At least half (and at least 1)
-                n_below = n_plot_hidden - n_above
-
-                # Randomly select from each group
-                selected_above = np.random.choice(
-                    above_avg_indices,
-                    size=min(n_above, len(above_avg_indices)),
-                    replace=False,
+                # Randomly select hidden neurons to plot
+                plot_indices_hidden = np.random.choice(
+                    n_hidden, size=n_plot_hidden, replace=False
                 )
-                selected_below = (
-                    np.random.choice(
-                        below_avg_indices,
-                        size=min(n_below, len(below_avg_indices)),
-                        replace=False,
-                    )
-                    if len(below_avg_indices) > 0
-                    else np.array([], dtype=int)
-                )
-
-                # If we don't have enough in one group, fill from the other
-                if len(selected_above) + len(selected_below) < n_plot_hidden:
-                    remaining = n_plot_hidden - (
-                        len(selected_above) + len(selected_below)
-                    )
-                    all_remaining = np.setdiff1d(
-                        np.arange(n_hidden),
-                        np.concatenate([selected_above, selected_below]),
-                    )
-                    if len(all_remaining) > 0:
-                        extra = np.random.choice(
-                            all_remaining,
-                            size=min(remaining, len(all_remaining)),
-                            replace=False,
-                        )
-                        selected_below = np.concatenate([selected_below, extra])
-
-                plot_indices_hidden = np.concatenate([selected_above, selected_below])
 
                 interleaved_hidden = np.zeros(
                     (1, inferred_hidden.shape[1], 2 * n_plot_hidden)

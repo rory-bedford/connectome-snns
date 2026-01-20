@@ -37,7 +37,7 @@ optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "s
 
 [hyperparameters]
 surrgrad_scale = 0.5                   # Scale for surrogate gradient fast sigmoid function
-learning_rate = 5e-2                   # Learning rate for ADAM optimiser
+learning_rate = 1e-2                   # Learning rate for ADAM optimiser
 van_rossum_tau_1 = 70.0                # ms - Exponential temporal kernel for first van Rossum loss
 van_rossum_tau_2 = 1000.0              # ms - Exponential temporal kernel for second van Rossum loss
 
