@@ -636,13 +636,18 @@ def main(
             """Generate spike train comparison plots for visible and hidden neurons."""
             figs = {}
 
-            # === VISIBLE NEURONS PLOT (existing) ===
+            # === VISIBLE NEURONS PLOT ===
             n_plot = min(10, spikes.shape[2])
 
+            # Randomly select neurons to plot
+            plot_indices_visible = np.random.choice(
+                spikes.shape[2], size=n_plot, replace=False
+            )
+
             interleaved = np.zeros((1, spikes.shape[1], 2 * n_plot))
-            for i in range(n_plot):
-                interleaved[0, :, 2 * i] = target_spikes[0, :, i]
-                interleaved[0, :, 2 * i + 1] = spikes[0, :, i]
+            for i, neuron_idx in enumerate(plot_indices_visible):
+                interleaved[0, :, 2 * i] = target_spikes[0, :, neuron_idx]
+                interleaved[0, :, 2 * i + 1] = spikes[0, :, neuron_idx]
 
             cell_type_indices_plot = np.array([0, 1] * n_plot)
             cell_type_names_plot = ["Target", "Trained"]
@@ -679,12 +684,19 @@ def main(
 
                 n_plot_hidden = min(10, n_hidden)
 
+                # Randomly select hidden neurons to plot
+                plot_indices_hidden = np.random.choice(
+                    n_hidden, size=n_plot_hidden, replace=False
+                )
+
                 interleaved_hidden = np.zeros(
                     (1, inferred_hidden.shape[1], 2 * n_plot_hidden)
                 )
-                for i in range(n_plot_hidden):
-                    interleaved_hidden[0, :, 2 * i] = teacher_hidden[0, :, i]
-                    interleaved_hidden[0, :, 2 * i + 1] = inferred_hidden[0, :, i]
+                for i, neuron_idx in enumerate(plot_indices_hidden):
+                    interleaved_hidden[0, :, 2 * i] = teacher_hidden[0, :, neuron_idx]
+                    interleaved_hidden[0, :, 2 * i + 1] = inferred_hidden[
+                        0, :, neuron_idx
+                    ]
 
                 cell_type_indices_hidden = np.array([0, 1] * n_plot_hidden)
                 cell_type_names_hidden = ["Teacher", "Inferred"]
