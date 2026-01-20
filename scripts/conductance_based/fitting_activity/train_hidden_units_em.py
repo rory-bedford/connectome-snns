@@ -691,8 +691,12 @@ def main(
             if n_hidden > 0:
                 # Get current chunk index (approximate - use modulo for cycling)
                 chunk_idx = (chunk_counter_ref[0] - 1) % num_chunks
+
+                # Use plot_size chunks (same as visible neurons plot)
+                # Match the time range of the visible neurons plot
+                n_timesteps_plot = spikes.shape[1]
                 start_t = chunk_idx * chunk_size
-                end_t = start_t + chunk_size
+                end_t = start_t + n_timesteps_plot
 
                 # Get inferred hidden spikes from zarr
                 # Note: inference model now outputs only hidden neurons directly
