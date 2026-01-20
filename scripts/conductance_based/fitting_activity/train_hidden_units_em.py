@@ -873,6 +873,10 @@ def main(
         print(f"EM Iteration {em_iter + 1}/{total_iterations}")
         print("=" * 60)
 
+        # Create output directory for this EM iteration
+        em_iter_output_dir = output_dir / f"em_iter_{em_iter + 1:03d}"
+        em_iter_output_dir.mkdir(parents=True, exist_ok=True)
+
         # ===== E-STEP: INFERENCE =====
         # Infer hidden unit activities conditioned on visible teacher spikes
         # Model: [FF, visible] → hidden with hidden→hidden recurrence only
@@ -882,7 +886,7 @@ def main(
         inference_model.reset_state(batch_size=batch_size)
 
         # Save inferred spikes to zarr for M-step
-        inferred_spikes_path = output_dir / f"em_iter_{em_iter}_inferred_spikes.zarr"
+        inferred_spikes_path = em_iter_output_dir / "inferred_spikes.zarr"
 
         # Create collate function that provides [FF, visible teacher] as inputs
         estep_collate_fn = make_estep_collate_fn(visible_indices=visible_indices)
@@ -1021,10 +1025,6 @@ def main(
 
         # Reset model state before training
         feedforward_model.reset_state(batch_size=batch_size)
-
-        # Create output directory for this EM iteration
-        em_iter_output_dir = output_dir / f"em_iter_{em_iter + 1:03d}"
-        em_iter_output_dir.mkdir(parents=True, exist_ok=True)
 
         best_loss = trainer.train(output_dir=em_iter_output_dir)
 
