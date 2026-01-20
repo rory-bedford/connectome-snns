@@ -625,7 +625,7 @@ def main(
 
         # Open original spike data for teacher hidden spikes
         teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
-        teacher_spikes_zarr = teacher_zarr_root["target_spikes"]
+        teacher_spikes_zarr = teacher_zarr_root["output_spikes"]
 
         def plot_generator(
             spikes,
@@ -721,7 +721,7 @@ def main(
 
         # Open original spike data for teacher spikes
         teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
-        teacher_spikes_zarr = teacher_zarr_root["target_spikes"]
+        teacher_spikes_zarr = teacher_zarr_root["output_spikes"]
 
         def stats_computer(spikes, model_snapshot):
             """Compute summary statistics for visible and hidden neurons (student and teacher)."""
