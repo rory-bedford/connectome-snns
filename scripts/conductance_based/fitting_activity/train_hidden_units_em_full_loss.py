@@ -284,6 +284,7 @@ def main(
     grad_norm_clip = training.grad_norm_clip
     weight_perturbation_variance = training.weight_perturbation_variance
     optimisable = training.optimisable
+    momentum = training.momentum
     learning_rate = hyperparameters.learning_rate
     surrgrad_scale = hyperparameters.surrgrad_scale
     van_rossum_tau_rise = hyperparameters.van_rossum_tau_rise
@@ -1001,7 +1002,9 @@ def main(
             return stats
 
         # Create fresh optimizer for this M-step
-        optimiser = torch.optim.Adam(feedforward_model.parameters(), lr=learning_rate)
+        optimiser = torch.optim.Adam(
+            feedforward_model.parameters(), lr=learning_rate, betas=(momentum, 0.999)
+        )
         scaler = GradScaler("cuda", enabled=mixed_precision and device == "cuda")
 
         # Reset loss function state

@@ -30,6 +30,7 @@ plot_size = 100                        # Number of chunks to accumulate for plot
 mixed_precision = true                 # Whether to train with mixed precision
 weight_perturbation_variance = 0.1     # Variance of log-normal distribution for scaling factor perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
+momentum = 0.6                         # Adam beta1 parameter (default 0.9, lower values = less momentum)
 
 # ===============
 # HYPERPARAMETERS

@@ -39,6 +39,7 @@ class StudentTrainingConfig(BaseModel):
     mixed_precision: bool
     weight_perturbation_variance: float
     grad_norm_clip: Optional[float] = None
+    momentum: float = 0.6  # Adam beta1 parameter
     optimisable: Literal[
         "weights",
         "scaling_factors",
@@ -90,6 +91,7 @@ class EMTrainingConfig(BaseModel):
     mixed_precision: bool
     weight_perturbation_variance: float
     grad_norm_clip: Optional[float] = None
+    momentum: float = 0.6  # Adam beta1 parameter
     optimisable: Literal[
         "weights",
         "scaling_factors",
