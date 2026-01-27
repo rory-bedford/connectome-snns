@@ -50,6 +50,7 @@ def make_em_collate_fn(
     chunk_size: int,
     n_neurons_full: int,
     num_chunks: int,
+    loss_fn=None,
 ):
     """
     Collate function for EM training that reads inferred spikes from zarr.
@@ -76,16 +77,17 @@ def make_em_collate_fn(
     hidden_tensor = torch.from_numpy(hidden_indices).long()
     chunk_counter = [0]  # Mutable to track chunk index
     model_ref = [None]  # Will hold reference to model for state resets
+    loss_ref = [loss_fn]  # Will hold reference to loss function for resets
 
     # Open zarr file for reading
     zarr_root = zarr.open_group(inferred_spikes_zarr_path, mode="r")
     inferred_spikes_zarr = zarr_root["output_spikes"]
 
     def em_collate_fn(batch: SpikeData) -> SpikeData:
-        # Reset model state when cycling back to chunk 0 (prevents artifacts)
+        # Reset loss filter when cycling to handle discontinuity in inferred spikes
         if chunk_counter[0] % num_chunks == 0 and chunk_counter[0] > 0:
-            if model_ref[0] is not None:
-                model_ref[0].reset_state(batch_size=batch.target_spikes.shape[0])
+            if loss_ref[0] is not None:
+                loss_ref[0].reset_state()
 
         batch_size, time_steps, _ = batch.target_spikes.shape
         device = batch.target_spikes.device
@@ -136,7 +138,11 @@ def make_em_collate_fn(
         """Set model reference for state resets during cycling."""
         model_ref[0] = model
 
-    return em_collate_fn, reset_counter, chunk_counter, set_model
+    def set_loss(loss):
+        """Set loss function reference for state resets during cycling."""
+        loss_ref[0] = loss
+
+    return em_collate_fn, reset_counter, chunk_counter, set_model, set_loss
 
 
 def make_estep_collate_fn(
@@ -1028,14 +1034,21 @@ def main(
         )
 
         # Create EM collate function that reads inferred spikes from zarr
-        em_collate_fn, reset_counter, chunk_counter_ref, set_model = make_em_collate_fn(
-            visible_indices=visible_indices,
-            hidden_indices=hidden_indices,
-            inferred_spikes_zarr_path=inferred_spikes_path,
-            chunk_size=chunk_size,
-            n_neurons_full=n_neurons_full,
-            num_chunks=num_chunks,
+        em_collate_fn, reset_counter, chunk_counter_ref, set_model, set_loss = (
+            make_em_collate_fn(
+                visible_indices=visible_indices,
+                hidden_indices=hidden_indices,
+                inferred_spikes_zarr_path=inferred_spikes_path,
+                chunk_size=chunk_size,
+                n_neurons_full=n_neurons_full,
+                num_chunks=num_chunks,
+                loss_fn=van_rossum_loss_fn,
+            )
         )
+
+        # Pass model and loss references to collate function
+        set_model(feedforward_model)
+        set_loss(van_rossum_loss_fn)
 
         # Pass model reference to collate function so it can reset state when cycling
         set_model(feedforward_model)

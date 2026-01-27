@@ -38,7 +38,7 @@ momentum = 0.6                         # Adam beta1 parameter (default 0.9, lowe
 
 [hyperparameters]
 surrgrad_scale = 0.5                   # Scale for surrogate gradient fast sigmoid function
-learning_rate = 1e-2                   # Learning rate for ADAM optimiser
+learning_rate = 5e-3                   # Learning rate for ADAM optimiser
 van_rossum_tau_rise = 10.0             # ms - Rise time constant for van Rossum double exponential filter
 van_rossum_tau_decay = 100.0           # ms - Decay time constant for van Rossum double exponential filter
 
