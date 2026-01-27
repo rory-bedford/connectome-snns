@@ -7,7 +7,7 @@
 
 [simulation]
 seed = 44                              # Random seed for reproducibility
-chunk_size = 100                       # Number of timesteps per chunk
+chunk_size = 200                       # Number of timesteps per chunk
 hidden_cell_fraction = 0.2             # Fraction of recurrent cells that are hidden
 
 # ==============
@@ -15,7 +15,7 @@ hidden_cell_fraction = 0.2             # Fraction of recurrent cells that are hi
 # ==============
 
 [em]
-total_iterations = 10                  # Number of EM iterations
+total_iterations = 5                   # Number of EM iterations
 epochs_per_update = 5                  # Epochs of feedforward training per EM step
 
 # ======================
@@ -25,10 +25,10 @@ epochs_per_update = 5                  # Epochs of feedforward training per EM s
 [training]
 chunks_per_update = 5                  # Number of loss calculations per gradient step
 log_interval = 5                       # Log metrics to CSV and wandb every N chunks
-checkpoint_interval = 100              # Save model checkpoints and generate plots every N chunks
-plot_size = 100                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
+checkpoint_interval = 50               # Save model checkpoints and generate plots every N chunks
+plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
-weight_perturbation_variance = 0.1     # Variance of log-normal distribution for scaling factor perturbation
+weight_perturbation_variance = 0.0     # Variance of log-normal distribution for scaling factor perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 momentum = 0.6                         # Adam beta1 parameter (default 0.9, lower values = less momentum)
 

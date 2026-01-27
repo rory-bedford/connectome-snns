@@ -925,42 +925,91 @@ def main(
         em_iter_output_dir.mkdir(parents=True, exist_ok=True)
 
         # ===== E-STEP: INFERENCE =====
-        # Infer hidden unit activities conditioned on visible teacher spikes
-        # Model: [FF, visible] → hidden with hidden→hidden recurrence only
+        # Run full recurrent network and extract hidden unit activities
         print(
-            "\n--- E-Step: Inferring hidden activities conditioned on visible spikes ---"
+            "\n--- E-Step: Running full recurrent network to infer hidden activities ---"
         )
-        inference_model.reset_state(batch_size=batch_size)
+
+        # Create a full recurrent network for E-step (same as teacher)
+        estep_full_network = ConductanceLIFNetwork(
+            dt=dt,
+            weights=perturbed_rec_weights,
+            weights_FF=perturbed_ff_weights,
+            cell_type_indices=cell_type_indices,
+            cell_type_indices_FF=feedforward_cell_type_indices,
+            cell_params=recurrent_cell_params,
+            cell_params_FF=feedforward_cell_params,
+            synapse_params=recurrent_synapse_params,
+            synapse_params_FF=feedforward_synapse_params,
+            surrgrad_scale=surrgrad_scale,
+            batch_size=batch_size,
+            scaling_factors=sf_recurrent.copy(),
+            scaling_factors_FF=sf_feedforward.copy(),
+            optimisable=None,
+            connectome_mask=recurrent_mask,
+            feedforward_mask=feedforward_mask,
+            track_variables=False,
+            use_tqdm=False,
+        )
+        estep_full_network.to(device)
+        estep_full_network.reset_state(batch_size=batch_size)
 
         # Save inferred spikes to zarr for M-step
         inferred_spikes_path = em_iter_output_dir / "inferred_spikes.zarr"
 
-        # Create collate function that provides [FF, visible teacher] as inputs
-        estep_collate_fn = make_estep_collate_fn(visible_indices=visible_indices)
-
-        # Create dataloader for inference with E-step collate function
+        # Create dataloader (no collate function needed - use raw data)
         inference_dataloader = DataLoader(
             spike_dataset,
             batch_size=None,
             sampler=CyclicSampler(spike_dataset),
             num_workers=0,
-            collate_fn=estep_collate_fn,
         )
 
-        # Run inference and save to zarr
+        # Run inference and save ALL neurons to zarr first
+        temp_zarr_path = em_iter_output_dir / "temp_full_network.zarr"
         inference_runner = SNNInference(
-            model=inference_model,
+            model=estep_full_network,
             dataloader=inference_dataloader,
             device=device,
             output_mode="zarr",
-            zarr_path=inferred_spikes_path,
+            zarr_path=temp_zarr_path,
             save_tracked_variables=False,
             max_chunks=num_chunks,
             progress_bar=True,
         )
 
         inference_runner.run()
+
+        # Extract only hidden neurons and save to final zarr
+        temp_zarr_root = zarr.open_group(temp_zarr_path, mode="r")
+        temp_output_spikes = temp_zarr_root["output_spikes"]
+
+        # Create final zarr with only hidden neurons
+        final_zarr_root = zarr.open_group(inferred_spikes_path, mode="w")
+        hidden_spikes_only = final_zarr_root.create_dataset(
+            "output_spikes",
+            shape=(batch_size, temp_output_spikes.shape[1], n_hidden),
+            dtype=temp_output_spikes.dtype,
+            chunks=(1, chunk_size, n_hidden),
+        )
+
+        # Copy hidden neurons only
+        print("  Extracting hidden neurons...")
+        for batch_idx in range(batch_size):
+            hidden_spikes_only[batch_idx, :, :] = temp_output_spikes[
+                batch_idx, :, hidden_indices
+            ]
+
         print(f"  Inferred hidden spikes saved to: {inferred_spikes_path}")
+
+        # Clean up temp zarr
+        import shutil
+
+        shutil.rmtree(temp_zarr_path)
+
+        # Clean up full network
+        del estep_full_network
+        torch.cuda.empty_cache() if device == "cuda" else None
 
         # Load metadata to report statistics
         zarr_root = zarr.open_group(inferred_spikes_path, mode="r")
