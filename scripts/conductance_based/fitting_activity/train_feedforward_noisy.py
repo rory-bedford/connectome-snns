@@ -285,14 +285,17 @@ def main(
     )
 
     # Apply weight perturbation to create target scaling factors
-    # Sample scaling factors from log-normal distribution
+    # Sample TARGET scaling factors from log-normal distribution with mean 1
     sigma = np.sqrt(weight_perturbation_variance)
-    mu = -(sigma**2) / 2.0
+    mu = -(sigma**2) / 2.0  # Ensures E[target] = 1
 
-    # Generate perturbation factors matching scaling factor shape
-    perturbation_factors = np.random.lognormal(
+    # Generate target scaling factors directly (mean 1, controllable variance)
+    target_scaling_factors_FF = np.random.lognormal(
         mean=mu, sigma=sigma, size=concatenated_scaling_factors.shape
     )
+
+    # Perturbation is reciprocal of target (so target * perturbation = 1)
+    perturbation_factors = 1.0 / target_scaling_factors_FF
 
     # Apply perturbation to weights for all neurons
     perturbed_weights = concatenated_weights.copy()
@@ -303,9 +306,6 @@ def main(
             perturbed_weights[input_idx, output_idx] *= perturbation_factors[
                 input_type, output_type
             ]
-
-    # Target scaling factors are reciprocals of perturbation
-    target_scaling_factors_FF = 1.0 / perturbation_factors
 
     # Save targets
     targets_dir = output_dir / "targets"
