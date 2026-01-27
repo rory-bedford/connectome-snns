@@ -11,6 +11,78 @@ from utils.reproducibility import ExperimentTracker
 from tqdm import tqdm  # Add tqdm for progress bar
 
 
+def check_git_status_for_grid_search():
+    """
+    Check that all code changes are committed before running a grid search.
+
+    Allows uncommitted changes to parameters/*.toml and workspace/* files,
+    but requires all other code to be committed since the grid search runs
+    from a git worktree snapshot.
+
+    Returns:
+        str: The current commit hash if validation passes
+
+    Raises:
+        SystemExit: If there are uncommitted code changes
+    """
+    # Check for uncommitted changes
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print("ERROR: Failed to check git status")
+        sys.exit(1)
+
+    if result.stdout.strip():
+        # Parse dirty files
+        dirty_files = []
+        for line in result.stdout.strip().split("\n"):
+            if line:
+                # Format: "XY filename" where XY is the status
+                rest = line[2:]  # Skip status codes
+                # Handle renamed files "old -> new"
+                if " -> " in rest:
+                    rest = rest.split(" -> ")[1]
+                filename = rest.lstrip().strip()
+                if filename:
+                    dirty_files.append(filename)
+
+        # Filter out allowed dirty files (parameters and workspace)
+        code_dirty_files = [
+            f
+            for f in dirty_files
+            if not f.startswith("parameters/") and not f.startswith("workspace/")
+        ]
+
+        if code_dirty_files:
+            print("ERROR: You have uncommitted changes in code files:")
+            for f in code_dirty_files:
+                print(f"  {f}")
+            print("\nGrid search runs from a git worktree snapshot, so uncommitted")
+            print("changes will NOT be included. Please commit your changes first.")
+            print(
+                "\nNote: Changes to parameters/*.toml and workspace/* files are allowed."
+            )
+            sys.exit(1)
+        elif dirty_files:
+            # Only parameter/workspace files are dirty - this is fine
+            print("ℹ️  Uncommitted parameter/workspace files detected (allowed):")
+            for f in dirty_files:
+                print(f"    {f}")
+
+    # Get current commit hash
+    commit_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return commit_result.stdout.strip()
+
+
 def get_repo_root():
     """Get the repository root directory."""
     # Navigate up from this file (src/utils/experiment_runners.py) to repo root
@@ -84,14 +156,20 @@ def run_experiment(config_path=None, skip_git_check=False):
 
 def run_on_gpu(args):
     """Run experiment on specific GPU."""
-    experiment_config_path, gpu_id, description, output_dir = args
+    experiment_config_path, gpu_id, description, output_dir, worktree_path = args
     print(f"Running: {description} on GPU {gpu_id}")
     env = {**subprocess.os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
     result = subprocess.run(
-        ["python", "scripts/run_experiment.py", str(experiment_config_path)],
+        [
+            "python",
+            "scripts/run_experiment.py",
+            str(experiment_config_path),
+            "--no-commit",
+        ],
         capture_output=True,
         text=True,
         env=env,
+        cwd=worktree_path,
     )
 
     # Write log file to output directory
@@ -122,86 +200,107 @@ def run_custom_search(
     """
     Run custom grid search in parallel across GPUs.
 
+    Creates a git worktree snapshot so you can continue working on the main repo
+    while the grid search runs.
+
     Args:
         experiment_config_path: Path to experiment.toml
         config_generator: Generator function(base_params) that yields (params_dict, description)
         cuda_devices: List of GPU IDs (e.g., [0, 1])
         grid_script_path: Path to the grid search script (for copying to output dir)
     """
-    # Load experiment config and base parameters
-    experiment_config = toml.load(experiment_config_path)
-    base_params = toml.load(experiment_config["parameters_file"])
+    # Validate git status and get commit hash
+    print("Checking git status...")
+    commit_hash = check_git_status_for_grid_search()
+    print(f"✓ All code changes committed (commit: {commit_hash[:8]})\n")
 
-    # Use the parent folder name directly from the config file
-    parent_output = Path(experiment_config["output_dir"])
-    grid_parent = parent_output.parent / parent_output.name
-    grid_parent.mkdir(parents=True, exist_ok=True)
+    # Create a worktree snapshot of the current commit
+    worktree_path = Path(
+        f"/tmp/grid-search-{commit_hash[:8]}-{datetime.now().strftime('%H%M%S')}"
+    )
 
-    # Copy the grid search script to the target directory for reproducibility
-    if grid_script_path:
-        grid_script_path = Path(grid_script_path)
-        if grid_script_path.exists():
-            shutil.copy2(grid_script_path, grid_parent / "run_grid_search.py")
-            print(f"✓ Copied {grid_script_path} to {grid_parent}")
+    print(f"Creating worktree snapshot at {worktree_path}...")
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(worktree_path), "HEAD"], check=True
+    )
+    print(f"✓ Worktree created (commit: {commit_hash[:8]})")
+    print("  You can continue working on the main repo while grid search runs.\n")
 
-    print(f"\nGrid search parent: {grid_parent}")
+    try:
+        # Load experiment config and base parameters
+        experiment_config = toml.load(experiment_config_path)
+        base_params = toml.load(experiment_config["parameters_file"])
 
-    # Count total simulations first
-    config_list = list(config_generator(base_params))
-    total_simulations = len(config_list)
+        # Use the parent folder name directly from the config file
+        parent_output = Path(experiment_config["output_dir"])
+        grid_parent = parent_output.parent / parent_output.name
+        grid_parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{'=' * 60}")
-    print(f"GRID SEARCH: {total_simulations} simulations will be run")
-    print(f"GPUs: {cuda_devices} ({len(cuda_devices)} workers)")
-    print(f"{'=' * 60}\n")
+        # Copy the grid search script to the target directory for reproducibility
+        if grid_script_path:
+            grid_script_path = Path(grid_script_path)
+            if grid_script_path.exists():
+                shutil.copy2(grid_script_path, grid_parent / "run_grid_search.py")
+                print(f"✓ Copied {grid_script_path} to {grid_parent}")
 
-    print("Generating configurations...")
+        print(f"\nGrid search parent: {grid_parent}")
 
-    # Generate all experiment configs in the output directory
-    workspace = grid_parent / "temp_grid_configs"
-    workspace.mkdir(parents=True, exist_ok=True)
+        # Count total simulations first
+        config_list = list(config_generator(base_params))
+        total_simulations = len(config_list)
 
-    experiment_configs = []
-    all_runs = []
+        print(f"\n{'=' * 60}")
+        print(f"GRID SEARCH: {total_simulations} simulations will be run")
+        print(f"GPUs: {cuda_devices} ({len(cuda_devices)} workers)")
+        print(f"{'=' * 60}\n")
 
-    for i, (params, description) in enumerate(config_list):
-        # Save modified parameters file
-        params_file = workspace / f"params_{i:03d}.toml"
-        with open(params_file, "w") as f:
-            toml.dump(params, f)
+        print("Generating configurations...")
 
-        # Create experiment config
-        exp_config = deepcopy(experiment_config)
-        exp_config["parameters_file"] = str(params_file)
-        exp_config["output_dir"] = str(grid_parent / description)
+        # Generate all experiment configs in the output directory
+        workspace = grid_parent / "temp_grid_configs"
+        workspace.mkdir(parents=True, exist_ok=True)
 
-        # Set wandb notes to the description if wandb is enabled
-        if exp_config.get("wandb", {}).get("enabled", False):
-            exp_config["wandb"]["notes"] = description
+        experiment_configs = []
+        all_runs = []
 
-        # Save experiment config
-        exp_config_file = workspace / f"experiment_{i:03d}.toml"
-        with open(exp_config_file, "w") as f:
-            toml.dump(exp_config, f)
+        for i, (params, description) in enumerate(config_list):
+            # Save modified parameters file
+            params_file = workspace / f"params_{i:03d}.toml"
+            with open(params_file, "w") as f:
+                toml.dump(params, f)
 
-        experiment_configs.append(exp_config_file)
-        all_runs.append(
-            {
-                "run_id": i,
-                "description": description,
-                "output_dir": str(grid_parent / description),
-                "parameters": params,
-                "success": None,  # Initialize success status as None
-            }
-        )
+            # Create experiment config
+            exp_config = deepcopy(experiment_config)
+            exp_config["parameters_file"] = str(params_file)
+            exp_config["output_dir"] = str(grid_parent / description)
 
-    print(f"✓ Generated {len(experiment_configs)} configurations\n")
+            # Set wandb notes to the description if wandb is enabled
+            if exp_config.get("wandb", {}).get("enabled", False):
+                exp_config["wandb"]["notes"] = description
 
-    # Write initial README and parameters file
-    def write_readme_and_params():
-        success_count = sum(1 for run in all_runs if run["success"] is True)
-        failure_count = sum(1 for run in all_runs if run["success"] is False)
-        readme = f"""# Grid Search Run
+            # Save experiment config
+            exp_config_file = workspace / f"experiment_{i:03d}.toml"
+            with open(exp_config_file, "w") as f:
+                toml.dump(exp_config, f)
+
+            experiment_configs.append(exp_config_file)
+            all_runs.append(
+                {
+                    "run_id": i,
+                    "description": description,
+                    "output_dir": str(grid_parent / description),
+                    "parameters": params,
+                    "success": None,  # Initialize success status as None
+                }
+            )
+
+        print(f"✓ Generated {len(experiment_configs)} configurations\n")
+
+        # Write initial README and parameters file
+        def write_readme_and_params():
+            success_count = sum(1 for run in all_runs if run["success"] is True)
+            failure_count = sum(1 for run in all_runs if run["success"] is False)
+            readme = f"""# Grid Search Run
 
 **Timestamp**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 **Base Experiment**: {experiment_config_path}
@@ -216,54 +315,63 @@ def run_custom_search(
 ## Runs
 
 """
-        for run in all_runs:
-            status = (
-                "✓"
-                if run["success"] is True
-                else "✗"
-                if run["success"] is False
-                else "..."
+            for run in all_runs:
+                status = (
+                    "✓"
+                    if run["success"] is True
+                    else "✗"
+                    if run["success"] is False
+                    else "..."
+                )
+                readme += f"- {status} `{run['description']}/`\n"
+
+            readme += "\n## Details\nSee `grid_parameters.toml` for complete parameter configuration of each run.\n"
+
+            readme_path = grid_parent / "README.md"
+            with open(readme_path, "w") as f:
+                f.write(readme)
+
+            params_path = grid_parent / "grid_parameters.toml"
+            with open(params_path, "w") as f:
+                toml.dump({"runs": all_runs}, f)
+
+        write_readme_and_params()  # Write initial state
+
+        # Assign GPUs round-robin and run in parallel
+        jobs = [
+            (
+                cfg,
+                cuda_devices[i % len(cuda_devices)],
+                all_runs[i]["description"],
+                all_runs[i]["output_dir"],
+                str(worktree_path),
             )
-            readme += f"- {status} `{run['description']}/`\n"
+            for i, cfg in enumerate(experiment_configs)
+        ]
 
-        readme += "\n## Details\nSee `grid_parameters.toml` for complete parameter configuration of each run.\n"
+        print("Running experiments...\n")
+        with ProcessPoolExecutor(max_workers=len(cuda_devices)) as executor:
+            for i, result in enumerate(
+                tqdm(
+                    executor.map(run_on_gpu, jobs),
+                    total=len(jobs),
+                    desc="Experiments Progress",
+                )
+            ):
+                all_runs[i]["success"] = result["success"]  # Update success status
+                write_readme_and_params()  # Update README and parameters file after each job
 
-        readme_path = grid_parent / "README.md"
-        with open(readme_path, "w") as f:
-            f.write(readme)
-
-        params_path = grid_parent / "grid_parameters.toml"
-        with open(params_path, "w") as f:
-            toml.dump({"runs": all_runs}, f)
-
-    write_readme_and_params()  # Write initial state
-
-    # Assign GPUs round-robin and run in parallel
-    jobs = [
-        (
-            cfg,
-            cuda_devices[i % len(cuda_devices)],
-            all_runs[i]["description"],
-            all_runs[i]["output_dir"],
+        print(
+            f"\nComplete: {sum(r['success'] for r in all_runs if r['success'] is not None)}/{len(all_runs)} successful"
         )
-        for i, cfg in enumerate(experiment_configs)
-    ]
+        print(f"Results: {grid_parent}\n")
 
-    print("Running experiments...\n")
-    with ProcessPoolExecutor(max_workers=len(cuda_devices)) as executor:
-        for i, result in enumerate(
-            tqdm(
-                executor.map(run_on_gpu, jobs),
-                total=len(jobs),
-                desc="Experiments Progress",
-            )
-        ):
-            all_runs[i]["success"] = result["success"]  # Update success status
-            write_readme_and_params()  # Update README and parameters file after each job
+        return all_runs
 
-    print(
-        f"\nComplete: {sum(r['success'] for r in all_runs if r['success'] is not None)}/{len(all_runs)} successful"
-    )
-    print(f"Results: {grid_parent}\n")
-
-    return all_runs
+    finally:
+        # Clean up worktree
+        print(f"Cleaning up worktree {worktree_path}...")
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)], check=False
+        )
+        print("✓ Worktree removed")

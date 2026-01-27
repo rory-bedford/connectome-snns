@@ -3,10 +3,12 @@ Training all neurons with feedforward dynamics to match target activity.
 
 This script is identical to train_feedforward.py, except that Gaussian noise
 is added to the weight matrix before training. The noise is multiplicative
-and unbiased:
+and clipped:
     w_noisy = w * clip(1 + noise_frac * N(0,1), 0, 2)
 
-The symmetric clipping ensures the noise has zero mean while keeping weights positive.
+After applying the clipped noise, the distribution is rescaled around its mean
+so that the variance matches the original weight distribution. This ensures
+the noise perturbs the weights without changing the overall distribution statistics.
 
 TODO: Log teacher firing rate metrics (mean, std, min, max) to the training CSV.
       Currently we only log learned firing rates, which makes post-hoc analysis harder
@@ -41,13 +43,15 @@ import wandb
 from visualization.neuronal_dynamics import plot_spike_trains
 
 
-def apply_weight_noise(weights, noise_frac, rng=None):
+def apply_weight_noise(weights, noise_frac, rng=None, preserve_variance=True):
     """Apply unbiased multiplicative Gaussian noise to weights.
 
     Args:
         weights: Weight matrix (numpy array)
         noise_frac: Fraction of weight magnitude for noise (e.g., 0.1 for 10%)
         rng: Optional numpy random generator for reproducibility
+        preserve_variance: If True, rescale the noisy weights so the variance
+            matches the original distribution (default: True)
 
     Returns:
         Noisy weights with same shape as input
@@ -55,12 +59,29 @@ def apply_weight_noise(weights, noise_frac, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
+    # Store original standard deviation for variance preservation
+    orig_std = weights.std()
+
     # Multiplicative noise: w * (1 + noise_frac * N(0,1))
     # Clipped symmetrically at [0, 2] to ensure unbiased noise
     multiplier = 1 + noise_frac * rng.standard_normal(weights.shape)
     multiplier = np.clip(multiplier, 0, 2)
 
-    return weights * multiplier
+    noisy_weights = weights * multiplier
+
+    if preserve_variance and orig_std > 0:
+        # Compute noisy distribution statistics
+        noisy_mean = noisy_weights.mean()
+        noisy_std = noisy_weights.std()
+
+        # Rescale around the mean to preserve original variance
+        # w_final = noisy_mean + (w_noisy - noisy_mean) * (orig_std / noisy_std)
+        if noisy_std > 0:
+            noisy_weights = noisy_mean + (noisy_weights - noisy_mean) * (
+                orig_std / noisy_std
+            )
+
+    return noisy_weights
 
 
 def main(
@@ -118,7 +139,8 @@ def main(
     optimisable = training.optimisable
     learning_rate = hyperparameters.learning_rate
     surrgrad_scale = hyperparameters.surrgrad_scale
-    van_rossum_tau = hyperparameters.van_rossum_tau
+    van_rossum_tau_rise = hyperparameters.van_rossum_tau_rise
+    van_rossum_tau_decay = hyperparameters.van_rossum_tau_decay
     loss_weight_van_rossum = hyperparameters.loss_weight.van_rossum
 
     # Set random seed if provided
@@ -168,21 +190,24 @@ def main(
 
     if noise_frac > 0:
         print(
-            f"\nApplying {noise_frac * 100:.1f}% multiplicative Gaussian noise to weights..."
+            f"\nApplying {noise_frac * 100:.1f}% multiplicative Gaussian noise to weights (variance-preserving)..."
         )
         original_mean = concatenated_weights.mean()
         original_std = concatenated_weights.std()
 
         concatenated_weights = apply_weight_noise(
-            concatenated_weights, noise_frac, rng=weight_noise_rng
+            concatenated_weights,
+            noise_frac,
+            rng=weight_noise_rng,
+            preserve_variance=True,
         )
 
         noisy_mean = concatenated_weights.mean()
         noisy_std = concatenated_weights.std()
         print(f"  - Original weights: mean={original_mean:.6f}, std={original_std:.6f}")
-        print(f"  - Noisy weights: mean={noisy_mean:.6f}, std={noisy_std:.6f}")
+        print(f"  - Noisy weights:    mean={noisy_mean:.6f}, std={noisy_std:.6f}")
         print(
-            f"  - Mean change: {(noisy_mean - original_mean) / original_mean * 100:.2f}%"
+            f"  - Variance preserved: std change = {abs(noisy_std - original_std):.2e}"
         )
     else:
         print("\nNo weight noise applied (noise_frac = 0)")
@@ -358,7 +383,8 @@ def main(
     scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
     van_rossum_loss_fn = VanRossumLoss(
-        tau=van_rossum_tau,
+        tau_rise=van_rossum_tau_rise,
+        tau_decay=van_rossum_tau_decay,
         dt=spike_dataset.dt,
         window_size=chunk_size,
         device=device,

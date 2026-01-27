@@ -111,8 +111,7 @@ class LossWeights(BaseModel):
 class StudentLossWeights(BaseModel):
     """Loss function weights for student training."""
 
-    van_rossum_1: float
-    van_rossum_2: float
+    van_rossum: float
 
 
 class Hyperparameters(BaseModel):
@@ -128,8 +127,8 @@ class StudentHyperparameters(BaseModel):
 
     surrgrad_scale: float
     learning_rate: float
-    van_rossum_tau_1: float
-    van_rossum_tau_2: float
+    van_rossum_tau_rise: float
+    van_rossum_tau_decay: float
     loss_weight: StudentLossWeights
 
 

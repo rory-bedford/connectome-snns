@@ -38,11 +38,10 @@ optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "s
 [hyperparameters]
 surrgrad_scale = 0.5                   # Scale for surrogate gradient fast sigmoid function
 learning_rate = 1e-2                   # Learning rate for ADAM optimiser
-van_rossum_tau_1 = 70.0                # ms - Exponential temporal kernel for first van Rossum loss
-van_rossum_tau_2 = 1000.0              # ms - Exponential temporal kernel for second van Rossum loss
+van_rossum_tau_rise = 10.0             # ms - Rise time constant for van Rossum double exponential filter
+van_rossum_tau_decay = 100.0           # ms - Decay time constant for van Rossum double exponential filter
 
-loss_weight.van_rossum_1 = 10.0        # Weight for first van Rossum spike distance metric
-loss_weight.van_rossum_2 = 0.5         # Weight for second van Rossum spike distance metric
+loss_weight.van_rossum = 10.0          # Weight for van Rossum spike distance metric
 
 # ==========================
 # FEEDFORWARD LAYER SYNAPSES

@@ -273,10 +273,9 @@ def main(
     optimisable = training.optimisable
     learning_rate = hyperparameters.learning_rate
     surrgrad_scale = hyperparameters.surrgrad_scale
-    van_rossum_tau_1 = hyperparameters.van_rossum_tau_1
-    van_rossum_tau_2 = hyperparameters.van_rossum_tau_2
-    loss_weight_van_rossum_1 = hyperparameters.loss_weight.van_rossum_1
-    loss_weight_van_rossum_2 = hyperparameters.loss_weight.van_rossum_2
+    van_rossum_tau_rise = hyperparameters.van_rossum_tau_rise
+    van_rossum_tau_decay = hyperparameters.van_rossum_tau_decay
+    loss_weight_van_rossum = hyperparameters.loss_weight.van_rossum
 
     # Load hidden cell fraction
     hidden_cell_fraction = data["simulation"].get("hidden_cell_fraction", 0.5)
@@ -609,23 +608,16 @@ def main(
     # Setup Loss Functions
     # ==============================
 
-    van_rossum_loss_fn_1 = VanRossumLoss(
-        tau=van_rossum_tau_1,
-        dt=dt,
-        window_size=chunk_size,
-        device=device,
-    )
-
-    van_rossum_loss_fn_2 = VanRossumLoss(
-        tau=van_rossum_tau_2,
+    van_rossum_loss_fn = VanRossumLoss(
+        tau_rise=van_rossum_tau_rise,
+        tau_decay=van_rossum_tau_decay,
         dt=dt,
         window_size=chunk_size,
         device=device,
     )
 
     loss_weights = {
-        "van_rossum_1": loss_weight_van_rossum_1,
-        "van_rossum_2": loss_weight_van_rossum_2,
+        "van_rossum": loss_weight_van_rossum,
     }
 
     # ================================================
@@ -1012,9 +1004,8 @@ def main(
         optimiser = torch.optim.Adam(feedforward_model.parameters(), lr=learning_rate)
         scaler = GradScaler("cuda", enabled=mixed_precision and device == "cuda")
 
-        # Reset loss function states
-        van_rossum_loss_fn_1.reset_state()
-        van_rossum_loss_fn_2.reset_state()
+        # Reset loss function state
+        van_rossum_loss_fn.reset_state()
 
         # Calculate number of chunks for this M-step
         num_chunks_m_step = epochs_per_update * num_chunks
@@ -1049,8 +1040,7 @@ def main(
             scaler=scaler,
             dataloader=spike_dataloader,
             loss_functions={
-                "van_rossum_1": van_rossum_loss_fn_1,
-                "van_rossum_2": van_rossum_loss_fn_2,
+                "van_rossum": van_rossum_loss_fn,
             },
             loss_weights=loss_weights,
             device=device,

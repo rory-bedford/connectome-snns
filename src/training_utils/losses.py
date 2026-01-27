@@ -4,7 +4,7 @@ Loss functions for spiking neural network training.
 Currently includes Van Rossum distance for spike train comparison, CV loss, and firing rate loss.
 
 Example:
-    loss_fn = VanRossumLoss(tau=20.0, dt=1.0)
+    loss_fn = VanRossumLoss(tau_rise=10.0, tau_decay=100.0, dt=1.0, window_size=50)
     loss = loss_fn(output_spikes, target_spikes)
 
     cv_loss_fn = CVLoss(target_cv=torch.ones(n_neurons))
@@ -25,25 +25,32 @@ class VanRossumLoss(nn.Module):
 
     def __init__(
         self,
-        tau: float,
+        tau_rise: float,
+        tau_decay: float,
         dt: float,
         window_size: int,
         device: str = "cpu",
         debug: bool = False,
     ):
         """
-        Van Rossum distance for spike trains with state continuation across chunks.
+        Van Rossum distance for spike trains with double exponential filter.
 
         Expects input shape: (batch, time, n_neurons).
 
-        Maintains internal state to handle temporal continuity across chunks. The smoothed
-        values from the end of one chunk decay exponentially and contribute to the next chunk.
+        Uses a double exponential filter: first filters with rise time constant,
+        then filters the result with decay time constant. This creates a more
+        realistic synaptic kernel shape with both rise and decay phases.
+
+        Maintains internal state to handle temporal continuity across chunks.
+        Tracks both the intermediate (rise-filtered) and final (doubly-filtered)
+        signals.
 
         Uses causal convolution (only looks backward in time) with kernel size equal to
         the window size.
 
         Args:
-            tau (float): Time constant for exponential kernel (ms).
+            tau_rise (float): Rise time constant for first exponential filter (ms).
+            tau_decay (float): Decay time constant for second exponential filter (ms).
             dt (float): Simulation time step (ms).
             window_size (int): Number of timesteps in each chunk. Used as kernel size.
             device (str, optional): Device to place kernel on. Defaults to "cpu".
@@ -51,22 +58,29 @@ class VanRossumLoss(nn.Module):
                 If False, return only loss. Defaults to False.
         """
         super(VanRossumLoss, self).__init__()
-        self.tau = tau
+        self.tau_rise = tau_rise
+        self.tau_decay = tau_decay
         self.dt = dt
         self.kernel_size = window_size
         self.debug = debug
 
-        # Pre-compute exponential kernel
+        # Pre-compute exponential kernels for rise and decay
         t = torch.arange(window_size, dtype=torch.float32, device=device) * dt
-        kernel = torch.exp(-t / tau)
+        kernel_rise = torch.exp(-t / tau_rise)
+        kernel_decay = torch.exp(-t / tau_decay)
 
-        # Flip kernel for causal convolution: recent spikes get highest weight
-        kernel = torch.flip(kernel, dims=[0])
+        # Flip kernels for causal convolution: recent spikes get highest weight
+        kernel_rise = torch.flip(kernel_rise, dims=[0])
+        kernel_decay = torch.flip(kernel_decay, dims=[0])
 
-        self.register_buffer("kernel", kernel.view(1, 1, -1))
+        self.register_buffer("kernel_rise", kernel_rise.view(1, 1, -1))
+        self.register_buffer("kernel_decay", kernel_decay.view(1, 1, -1))
 
         # Internal state: smoothed values from previous chunk
+        # Track both intermediate (rise-filtered) and final (doubly-filtered) states
         # Will be initialized on first forward pass
+        self.prev_output_rise = None
+        self.prev_target_rise = None
         self.prev_output_smooth = None
         self.prev_target_smooth = None
 
@@ -105,43 +119,70 @@ class VanRossumLoss(nn.Module):
         output_conv = output_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
         target_conv = target_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
 
-        # Ensure kernel matches input dtype (for mixed precision training)
-        kernel = self.kernel.to(dtype=output_conv.dtype)
+        # Ensure kernels match input dtype (for mixed precision training)
+        kernel_rise = self.kernel_rise.to(dtype=output_conv.dtype)
+        kernel_decay = self.kernel_decay.to(dtype=output_conv.dtype)
 
         # Causal convolution: pad only on the left (look backward in time)
         # Padding of (kernel_size - 1) ensures output has same length as input
         padding = self.kernel_size - 1
-        output_smooth = F.conv1d(output_conv, kernel, padding=padding)
-        target_smooth = F.conv1d(target_conv, kernel, padding=padding)
+
+        # First filter: rise time constant
+        output_rise = F.conv1d(output_conv, kernel_rise, padding=padding)
+        target_rise = F.conv1d(target_conv, kernel_rise, padding=padding)
 
         # Remove extra timesteps from right side (causal padding adds to left only)
+        output_rise = output_rise[:, :, :time]
+        target_rise = target_rise[:, :, :time]
+
+        # Add decayed previous rise state if it exists
+        if self.prev_output_rise is not None:
+            t = (
+                torch.arange(time, device=output_spikes.device, dtype=output_rise.dtype)
+                * self.dt
+            )
+            decay_rise = torch.exp(-t / self.tau_rise)
+
+            prev_output_rise = self.prev_output_rise.to(dtype=output_rise.dtype)
+            prev_target_rise = self.prev_target_rise.to(dtype=target_rise.dtype)
+
+            output_rise = output_rise + prev_output_rise * decay_rise.view(1, 1, -1)
+            target_rise = target_rise + prev_target_rise * decay_rise.view(1, 1, -1)
+
+        # Second filter: decay time constant (applied to rise-filtered signal)
+        output_smooth = F.conv1d(output_rise, kernel_decay, padding=padding)
+        target_smooth = F.conv1d(target_rise, kernel_decay, padding=padding)
+
+        # Remove extra timesteps from right side
         output_smooth = output_smooth[:, :, :time]
         target_smooth = target_smooth[:, :, :time]
 
-        # Add decayed previous state if it exists
+        # Add decayed previous smooth state if it exists
         if self.prev_output_smooth is not None:
-            # Create decay vector for current chunk
             t = (
                 torch.arange(
                     time, device=output_spikes.device, dtype=output_smooth.dtype
                 )
                 * self.dt
             )
-            decay = torch.exp(-t / self.tau)  # (time,)
+            decay_decay = torch.exp(-t / self.tau_decay)
 
-            # Ensure previous state matches current dtype (for mixed precision)
-            prev_output = self.prev_output_smooth.to(dtype=output_smooth.dtype)
-            prev_target = self.prev_target_smooth.to(dtype=target_smooth.dtype)
+            prev_output_smooth = self.prev_output_smooth.to(dtype=output_smooth.dtype)
+            prev_target_smooth = self.prev_target_smooth.to(dtype=target_smooth.dtype)
 
-            # Add decayed previous state across all timesteps
-            # Broadcasting: (batch*n_neurons, 1, 1) * (time,) -> (batch*n_neurons, 1, time)
-            output_smooth = output_smooth + prev_output * decay.view(1, 1, -1)
-            target_smooth = target_smooth + prev_target * decay.view(1, 1, -1)
+            output_smooth = output_smooth + prev_output_smooth * decay_decay.view(
+                1, 1, -1
+            )
+            target_smooth = target_smooth + prev_target_smooth * decay_decay.view(
+                1, 1, -1
+            )
 
         # Compute squared difference
         diff = (output_smooth - target_smooth) ** 2
 
-        # Save final smoothed values for next chunk (detached to prevent gradient flow)
+        # Save states for next chunk (detached to prevent gradient flow)
+        self.prev_output_rise = output_rise[:, :, -1:].detach()
+        self.prev_target_rise = target_rise[:, :, -1:].detach()
         self.prev_output_smooth = output_smooth[:, :, -1:].detach()
         self.prev_target_smooth = target_smooth[:, :, -1:].detach()
 
@@ -158,6 +199,8 @@ class VanRossumLoss(nn.Module):
         Call this at the start of a new sequence or epoch to clear memory
         from previous chunks.
         """
+        self.prev_output_rise = None
+        self.prev_target_rise = None
         self.prev_output_smooth = None
         self.prev_target_smooth = None
 

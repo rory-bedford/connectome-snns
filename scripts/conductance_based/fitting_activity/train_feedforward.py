@@ -88,7 +88,8 @@ def main(
     optimisable = training.optimisable
     learning_rate = hyperparameters.learning_rate
     surrgrad_scale = hyperparameters.surrgrad_scale
-    van_rossum_tau = hyperparameters.van_rossum_tau
+    van_rossum_tau_rise = hyperparameters.van_rossum_tau_rise
+    van_rossum_tau_decay = hyperparameters.van_rossum_tau_decay
     loss_weight_van_rossum = hyperparameters.loss_weight.van_rossum
 
     # Set random seed if provided
@@ -293,7 +294,8 @@ def main(
     scaler = GradScaler("cuda", enabled=training.mixed_precision and device == "cuda")
 
     van_rossum_loss_fn = VanRossumLoss(
-        tau=van_rossum_tau,
+        tau_rise=van_rossum_tau_rise,
+        tau_decay=van_rossum_tau_decay,
         dt=spike_dataset.dt,
         window_size=chunk_size,
         device=device,
