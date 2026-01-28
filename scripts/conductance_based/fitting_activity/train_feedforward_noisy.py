@@ -18,6 +18,7 @@ TODO: Log teacher firing rate metrics (mean, std, min, max) to the training CSV.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import zarr
 from dataloaders.supervised import (
     PrecomputedSpikeDataset,
     CyclicSampler,
@@ -548,21 +549,51 @@ def main(
     # Create Stats Computer Function
     # ================================================
 
-    def stats_computer(spikes, model_snapshot):
-        """Compute summary statistics for all neurons."""
-        # spikes shape: (batch, time, n_neurons)
-        spikes_np = spikes[0, :, :]  # (time, n_neurons)
+    # Open teacher spike data for computing teacher firing rates
+    teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
+    teacher_spikes_zarr = teacher_zarr_root["output_spikes"]
+    chunk_size = spike_dataset.chunk_size
+    num_chunks = spike_dataset.num_chunks
+    dt = spike_dataset.dt
 
-        # Compute mean firing rate across all neurons
-        spike_counts = spikes_np.sum(axis=0)  # (n_neurons,)
-        duration_s = spikes_np.shape[0] * spike_dataset.dt / 1000.0
-        firing_rates = spike_counts / duration_s
+    # Track chunk counter for accessing correct teacher data
+    chunk_counter_ref = [0]
+
+    def stats_computer(spikes, model_snapshot):
+        """Compute summary statistics for all neurons (student and teacher)."""
+        # spikes shape: (batch, time, n_neurons)
+        student_spikes = spikes[0, :, :]  # (time, n_neurons)
+        n_timesteps = student_spikes.shape[0]
+        duration_s = n_timesteps * dt / 1000.0
+
+        # Get corresponding teacher spikes
+        n_chunks_accumulated = n_timesteps // chunk_size
+        current_chunk_idx = chunk_counter_ref[0] % num_chunks
+        start_chunk_idx = max(0, current_chunk_idx - n_chunks_accumulated + 1)
+        start_t = start_chunk_idx * chunk_size
+        end_t = start_t + n_timesteps
+        teacher_spikes = np.array(teacher_spikes_zarr[:1, start_t:end_t, :])[0]
+        chunk_counter_ref[0] += 1
+
+        # Compute student firing rates
+        student_spike_counts = student_spikes.sum(axis=0)
+        student_firing_rates = student_spike_counts / duration_s
+
+        # Compute teacher firing rates
+        teacher_spike_counts = teacher_spikes.sum(axis=0)
+        teacher_firing_rates = teacher_spike_counts / duration_s
 
         stats = {
-            "firing_rate/mean": float(firing_rates.mean()),
-            "firing_rate/std": float(firing_rates.std()),
-            "firing_rate/min": float(firing_rates.min()),
-            "firing_rate/max": float(firing_rates.max()),
+            # Student aggregate stats
+            "firing_rate/student/mean": float(student_firing_rates.mean()),
+            "firing_rate/student/std": float(student_firing_rates.std()),
+            "firing_rate/student/min": float(student_firing_rates.min()),
+            "firing_rate/student/max": float(student_firing_rates.max()),
+            # Teacher aggregate stats
+            "firing_rate/teacher/mean": float(teacher_firing_rates.mean()),
+            "firing_rate/teacher/std": float(teacher_firing_rates.std()),
+            "firing_rate/teacher/min": float(teacher_firing_rates.min()),
+            "firing_rate/teacher/max": float(teacher_firing_rates.max()),
         }
 
         # Add cell-type-specific firing rates (handles arbitrary cell types from teacher)
@@ -570,9 +601,22 @@ def main(
         for type_idx, type_name in enumerate(output_cell_type_names):
             type_mask = cell_type_indices == type_idx
             if type_mask.sum() > 0:
-                type_firing_rates = firing_rates[type_mask]
-                stats[f"firing_rate/{type_name}/mean"] = float(type_firing_rates.mean())
-                stats[f"firing_rate/{type_name}/std"] = float(type_firing_rates.std())
+                # Student by cell type
+                student_type_rates = student_firing_rates[type_mask]
+                stats[f"firing_rate/student/{type_name}/mean"] = float(
+                    student_type_rates.mean()
+                )
+                stats[f"firing_rate/student/{type_name}/std"] = float(
+                    student_type_rates.std()
+                )
+                # Teacher by cell type
+                teacher_type_rates = teacher_firing_rates[type_mask]
+                stats[f"firing_rate/teacher/{type_name}/mean"] = float(
+                    teacher_type_rates.mean()
+                )
+                stats[f"firing_rate/teacher/{type_name}/std"] = float(
+                    teacher_type_rates.std()
+                )
 
         # Add scaling factor tracking with proper cell type names
         current_sf = model_snapshot["scaling_factors_FF"]
