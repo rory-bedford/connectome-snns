@@ -182,6 +182,10 @@ class SNNTrainer:
             print("\n" + "=" * 60)
             self.wandb_logger = wandb.init(**wandb_init_kwargs)
             wandb.watch(self.model, log="parameters", log_freq=self.log_interval)
+
+            # Use fractional epoch as x-axis for all metrics
+            wandb.define_metric("epoch")
+            wandb.define_metric("*", step_metric="epoch")
             print("=" * 60 + "\n")
 
         # Initialize async logger if output_dir provided and not already initialized
@@ -599,13 +603,19 @@ class SNNTrainer:
                 for loss_name, loss_value in losses.items()
             }
 
+            # Compute fractional epoch (uses chunks_per_data_epoch if available)
+            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
+                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
+            else:
+                fractional_epoch = epoch + 1
+
             wandb.log(
                 {
+                    "epoch": fractional_epoch,
                     **wandb_losses,
                     **stats,
                     **gradient_stats,
                 },
-                step=epoch + 1,
             )
 
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
@@ -641,7 +651,7 @@ class SNNTrainer:
             wandb_losses = {
                 f"loss/{name}": value for name, value in initial_losses.items()
             }
-            wandb.log(wandb_losses, step=0)
+            wandb.log({"epoch": 0.0, **wandb_losses})
 
         print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
 
@@ -797,7 +807,12 @@ class SNNTrainer:
             wandb_plots = {
                 f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
             }
-            wandb.log(wandb_plots, step=epoch + 1)
+            # Compute fractional epoch for x-axis consistency
+            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
+                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
+            else:
+                fractional_epoch = epoch + 1
+            wandb.log({"epoch": fractional_epoch, **wandb_plots})
 
         # Save to disk
         for plot_name, fig in figures.items():

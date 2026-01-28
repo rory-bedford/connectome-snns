@@ -967,6 +967,9 @@ def main(
             dir=str(output_dir),
             **wandb_config_dict,
         )
+        # Use fractional epoch as x-axis for all metrics
+        wandb.define_metric("epoch")
+        wandb.define_metric("*", step_metric="epoch")
 
     best_loss_overall = float("inf")
     global_chunk_counter = 0
@@ -1215,8 +1218,11 @@ def main(
 
         # Log EM iteration metrics
         if wandb_logger:
+            # Compute fractional epoch for x-axis consistency
+            fractional_epoch = (global_chunk_counter + num_chunks_m_step) / num_chunks
             wandb.log(
                 {
+                    "epoch": fractional_epoch,
                     "em/iteration": em_iter + 1,
                     "em/m_step_best_loss": best_loss,
                     "em/best_loss_overall": best_loss_overall,
