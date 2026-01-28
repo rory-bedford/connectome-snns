@@ -975,10 +975,17 @@ def main(
             **wandb_config_dict,
         )
         # Use fractional epoch as x-axis for all metrics
+        # Note: wandb glob * only matches one level, so we need patterns for each depth
         wandb.define_metric("epoch")
         wandb.define_metric("loss/*", step_metric="epoch")
         wandb.define_metric("firing_rate/*", step_metric="epoch")
+        wandb.define_metric("firing_rate/*/*", step_metric="epoch")
+        wandb.define_metric("firing_rate/*/*/*", step_metric="epoch")
+        wandb.define_metric("firing_rate/*/*/*/*", step_metric="epoch")
+        wandb.define_metric("firing_rate/*/*/*/*/*", step_metric="epoch")
         wandb.define_metric("scaling_factors/*", step_metric="epoch")
+        wandb.define_metric("scaling_factors/*/*", step_metric="epoch")
+        wandb.define_metric("scaling_factors/*/*/*", step_metric="epoch")
         wandb.define_metric("gradients/*", step_metric="epoch")
         wandb.define_metric("plots/*", step_metric="epoch")
         wandb.define_metric("em/*", step_metric="epoch")
