@@ -768,6 +768,19 @@ def main(
         teacher_zarr_root = zarr.open_group(input_dir / "spike_data.zarr", mode="r")
         teacher_spikes_zarr = teacher_zarr_root["output_spikes"]
 
+        # Create cell type masks for visible and hidden neurons (handles arbitrary cell types)
+        cell_types_visible = cell_type_indices[visible_indices]
+        cell_types_hidden = cell_type_indices[hidden_indices]
+        cell_type_names = recurrent.cell_types.names
+
+        # Build masks for each cell type dynamically
+        cell_type_masks_visible = {
+            name: cell_types_visible == idx for idx, name in enumerate(cell_type_names)
+        }
+        cell_type_masks_hidden = {
+            name: cell_types_hidden == idx for idx, name in enumerate(cell_type_names)
+        }
+
         def stats_computer(spikes, model_snapshot):
             """Compute summary statistics for visible and hidden neurons (student and teacher)."""
             # Student visible: from model output (spikes accumulated over multiple chunks)
@@ -816,6 +829,18 @@ def main(
                     f"{prefix}/max": float(firing_rates.max()),
                 }
 
+            def compute_firing_rate_by_cell_type(spike_data, prefix, cell_type_masks):
+                """Compute firing rate statistics split by cell type (handles arbitrary types)."""
+                spike_counts = spike_data.sum(axis=0)
+                firing_rates = spike_counts / duration_s
+                stats = {}
+                for type_name, type_mask in cell_type_masks.items():
+                    type_rates = firing_rates[type_mask]
+                    if len(type_rates) > 0:
+                        stats[f"{prefix}/{type_name}/mean"] = float(type_rates.mean())
+                        stats[f"{prefix}/{type_name}/std"] = float(type_rates.std())
+                return stats
+
             stats = {}
 
             # Student firing rates
@@ -824,10 +849,24 @@ def main(
                     student_visible, "firing_rate/student/visible"
                 )
             )
+            stats.update(
+                compute_firing_rate_by_cell_type(
+                    student_visible,
+                    "firing_rate/student/visible",
+                    cell_type_masks_visible,
+                )
+            )
             if n_hidden > 0:
                 stats.update(
                     compute_firing_rate_stats(
                         student_hidden, "firing_rate/student/hidden"
+                    )
+                )
+                stats.update(
+                    compute_firing_rate_by_cell_type(
+                        student_hidden,
+                        "firing_rate/student/hidden",
+                        cell_type_masks_hidden,
                     )
                 )
 
@@ -837,10 +876,24 @@ def main(
                     teacher_visible, "firing_rate/teacher/visible"
                 )
             )
+            stats.update(
+                compute_firing_rate_by_cell_type(
+                    teacher_visible,
+                    "firing_rate/teacher/visible",
+                    cell_type_masks_visible,
+                )
+            )
             if n_hidden > 0:
                 stats.update(
                     compute_firing_rate_stats(
                         teacher_hidden, "firing_rate/teacher/hidden"
+                    )
+                )
+                stats.update(
+                    compute_firing_rate_by_cell_type(
+                        teacher_hidden,
+                        "firing_rate/teacher/hidden",
+                        cell_type_masks_hidden,
                     )
                 )
 

@@ -3,12 +3,13 @@ Training all neurons with feedforward dynamics to match target activity.
 
 This script is identical to train_feedforward.py, except that Gaussian noise
 is added to the weight matrix before training. The noise is multiplicative
-and clipped:
-    w_noisy = w * clip(1 + noise_frac * N(0,1), 0, 2)
+and clipped at zero:
+    w_noisy = w * max(1 + noise_frac * N(0,1), 0)
 
-After applying the clipped noise, the distribution is rescaled around its mean
-so that the variance matches the original weight distribution. This ensures
-the noise perturbs the weights without changing the overall distribution statistics.
+After applying the clipped noise, an affine transformation is applied to the
+non-zero weights so that both the mean and std exactly match the original
+weight distribution. This ensures the noise perturbs individual weights while
+preserving the overall distribution statistics.
 
 TODO: Log teacher firing rate metrics (mean, std, min, max) to the training CSV.
       Currently we only log learned firing rates, which makes post-hoc analysis harder
@@ -16,6 +17,7 @@ TODO: Log teacher firing rate metrics (mean, std, min, max) to the training CSV.
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
 from dataloaders.supervised import (
     PrecomputedSpikeDataset,
     CyclicSampler,
@@ -43,41 +45,50 @@ import wandb
 from visualization.neuronal_dynamics import plot_spike_trains
 
 
-def apply_weight_noise(weights, noise_frac, rng=None, preserve_variance=True):
-    """Apply unbiased multiplicative Gaussian noise to weights.
+def apply_weight_noise(weights, noise_frac, rng=None, preserve_statistics=True):
+    """Apply multiplicative Gaussian noise to weights with statistics preservation.
+
+    Applies noise: w * max(1 + noise_frac * N(0,1), 0), then uses an affine
+    transformation to exactly match the original mean and std of non-zero weights.
 
     Args:
-        weights: Weight matrix (numpy array)
+        weights: Weight matrix (numpy array, may be sparse with zeros)
         noise_frac: Fraction of weight magnitude for noise (e.g., 0.1 for 10%)
         rng: Optional numpy random generator for reproducibility
-        preserve_variance: If True, rescale the noisy weights so the variance
-            matches the original distribution (default: True)
+        preserve_statistics: If True, apply affine transform to match original
+            mean and std of non-zero weights (default: True)
 
     Returns:
-        Noisy weights with same shape as input
+        Noisy weights with same shape as input. Zero weights remain zero.
+        Non-zero weights have the same mean and std as the original.
     """
     if rng is None:
         rng = np.random.default_rng()
 
-    # Store original standard deviation for variance preservation
-    orig_std = weights.std()
+    # Identify non-zero weights (sparse connectivity)
+    nonzero_mask = weights != 0
+
+    # Original statistics on non-zero weights only
+    orig_mean = weights[nonzero_mask].mean()
+    orig_std = weights[nonzero_mask].std()
 
     # Multiplicative noise: w * (1 + noise_frac * N(0,1))
-    # Clipped symmetrically at [0, 2] to ensure unbiased noise
+    # Clip at 0 only (no upper bound) to prevent negative weights before rescaling
     multiplier = 1 + noise_frac * rng.standard_normal(weights.shape)
-    multiplier = np.clip(multiplier, 0, 2)
+    multiplier = np.maximum(multiplier, 0)
 
     noisy_weights = weights * multiplier
 
-    if preserve_variance and orig_std > 0:
-        # Compute noisy distribution statistics
-        noisy_mean = noisy_weights.mean()
-        noisy_std = noisy_weights.std()
+    if preserve_statistics and orig_std > 0:
+        # Compute noisy statistics on non-zero positions only
+        noisy_nz = noisy_weights[nonzero_mask]
+        noisy_mean = noisy_nz.mean()
+        noisy_std = noisy_nz.std()
 
-        # Rescale around the mean to preserve original variance
-        # w_final = noisy_mean + (w_noisy - noisy_mean) * (orig_std / noisy_std)
+        # Affine transform to exactly match original mean and std
+        # new = orig_mean + (old - old_mean) * (orig_std / old_std)
         if noisy_std > 0:
-            noisy_weights = noisy_mean + (noisy_weights - noisy_mean) * (
+            noisy_weights[nonzero_mask] = orig_mean + (noisy_nz - noisy_mean) * (
                 orig_std / noisy_std
             )
 
@@ -191,25 +202,118 @@ def main(
 
     if noise_frac > 0:
         print(
-            f"\nApplying {noise_frac * 100:.1f}% multiplicative Gaussian noise to weights (variance-preserving)..."
+            f"\nApplying {noise_frac * 100:.1f}% multiplicative Gaussian noise to weights (statistics-preserving)..."
         )
-        original_mean = concatenated_weights.mean()
-        original_std = concatenated_weights.std()
+        # Compute statistics on non-zero weights only (sparse connectivity)
+        nonzero_mask = concatenated_weights != 0
+        original_weights_nz = concatenated_weights[nonzero_mask].copy()
+        original_mean = original_weights_nz.mean()
+        original_std = original_weights_nz.std()
 
         concatenated_weights = apply_weight_noise(
             concatenated_weights,
             noise_frac,
             rng=weight_noise_rng,
-            preserve_variance=True,
+            preserve_statistics=True,
         )
 
-        noisy_mean = concatenated_weights.mean()
-        noisy_std = concatenated_weights.std()
-        print(f"  - Original weights: mean={original_mean:.6f}, std={original_std:.6f}")
-        print(f"  - Noisy weights:    mean={noisy_mean:.6f}, std={noisy_std:.6f}")
+        noisy_weights_nz = concatenated_weights[nonzero_mask]
+        noisy_mean = noisy_weights_nz.mean()
+        noisy_std = noisy_weights_nz.std()
         print(
-            f"  - Variance preserved: std change = {abs(noisy_std - original_std):.2e}"
+            f"  - Original weights (non-zero): mean={original_mean:.6f}, std={original_std:.6f}"
         )
+        print(
+            f"  - Noisy weights (non-zero):    mean={noisy_mean:.6f}, std={noisy_std:.6f}"
+        )
+        print(
+            f"  - Statistics preserved: mean change = {abs(noisy_mean - original_mean):.2e}, std change = {abs(noisy_std - original_std):.2e}"
+        )
+
+        # Create scatter plot comparing original vs noisy weights
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Scatter plot
+        ax = axes[0]
+        max_points = 50000
+        if len(original_weights_nz) > max_points:
+            idx = np.random.default_rng(42).choice(
+                len(original_weights_nz), max_points, replace=False
+            )
+        else:
+            idx = np.arange(len(original_weights_nz))
+
+        ax.scatter(original_weights_nz[idx], noisy_weights_nz[idx], alpha=0.2, s=1)
+        lims = [
+            min(0, noisy_weights_nz.min()),
+            np.percentile(np.concatenate([original_weights_nz, noisy_weights_nz]), 95),
+        ]
+        ax.plot(lims, lims, "k--", linewidth=1)
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+        ax.set_xlabel("Original Weight")
+        ax.set_ylabel("Noisy Weight")
+        ax.set_aspect("equal")
+
+        corr = np.corrcoef(original_weights_nz, noisy_weights_nz)[0, 1]
+        stats_text = (
+            f"Original: μ={original_mean:.6f}, σ={original_std:.6f}\n"
+            f"Noisy:    μ={noisy_mean:.6f}, σ={noisy_std:.6f}\n"
+            f"Corr: r={corr:.4f}"
+        )
+        ax.text(
+            0.05,
+            0.95,
+            stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+        ax.set_title("Original vs Noisy Weights")
+
+        # Histogram comparison
+        ax = axes[1]
+        min_val = min(0, noisy_weights_nz.min())
+        max_val = np.percentile(
+            np.concatenate([original_weights_nz, noisy_weights_nz]), 99
+        )
+        bins = np.linspace(min_val, max_val, 100)
+        ax.hist(
+            original_weights_nz,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            label="Original",
+            color="blue",
+        )
+        ax.hist(
+            noisy_weights_nz,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            label="Noisy",
+            color="orange",
+        )
+        ax.axvline(0, color="gray", linestyle=":", alpha=0.5)
+        ax.set_xlabel("Weight")
+        ax.set_ylabel("Density")
+        ax.set_title("Distribution Comparison")
+        ax.legend()
+
+        fig.suptitle(
+            f"Weight Noise: {noise_frac * 100:.1f}% (Clip [0, ∞) + Affine Rescale)",
+            fontsize=14,
+            fontweight="bold",
+        )
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = output_dir / "weight_noise_comparison.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  - Saved weight noise comparison plot to {plot_path}")
     else:
         print("\nNo weight noise applied (noise_frac = 0)")
 
@@ -460,6 +564,15 @@ def main(
             "firing_rate/min": float(firing_rates.min()),
             "firing_rate/max": float(firing_rates.max()),
         }
+
+        # Add cell-type-specific firing rates (handles arbitrary cell types from teacher)
+        output_cell_type_names = recurrent.cell_types.names
+        for type_idx, type_name in enumerate(output_cell_type_names):
+            type_mask = cell_type_indices == type_idx
+            if type_mask.sum() > 0:
+                type_firing_rates = firing_rates[type_mask]
+                stats[f"firing_rate/{type_name}/mean"] = float(type_firing_rates.mean())
+                stats[f"firing_rate/{type_name}/std"] = float(type_firing_rates.std())
 
         # Add scaling factor tracking with proper cell type names
         current_sf = model_snapshot["scaling_factors_FF"]

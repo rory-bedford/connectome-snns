@@ -1,17 +1,17 @@
 script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_noisy.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/feedforward-noisy-units-consistency-check"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/noisy-weights/varying-noise-perturbation"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-feedforward-noisy.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
-description = "Relearning scale factors for the feedforward network with noisy weights given to teacher. Checking if initialisation at the correct solution drifts away."
+description = "Relearning scale factors for the feedforward network with noisy weights given to teacher."
 
 [data]
 
 [[data.inputs]]
-path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/teacher-activity/inputs/network_structure.npz"
+path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/teacher-activity/inputs/network_structure.npz"
 strategy = "symlink"
 
 [[data.inputs]]
-path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/activity-fitting/teacher-activity/results/spike_data.zarr"
+path = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/teacher-activity/results/spike_data.zarr"
 strategy = "symlink"
 
 [wandb]

@@ -20,7 +20,7 @@ log_interval = 10                      # Log metrics to CSV and wandb every N ch
 checkpoint_interval = 200              # Save model checkpoints and generate plots every N chunks
 plot_size = 200                        # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
-weight_perturbation_variance = 0.0     # Variance of log-normal distribution for scaling factor perturbation
+weight_perturbation_variance = 0.5     # Variance of log-normal distribution for scaling factor perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 momentum = 0.6                         # Adam beta1 parameter (default 0.9, lower values = less momentum)
 
@@ -30,8 +30,6 @@ momentum = 0.6                         # Adam beta1 parameter (default 0.9, lowe
 
 [weight_noise]
 noise_frac = 0.4                       # Fraction of weight magnitude for Gaussian noise (0.1 = 10% noise)
-                                       # Noise is multiplicative: w_noisy = w * clip(1 + noise_frac * N(0,1), 0, 2)
-                                       # Symmetric clipping ensures unbiased noise while keeping weights positive
 
 # ===============
 # HYPERPARAMETERS

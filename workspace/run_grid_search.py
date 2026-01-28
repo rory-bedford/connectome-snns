@@ -31,12 +31,11 @@ def custom_config_generator(base_params):
     Yields:
         (params_dict, description_string) tuples
     """
-    # Altering fraction hidden units from 0.1 to 0.5
-    # Altering fraction hidden units from 0.1 to 0.9
-    for fraction in np.arange(0.1, 1.0, 0.1):
+    # Altering noise level from 0.05 to 0.4
+    for noise in np.arange(0.05, 0.45, 0.05):
         params = deepcopy(base_params)
-        params["simulation"]["hidden_cell_fraction"] = float(fraction)
-        yield params, f"hidden-fraction-{fraction:.2f}"
+        params["weight_noise"]["noise_frac"] = float(noise)
+        yield params, f"noise-{noise:.2f}"
 
 
 if __name__ == "__main__":
