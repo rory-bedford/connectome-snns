@@ -629,18 +629,20 @@ def main(
         )
         output_cell_type_names = recurrent.cell_types.names
 
-        # Log all scaling factor elements with descriptive names
+        # Log all scaling factor elements normalized so target=1
+        # This makes it easy to see convergence (value should approach 1)
         for source_idx in range(current_sf.shape[0]):
             source_type_name = input_cell_type_names[source_idx]
             for target_idx in range(current_sf.shape[1]):
                 target_type_name = output_cell_type_names[target_idx]
                 synapse_name = f"{source_type_name}_to_{target_type_name}"
-                stats[f"scaling_factors/{synapse_name}/value"] = float(
-                    current_sf[source_idx, target_idx]
-                )
-                stats[f"scaling_factors/{synapse_name}/target"] = float(
-                    target_sf[source_idx, target_idx]
-                )
+                target_val = target_sf[source_idx, target_idx]
+                if target_val != 0:
+                    normalized_value = current_sf[source_idx, target_idx] / target_val
+                else:
+                    normalized_value = current_sf[source_idx, target_idx]
+                stats[f"scaling_factors/{synapse_name}/value"] = float(normalized_value)
+                stats[f"scaling_factors/{synapse_name}/target"] = 1.0
 
         return stats
 
