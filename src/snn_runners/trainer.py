@@ -185,7 +185,11 @@ class SNNTrainer:
 
             # Use fractional epoch as x-axis for all metrics
             wandb.define_metric("epoch")
-            wandb.define_metric("*", step_metric="epoch")
+            wandb.define_metric("loss/*", step_metric="epoch")
+            wandb.define_metric("firing_rate/*", step_metric="epoch")
+            wandb.define_metric("scaling_factors/*", step_metric="epoch")
+            wandb.define_metric("gradients/*", step_metric="epoch")
+            wandb.define_metric("plots/*", step_metric="epoch")
             print("=" * 60 + "\n")
 
         # Initialize async logger if output_dir provided and not already initialized

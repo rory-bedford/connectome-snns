@@ -7,7 +7,7 @@
 
 [simulation]
 seed = 44                              # Random seed for reproducibility
-chunk_size = 50                       # Number of timesteps per chunk
+chunk_size = 50                        # Number of timesteps per chunk
 
 # ======================
 # TRAINING CONFIGURATION

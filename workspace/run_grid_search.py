@@ -10,6 +10,7 @@ Edit CUDA_VISIBLE_DEVICES below to match your available GPUs.
 import sys
 from copy import deepcopy
 from pathlib import Path
+import numpy as np
 
 
 # Add src to path so we can import utils
@@ -31,10 +32,10 @@ def custom_config_generator(base_params):
         (params_dict, description_string) tuples
     """
     # Altering noise level from 0.05 to 0.4
-    for seed in range(42, 52):
+    for noise in np.arange(0.05, 0.55, 0.05):
         params = deepcopy(base_params)
-        params["simulation"]["seed"] = float(seed)
-        yield params, f"seed-{seed:.2f}"
+        params["weight_noise"]["noise_frac"] = float(noise)
+        yield params, f"noise-{noise:.2f}"
 
 
 if __name__ == "__main__":

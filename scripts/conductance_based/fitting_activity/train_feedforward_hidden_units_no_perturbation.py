@@ -711,7 +711,11 @@ def main(
         trainer.wandb_logger = wandb.init(**wandb_init_kwargs)
         # Use fractional epoch as x-axis for all metrics
         wandb.define_metric("epoch")
-        wandb.define_metric("*", step_metric="epoch")
+        wandb.define_metric("loss/*", step_metric="epoch")
+        wandb.define_metric("firing_rate/*", step_metric="epoch")
+        wandb.define_metric("scaling_factors/*", step_metric="epoch")
+        wandb.define_metric("gradients/*", step_metric="epoch")
+        wandb.define_metric("plots/*", step_metric="epoch")
         print("=" * 60 + "\n")
 
         # Log initial scaling factors at epoch 0
