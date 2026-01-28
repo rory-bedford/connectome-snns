@@ -203,6 +203,7 @@ class SNNTrainer:
                 wandb_logger=self.wandb_logger,
                 max_queue_size=1,
                 blocking_mode=False,
+                chunks_per_data_epoch=self.chunks_per_data_epoch,
             )
 
         # Save initial checkpoint at epoch 0 if starting from beginning

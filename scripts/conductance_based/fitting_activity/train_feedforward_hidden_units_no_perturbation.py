@@ -709,9 +709,12 @@ def main(
 
         print("\n" + "=" * 60)
         trainer.wandb_logger = wandb.init(**wandb_init_kwargs)
+        # Use fractional epoch as x-axis for all metrics
+        wandb.define_metric("epoch")
+        wandb.define_metric("*", step_metric="epoch")
         print("=" * 60 + "\n")
 
-        # Log initial scaling factors at step 0
+        # Log initial scaling factors at epoch 0
         initial_sf = model.scaling_factors_FF.detach().cpu().numpy()
         input_cell_type_names = (
             feedforward.cell_types.names + recurrent.cell_types.names
@@ -730,7 +733,7 @@ def main(
                 initial_stats[f"scaling_factors/{synapse_name}/target"] = float(
                     target_scaling_factors_FF[source_idx, target_idx]
                 )
-        wandb.log(initial_stats, step=0)
+        wandb.log({"epoch": 0.0, **initial_stats})
 
     best_loss = trainer.train(output_dir=output_dir)
 

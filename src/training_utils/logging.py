@@ -169,6 +169,7 @@ class AsyncPlotter:
         wandb_logger (Optional[Any]): Wandb logger for uploading plots (optional)
         max_queue_size (int): Maximum number of pending plot jobs
         blocking_mode (bool): If True, run plots synchronously for debugging (default: False)
+        chunks_per_data_epoch (Optional[int]): Number of chunks per data epoch for fractional epoch calculation in wandb
 
     Example:
         >>> plotter = AsyncPlotter(my_plot_function, output_dir='./plots')
@@ -185,6 +186,7 @@ class AsyncPlotter:
         wandb_logger: Optional[Any] = None,
         max_queue_size: int = 3,
         blocking_mode: bool = False,
+        chunks_per_data_epoch: Optional[int] = None,
     ):
         """Initialize the async plotter.
 
@@ -194,11 +196,13 @@ class AsyncPlotter:
             wandb_logger (Optional[Any]): Wandb logger for uploading plots
             max_queue_size (int): Maximum number of pending plot jobs
             blocking_mode (bool): If True, run plots synchronously for debugging
+            chunks_per_data_epoch (Optional[int]): Number of chunks per data epoch for fractional epoch calculation
         """
         self.plot_generator = plot_generator
         self.output_dir = Path(output_dir)
         self.wandb_logger = wandb_logger
         self.blocking_mode = blocking_mode
+        self.chunks_per_data_epoch = chunks_per_data_epoch
 
         if self.blocking_mode:
             # Don't initialize queue or thread in blocking mode
@@ -377,7 +381,12 @@ class AsyncPlotter:
             wandb_plots = {
                 f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
             }
-            wandb.log(wandb_plots, step=epoch + 1)
+            # Compute fractional epoch for x-axis consistency
+            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
+                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
+            else:
+                fractional_epoch = epoch + 1
+            wandb.log({"epoch": fractional_epoch, **wandb_plots})
 
         # Close figures to free memory
         from matplotlib import pyplot as plt
