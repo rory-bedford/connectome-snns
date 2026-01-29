@@ -583,17 +583,18 @@ def main(
         teacher_spike_counts = teacher_spikes.sum(axis=0)
         teacher_firing_rates = teacher_spike_counts / duration_s
 
+        # Use flattened metric names so wandb glob pattern firing_rate/* matches all
         stats = {
             # Student aggregate stats
-            "firing_rate/student/mean": float(student_firing_rates.mean()),
-            "firing_rate/student/std": float(student_firing_rates.std()),
-            "firing_rate/student/min": float(student_firing_rates.min()),
-            "firing_rate/student/max": float(student_firing_rates.max()),
+            "firing_rate/student_mean": float(student_firing_rates.mean()),
+            "firing_rate/student_std": float(student_firing_rates.std()),
+            "firing_rate/student_min": float(student_firing_rates.min()),
+            "firing_rate/student_max": float(student_firing_rates.max()),
             # Teacher aggregate stats
-            "firing_rate/teacher/mean": float(teacher_firing_rates.mean()),
-            "firing_rate/teacher/std": float(teacher_firing_rates.std()),
-            "firing_rate/teacher/min": float(teacher_firing_rates.min()),
-            "firing_rate/teacher/max": float(teacher_firing_rates.max()),
+            "firing_rate/teacher_mean": float(teacher_firing_rates.mean()),
+            "firing_rate/teacher_std": float(teacher_firing_rates.std()),
+            "firing_rate/teacher_min": float(teacher_firing_rates.min()),
+            "firing_rate/teacher_max": float(teacher_firing_rates.max()),
         }
 
         # Add cell-type-specific firing rates (handles arbitrary cell types from teacher)
@@ -603,18 +604,18 @@ def main(
             if type_mask.sum() > 0:
                 # Student by cell type
                 student_type_rates = student_firing_rates[type_mask]
-                stats[f"firing_rate/student/{type_name}/mean"] = float(
+                stats[f"firing_rate/student_{type_name}_mean"] = float(
                     student_type_rates.mean()
                 )
-                stats[f"firing_rate/student/{type_name}/std"] = float(
+                stats[f"firing_rate/student_{type_name}_std"] = float(
                     student_type_rates.std()
                 )
                 # Teacher by cell type
                 teacher_type_rates = teacher_firing_rates[type_mask]
-                stats[f"firing_rate/teacher/{type_name}/mean"] = float(
+                stats[f"firing_rate/teacher_{type_name}_mean"] = float(
                     teacher_type_rates.mean()
                 )
-                stats[f"firing_rate/teacher/{type_name}/std"] = float(
+                stats[f"firing_rate/teacher_{type_name}_std"] = float(
                     teacher_type_rates.std()
                 )
 
@@ -631,6 +632,7 @@ def main(
 
         # Log all scaling factor elements normalized so target=1
         # This makes it easy to see convergence (value should approach 1)
+        # Use flattened names so wandb glob pattern scaling_factors/* matches all
         for source_idx in range(current_sf.shape[0]):
             source_type_name = input_cell_type_names[source_idx]
             for target_idx in range(current_sf.shape[1]):
@@ -641,8 +643,8 @@ def main(
                     normalized_value = current_sf[source_idx, target_idx] / target_val
                 else:
                     normalized_value = current_sf[source_idx, target_idx]
-                stats[f"scaling_factors/{synapse_name}/value"] = float(normalized_value)
-                stats[f"scaling_factors/{synapse_name}/target"] = 1.0
+                stats[f"scaling_factors/{synapse_name}_value"] = float(normalized_value)
+                stats[f"scaling_factors/{synapse_name}_target"] = 1.0
 
         return stats
 

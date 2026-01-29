@@ -818,15 +818,16 @@ def main(
             ]  # (time_accumulated, n_hidden)
 
             # Compute firing rates for all 4 categories
+            # Use flattened metric names so wandb glob pattern firing_rate/* matches all
             def compute_firing_rate_stats(spike_data, prefix):
                 """Compute firing rate statistics for a spike matrix."""
                 spike_counts = spike_data.sum(axis=0)
                 firing_rates = spike_counts / duration_s
                 return {
-                    f"{prefix}/mean": float(firing_rates.mean()),
-                    f"{prefix}/std": float(firing_rates.std()),
-                    f"{prefix}/min": float(firing_rates.min()),
-                    f"{prefix}/max": float(firing_rates.max()),
+                    f"{prefix}_mean": float(firing_rates.mean()),
+                    f"{prefix}_std": float(firing_rates.std()),
+                    f"{prefix}_min": float(firing_rates.min()),
+                    f"{prefix}_max": float(firing_rates.max()),
                 }
 
             def compute_firing_rate_by_cell_type(spike_data, prefix, cell_type_masks):
@@ -837,35 +838,35 @@ def main(
                 for type_name, type_mask in cell_type_masks.items():
                     type_rates = firing_rates[type_mask]
                     if len(type_rates) > 0:
-                        stats[f"{prefix}/{type_name}/mean"] = float(type_rates.mean())
-                        stats[f"{prefix}/{type_name}/std"] = float(type_rates.std())
+                        stats[f"{prefix}_{type_name}_mean"] = float(type_rates.mean())
+                        stats[f"{prefix}_{type_name}_std"] = float(type_rates.std())
                 return stats
 
             stats = {}
 
-            # Student firing rates
+            # Student firing rates (flattened prefixes for wandb glob matching)
             stats.update(
                 compute_firing_rate_stats(
-                    student_visible, "firing_rate/student/visible"
+                    student_visible, "firing_rate/student_visible"
                 )
             )
             stats.update(
                 compute_firing_rate_by_cell_type(
                     student_visible,
-                    "firing_rate/student/visible",
+                    "firing_rate/student_visible",
                     cell_type_masks_visible,
                 )
             )
             if n_hidden > 0:
                 stats.update(
                     compute_firing_rate_stats(
-                        student_hidden, "firing_rate/student/hidden"
+                        student_hidden, "firing_rate/student_hidden"
                     )
                 )
                 stats.update(
                     compute_firing_rate_by_cell_type(
                         student_hidden,
-                        "firing_rate/student/hidden",
+                        "firing_rate/student_hidden",
                         cell_type_masks_hidden,
                     )
                 )
@@ -873,26 +874,26 @@ def main(
             # Teacher firing rates
             stats.update(
                 compute_firing_rate_stats(
-                    teacher_visible, "firing_rate/teacher/visible"
+                    teacher_visible, "firing_rate/teacher_visible"
                 )
             )
             stats.update(
                 compute_firing_rate_by_cell_type(
                     teacher_visible,
-                    "firing_rate/teacher/visible",
+                    "firing_rate/teacher_visible",
                     cell_type_masks_visible,
                 )
             )
             if n_hidden > 0:
                 stats.update(
                     compute_firing_rate_stats(
-                        teacher_hidden, "firing_rate/teacher/hidden"
+                        teacher_hidden, "firing_rate/teacher_hidden"
                     )
                 )
                 stats.update(
                     compute_firing_rate_by_cell_type(
                         teacher_hidden,
-                        "firing_rate/teacher/hidden",
+                        "firing_rate/teacher_hidden",
                         cell_type_masks_hidden,
                     )
                 )
@@ -913,6 +914,7 @@ def main(
 
             # Log scaling factors normalized so target=1
             # This makes it easy to see convergence (value should approach 1)
+            # Use flattened names so wandb glob pattern scaling_factors/* matches all
             for source_idx in range(current_sf.shape[0]):
                 source_type_name = input_cell_type_names[source_idx]
                 for target_idx in range(current_sf.shape[1]):
@@ -925,10 +927,10 @@ def main(
                         )
                     else:
                         normalized_value = current_sf[source_idx, target_idx]
-                    stats[f"scaling_factors/{synapse_name}/value"] = float(
+                    stats[f"scaling_factors/{synapse_name}_value"] = float(
                         normalized_value
                     )
-                    stats[f"scaling_factors/{synapse_name}/target"] = 1.0
+                    stats[f"scaling_factors/{synapse_name}_target"] = 1.0
 
             return stats
 
@@ -975,17 +977,11 @@ def main(
             **wandb_config_dict,
         )
         # Use fractional epoch as x-axis for all metrics
-        # Note: wandb glob * only matches one level, so we need patterns for each depth
+        # Note: wandb glob * only allowed at end of pattern
         wandb.define_metric("epoch")
         wandb.define_metric("loss/*", step_metric="epoch")
         wandb.define_metric("firing_rate/*", step_metric="epoch")
-        wandb.define_metric("firing_rate/*/*", step_metric="epoch")
-        wandb.define_metric("firing_rate/*/*/*", step_metric="epoch")
-        wandb.define_metric("firing_rate/*/*/*/*", step_metric="epoch")
-        wandb.define_metric("firing_rate/*/*/*/*/*", step_metric="epoch")
         wandb.define_metric("scaling_factors/*", step_metric="epoch")
-        wandb.define_metric("scaling_factors/*/*", step_metric="epoch")
-        wandb.define_metric("scaling_factors/*/*/*", step_metric="epoch")
         wandb.define_metric("gradients/*", step_metric="epoch")
         wandb.define_metric("plots/*", step_metric="epoch")
         wandb.define_metric("em/*", step_metric="epoch")
