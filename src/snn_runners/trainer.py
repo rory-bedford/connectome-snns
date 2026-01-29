@@ -107,6 +107,7 @@ class SNNTrainer:
         self.metrics_logger = None
         self.wandb_logger = None
         self.async_plotter = None
+        self._defined_wandb_metrics = set()  # Track metrics defined for epoch x-axis
 
         # Training state
         self.plot_accumulators = self._init_plot_accumulators()
@@ -183,14 +184,9 @@ class SNNTrainer:
             self.wandb_logger = wandb.init(**wandb_init_kwargs)
             wandb.watch(self.model, log="parameters", log_freq=self.log_interval)
 
-            # Use fractional epoch as x-axis for all metrics
-            # Note: wandb glob * only allowed at end of pattern
+            # Track which metrics have been defined for epoch x-axis
+            self._defined_wandb_metrics = set()
             wandb.define_metric("epoch")
-            wandb.define_metric("loss/*", step_metric="epoch")
-            wandb.define_metric("firing_rate/*", step_metric="epoch")
-            wandb.define_metric("scaling_factors/*", step_metric="epoch")
-            wandb.define_metric("gradients/*", step_metric="epoch")
-            wandb.define_metric("plots/*", step_metric="epoch")
             print("=" * 60 + "\n")
 
         # Initialize async logger if output_dir provided and not already initialized
@@ -615,12 +611,18 @@ class SNNTrainer:
             else:
                 fractional_epoch = epoch + 1
 
+            # Define each metric individually to use epoch as x-axis
+            # (glob patterns don't work reliably in wandb)
+            all_metrics = {**wandb_losses, **stats, **gradient_stats}
+            for metric_name in all_metrics.keys():
+                if metric_name not in self._defined_wandb_metrics:
+                    wandb.define_metric(metric_name, step_metric="epoch")
+                    self._defined_wandb_metrics.add(metric_name)
+
             wandb.log(
                 {
                     "epoch": fractional_epoch,
-                    **wandb_losses,
-                    **stats,
-                    **gradient_stats,
+                    **all_metrics,
                 },
             )
 
@@ -657,6 +659,11 @@ class SNNTrainer:
             wandb_losses = {
                 f"loss/{name}": value for name, value in initial_losses.items()
             }
+            # Define each metric individually to use epoch as x-axis
+            for metric_name in wandb_losses.keys():
+                if metric_name not in self._defined_wandb_metrics:
+                    wandb.define_metric(metric_name, step_metric="epoch")
+                    self._defined_wandb_metrics.add(metric_name)
             wandb.log({"epoch": 0.0, **wandb_losses})
 
         print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
@@ -813,6 +820,11 @@ class SNNTrainer:
             wandb_plots = {
                 f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
             }
+            # Define each metric individually to use epoch as x-axis
+            for metric_name in wandb_plots.keys():
+                if metric_name not in self._defined_wandb_metrics:
+                    wandb.define_metric(metric_name, step_metric="epoch")
+                    self._defined_wandb_metrics.add(metric_name)
             # Compute fractional epoch for x-axis consistency
             if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
                 fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch

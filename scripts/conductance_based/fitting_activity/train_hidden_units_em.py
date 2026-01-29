@@ -976,16 +976,11 @@ def main(
             dir=str(output_dir),
             **wandb_config_dict,
         )
-        # Use fractional epoch as x-axis for all metrics
-        # Note: wandb glob * only allowed at end of pattern
+        # Define epoch metric - individual metrics will be defined before logging
         wandb.define_metric("epoch")
-        wandb.define_metric("loss/*", step_metric="epoch")
-        wandb.define_metric("firing_rate/*", step_metric="epoch")
-        wandb.define_metric("scaling_factors/*", step_metric="epoch")
-        wandb.define_metric("gradients/*", step_metric="epoch")
-        wandb.define_metric("plots/*", step_metric="epoch")
-        wandb.define_metric("em/*", step_metric="epoch")
-        wandb.define_metric("hidden_cells/*", step_metric="epoch")
+
+    # Track which metrics have been defined for epoch x-axis
+    defined_wandb_metrics = set()
 
     best_loss_overall = float("inf")
     global_chunk_counter = 0
@@ -1236,14 +1231,17 @@ def main(
         if wandb_logger:
             # Compute fractional epoch for x-axis consistency
             fractional_epoch = (global_chunk_counter + num_chunks_m_step) / num_chunks
-            wandb.log(
-                {
-                    "epoch": fractional_epoch,
-                    "em/iteration": em_iter + 1,
-                    "em/m_step_best_loss": best_loss,
-                    "em/best_loss_overall": best_loss_overall,
-                }
-            )
+            em_metrics = {
+                "em/iteration": em_iter + 1,
+                "em/m_step_best_loss": best_loss,
+                "em/best_loss_overall": best_loss_overall,
+            }
+            # Define each metric individually to use epoch as x-axis
+            for metric_name in em_metrics.keys():
+                if metric_name not in defined_wandb_metrics:
+                    wandb.define_metric(metric_name, step_metric="epoch")
+                    defined_wandb_metrics.add(metric_name)
+            wandb.log({"epoch": fractional_epoch, **em_metrics})
 
         # Update global counter
         global_chunk_counter += num_chunks_m_step
