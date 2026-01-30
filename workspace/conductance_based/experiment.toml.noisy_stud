@@ -1,5 +1,5 @@
-script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/check_noisy_weights_scaling_factors.py"
-output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/noisy-weights/correct-initialisation"
+script = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/scripts/conductance_based/fitting_activity/train_feedforward_noisy.py"
+output_dir = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/noisy-weights/correct-initialisation/training"
 parameters_file = "/tungstenfs/scratch/gzenke/bedfrory/connectome-snns/parameters/conductance_based/train-feedforward-noisy.toml"
 log_file = "/tungstenfs/scratch/gzenke/bedfrory/dp-simulations/Dp_simulator_log.jsonl"
 description = "Relearning scale factors for the feedforward network with noisy weights given to teacher. Initialising at correct scaling factors."

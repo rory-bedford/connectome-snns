@@ -6,7 +6,7 @@
 # ========================
 
 [simulation]
-seed = 44                              # Random seed for reproducibility
+seed = 54                              # Random seed for reproducibility
 chunk_size = 200                       # Number of timesteps per chunk
 
 # ======================
@@ -20,7 +20,7 @@ log_interval = 5                       # Log metrics to CSV and wandb every N ch
 checkpoint_interval = 50               # Save model checkpoints and generate plots every N chunks
 plot_size = 50                         # Number of chunks to accumulate for plotting (must be <= checkpoint_interval)
 mixed_precision = true                 # Whether to train with mixed precision
-weight_perturbation_variance = 0.5     # Variance of log-normal distribution for scaling factor perturbation
+weight_perturbation_variance = 0.0     # Variance of log-normal distribution for scaling factor perturbation
 optimisable = "scaling_factors"        # What to optimize: "scaling_factors", "scaling_factors_recurrent", "scaling_factors_feedforward", "weights"
 momentum = 0.6                         # Adam beta1 parameter (default 0.9, lower values = less momentum)
 
