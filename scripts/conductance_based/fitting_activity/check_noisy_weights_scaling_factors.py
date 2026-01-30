@@ -18,7 +18,6 @@ from network_simulators.feedforward_conductance_based.simulator import (
 )
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from training_utils.losses import VanRossumLoss
 from configs import (
     StudentSimulationConfig,
@@ -26,6 +25,7 @@ from configs import (
     StudentHyperparameters,
 )
 from configs.conductance_based import RecurrentLayerConfig, FeedforwardLayerConfig
+from snn_runners import SNNInference
 import toml
 from visualization.neuronal_dynamics import plot_spike_trains
 
@@ -220,8 +220,33 @@ def main(
     )
     model.to(device)
     model.eval()
+    model.reset_state(batch_size=batch_size)
 
-    # Loss function
+    # Run inference (2x plot_size, discard first half for burn-in)
+    total_chunks = 2 * plot_size
+    print(
+        f"\nRunning inference for {total_chunks} chunks ({plot_size} burn-in + {plot_size} analysis)..."
+    )
+    inference_runner = SNNInference(
+        model=model,
+        dataloader=spike_dataloader,
+        device=device,
+        output_mode="memory",
+        max_chunks=total_chunks,
+        save_tracked_variables=False,
+    )
+    results = inference_runner.run()
+
+    # Extract results and discard burn-in (first half)
+    burnin_timesteps = plot_size * chunk_size
+    output_spikes = results["output_spikes"][
+        :, burnin_timesteps:, :
+    ]  # (batch, time, neurons)
+    target_spikes = results["target_spikes"][
+        :, burnin_timesteps:, :
+    ]  # (batch, time, neurons)
+
+    # Compute loss
     van_rossum_loss_fn = VanRossumLoss(
         tau_rise=hyperparameters.van_rossum_tau_rise,
         tau_decay=hyperparameters.van_rossum_tau_decay,
@@ -230,61 +255,28 @@ def main(
         device=device,
     )
 
-    # Run inference for plot_size chunks
-    print(f"\nRunning inference for {plot_size} chunks...")
-    model.reset_state(batch_size=batch_size)
-    van_rossum_loss_fn.reset_state()
+    output_spikes_t = torch.from_numpy(output_spikes).float().to(device)
+    target_spikes_t = torch.from_numpy(target_spikes).float().to(device)
+    loss = van_rossum_loss_fn(output_spikes_t, target_spikes_t).item()
 
-    all_losses = []
-    all_spikes = []
-    all_targets = []
-    student_firing_rates = []
-    teacher_firing_rates = []
-
-    data_iter = iter(spike_dataloader)
-
-    with torch.no_grad():
-        for chunk_idx in tqdm(range(plot_size), desc="Inference"):
-            batch = next(data_iter)
-            input_spikes = batch.input_spikes
-            target_spikes = batch.target_spikes
-
-            output = model(input_spikes)
-            spikes = output["spikes"]
-
-            loss = van_rossum_loss_fn(spikes, target_spikes)
-            all_losses.append(loss.item())
-
-            all_spikes.append(spikes.cpu().numpy())
-            all_targets.append(target_spikes.cpu().numpy())
-
-            duration_s = chunk_size * dt / 1000.0
-            student_fr = spikes[0].sum(dim=0).cpu().numpy() / duration_s
-            teacher_fr = target_spikes[0].sum(dim=0).cpu().numpy() / duration_s
-            student_firing_rates.append(student_fr)
-            teacher_firing_rates.append(teacher_fr)
-
-    # Compute metrics
-    mean_loss = np.mean(all_losses)
-    std_loss = np.std(all_losses)
-
-    student_fr_all = np.stack(student_firing_rates, axis=0)
-    teacher_fr_all = np.stack(teacher_firing_rates, axis=0)
+    # Compute firing rates
+    duration_s = output_spikes.shape[1] * dt / 1000.0
+    student_fr = output_spikes[0].sum(axis=0) / duration_s
+    teacher_fr = target_spikes[0].sum(axis=0) / duration_s
 
     exc_mask = cell_type_indices == 0
     inh_mask = cell_type_indices == 1
 
     metrics = {
-        "loss/mean": mean_loss,
-        "loss/std": std_loss,
-        "firing_rate/student_mean": float(student_fr_all.mean()),
-        "firing_rate/student_std": float(student_fr_all.std()),
-        "firing_rate/teacher_mean": float(teacher_fr_all.mean()),
-        "firing_rate/teacher_std": float(teacher_fr_all.std()),
-        "firing_rate/student_exc_mean": float(student_fr_all[:, exc_mask].mean()),
-        "firing_rate/student_inh_mean": float(student_fr_all[:, inh_mask].mean()),
-        "firing_rate/teacher_exc_mean": float(teacher_fr_all[:, exc_mask].mean()),
-        "firing_rate/teacher_inh_mean": float(teacher_fr_all[:, inh_mask].mean()),
+        "loss": loss,
+        "firing_rate/student_mean": float(student_fr.mean()),
+        "firing_rate/student_std": float(student_fr.std()),
+        "firing_rate/teacher_mean": float(teacher_fr.mean()),
+        "firing_rate/teacher_std": float(teacher_fr.std()),
+        "firing_rate/student_exc_mean": float(student_fr[exc_mask].mean()),
+        "firing_rate/student_inh_mean": float(student_fr[inh_mask].mean()),
+        "firing_rate/teacher_exc_mean": float(teacher_fr[exc_mask].mean()),
+        "firing_rate/teacher_inh_mean": float(teacher_fr[inh_mask].mean()),
     }
 
     # Print metrics
@@ -296,14 +288,11 @@ def main(
     print("=" * 60)
 
     # Generate plot
-    spikes_concat = np.concatenate(all_spikes, axis=1)
-    targets_concat = np.concatenate(all_targets, axis=1)
-
-    n_plot = min(10, spikes_concat.shape[2])
-    interleaved = np.zeros((1, spikes_concat.shape[1], 2 * n_plot))
+    n_plot = min(10, output_spikes.shape[2])
+    interleaved = np.zeros((1, output_spikes.shape[1], 2 * n_plot))
     for i in range(n_plot):
-        interleaved[0, :, 2 * i] = targets_concat[0, :, i]
-        interleaved[0, :, 2 * i + 1] = spikes_concat[0, :, i]
+        interleaved[0, :, 2 * i] = target_spikes[0, :, i]
+        interleaved[0, :, 2 * i + 1] = output_spikes[0, :, i]
 
     cell_type_indices_plot = np.array([0, 1] * n_plot)
     cell_type_names_plot = ["Target", "Student"]
@@ -316,7 +305,7 @@ def main(
         n_neurons_plot=2 * n_plot,
         fraction=1.0,
         random_seed=None,
-        title=f"Scaling Factors at Target (loss={mean_loss:.4f})",
+        title=f"Scaling Factors at Target (loss={loss:.4f})",
         ylabel="Neuron",
         figsize=(14, 8),
     )
