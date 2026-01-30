@@ -255,7 +255,7 @@ def main(
             target_spikes = batch.target_spikes
 
             output = model(input_spikes)
-            spikes = output["spikes"]
+            spikes = output["spikes"] if isinstance(output, dict) else output
 
             # Only accumulate after burn-in
             if chunk_idx >= plot_size:
