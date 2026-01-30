@@ -121,12 +121,116 @@ def main(
     # Apply weight noise
     if noise_frac > 0:
         print(f"\nApplying {noise_frac * 100:.1f}% multiplicative Gaussian noise...")
+        nonzero_mask = concatenated_weights != 0
+        original_weights_nz = concatenated_weights[nonzero_mask].copy()
+        original_mean = original_weights_nz.mean()
+        original_std = original_weights_nz.std()
+
         concatenated_weights = apply_weight_noise(
             concatenated_weights,
             noise_frac,
             rng=weight_noise_rng,
             preserve_statistics=True,
         )
+
+        noisy_weights_nz = concatenated_weights[nonzero_mask]
+        noisy_mean = noisy_weights_nz.mean()
+        noisy_std = noisy_weights_nz.std()
+        print(
+            f"  - Original weights (non-zero): mean={original_mean:.6f}, std={original_std:.6f}"
+        )
+        print(
+            f"  - Noisy weights (non-zero):    mean={noisy_mean:.6f}, std={noisy_std:.6f}"
+        )
+
+        # Create output directory early for saving plot
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create scatter plot comparing original vs noisy weights
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # Scatter plot
+        ax = axes[0]
+        max_points = 50000
+        if len(original_weights_nz) > max_points:
+            idx = np.random.default_rng(42).choice(
+                len(original_weights_nz), max_points, replace=False
+            )
+        else:
+            idx = np.arange(len(original_weights_nz))
+
+        ax.scatter(original_weights_nz[idx], noisy_weights_nz[idx], alpha=0.2, s=1)
+        lims = [
+            min(0, noisy_weights_nz.min()),
+            np.percentile(np.concatenate([original_weights_nz, noisy_weights_nz]), 95),
+        ]
+        ax.plot(lims, lims, "k--", linewidth=1)
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+        ax.set_xlabel("Original Weight")
+        ax.set_ylabel("Noisy Weight")
+        ax.set_aspect("equal")
+
+        corr = np.corrcoef(original_weights_nz, noisy_weights_nz)[0, 1]
+        stats_text = (
+            f"Original: μ={original_mean:.6f}, σ={original_std:.6f}\n"
+            f"Noisy:    μ={noisy_mean:.6f}, σ={noisy_std:.6f}\n"
+            f"Corr: r={corr:.4f}"
+        )
+        ax.text(
+            0.05,
+            0.95,
+            stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+        ax.set_title("Original vs Noisy Weights")
+
+        # Histogram comparison
+        ax = axes[1]
+        min_val = min(0, noisy_weights_nz.min())
+        max_val = np.percentile(
+            np.concatenate([original_weights_nz, noisy_weights_nz]), 99
+        )
+        bins = np.linspace(min_val, max_val, 100)
+        ax.hist(
+            original_weights_nz,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            label="Original",
+            color="blue",
+        )
+        ax.hist(
+            noisy_weights_nz,
+            bins=bins,
+            density=True,
+            alpha=0.5,
+            label="Noisy",
+            color="orange",
+        )
+        ax.axvline(0, color="gray", linestyle=":", alpha=0.5)
+        ax.set_xlabel("Weight")
+        ax.set_ylabel("Density")
+        ax.set_title("Distribution Comparison")
+        ax.legend()
+
+        fig.suptitle(
+            f"Weight Noise: {noise_frac * 100:.1f}% (Clip [0, ∞) + Affine Rescale)",
+            fontsize=14,
+            fontweight="bold",
+        )
+        plt.tight_layout()
+
+        plot_path = output_dir / "weight_noise_comparison.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  - Saved weight noise comparison plot to {plot_path}")
+    else:
+        print("\nNo weight noise applied (noise_frac = 0)")
 
     # Setup cell parameters
     recurrent_cell_params = recurrent.get_cell_params()
@@ -183,6 +287,36 @@ def main(
 
     # Initialize scaling factors AT TARGET (so normalized = 1)
     scaling_factors_init = target_scaling_factors_FF.copy()
+
+    # Save targets
+    output_dir.mkdir(parents=True, exist_ok=True)
+    targets_dir = output_dir / "targets"
+    targets_dir.mkdir(parents=True, exist_ok=True)
+
+    np.savez(
+        targets_dir / "target_scaling_factors.npz",
+        feedforward_scaling_factors=target_scaling_factors_FF,
+    )
+
+    np.savez(
+        targets_dir / "weight_noise_config.npz",
+        noise_frac=noise_frac,
+        seed=seed,
+    )
+
+    # Save perturbed network structure
+    np.savez(
+        output_dir / "network_structure.npz",
+        feedforward_weights=perturbed_weights[:n_feedforward],
+        recurrent_weights=perturbed_weights[n_feedforward:],
+        feedforward_connectivity=concatenated_mask[:n_feedforward],
+        recurrent_connectivity=concatenated_mask[n_feedforward:],
+        cell_type_indices=cell_type_indices,
+        feedforward_cell_type_indices=feedforward_cell_type_indices,
+        scaling_factors_FF=scaling_factors_init,
+    )
+    print(f"\n✓ Saved network structure to {output_dir / 'network_structure.npz'}")
+    print(f"✓ Saved targets to {targets_dir}")
 
     # Load dataset
     spike_dataset = PrecomputedSpikeDataset(
