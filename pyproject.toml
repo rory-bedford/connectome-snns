@@ -82,3 +82,7 @@ dev = [
 
 [tool.ruff.lint]
 ignore = ["E741"]
+
+# Non-Python files the package reads at runtime (the Matplotlib style sheet).
+[tool.setuptools.package-data]
+connectome_snns = ["visualization/*.mplstyle"]
