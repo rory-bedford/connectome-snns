@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Executable wrapper for running experiments with uv.
+#
+# Usage:
+#   ./run path/to/experiment.toml                    # Run an experiment
+#   ./run --resume /path/to/output_dir experiment.toml               # Resume from checkpoint
+#   ./run --grid path/to/experiment.toml             # Grid search
+#   ./run --grid grid_script.py config.toml          # Grid search with custom script
+#   ./run --no-commit config.toml                    # Skip git commit check
+#
+# Grid search:
+#   If only one path is given after --grid, it's the experiment config.
+#   If two paths are given, first is the grid script, second is the config.
+#   Auto-detection looks for run_grid_search.py in the experiment directory, else uses src/connectome_snns/run_grid_search.py
+
+set -e
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Change to the script directory to ensure relative paths work
+cd "$SCRIPT_DIR"
+
+# Parse arguments
+NO_COMMIT=""
+GRID=""
+RESUME_DIR=""
+POSITIONAL_ARGS=()
+EXPECT_RESUME_DIR=false
+
+for arg in "$@"; do
+    if $EXPECT_RESUME_DIR; then
+        RESUME_DIR="$arg"
+        EXPECT_RESUME_DIR=false
+        continue
+    fi
+    case $arg in
+        --no-commit)
+            NO_COMMIT="--no-commit"
+            ;;
+        --grid)
+            GRID="--grid"
+            ;;
+        --resume)
+            EXPECT_RESUME_DIR=true
+            ;;
+        *)
+            if [[ $arg != --* ]]; then
+                POSITIONAL_ARGS+=("$arg")
+            fi
+            ;;
+    esac
+done
+
+# Check for --grid flag
+if [ -n "$GRID" ]; then
+    # Parse positional args for grid mode
+    if [ ${#POSITIONAL_ARGS[@]} -eq 0 ]; then
+        echo "ERROR: Grid search requires a config file path"
+        echo "Usage: ./run --grid path/to/experiment.toml"
+        exit 1
+    elif [ ${#POSITIONAL_ARGS[@]} -eq 1 ]; then
+        # One arg: auto-detect grid script from experiment dir, arg is config
+        CONFIG_FILE="${POSITIONAL_ARGS[0]}"
+        EXPERIMENT_DIR="$(dirname "$CONFIG_FILE")"
+        if [ -f "$EXPERIMENT_DIR/run_grid_search.py" ]; then
+            GRID_SCRIPT="$EXPERIMENT_DIR/run_grid_search.py"
+        else
+            GRID_SCRIPT="src/connectome_snns/run_grid_search.py"
+        fi
+    else
+        # Two args: first is grid script, second is config
+        GRID_SCRIPT="${POSITIONAL_ARGS[0]}"
+        CONFIG_FILE="${POSITIONAL_ARGS[1]}"
+    fi
+
+    uv run python "$GRID_SCRIPT" "$CONFIG_FILE"
+else
+    # Determine config file from positional args
+    if [ ${#POSITIONAL_ARGS[@]} -eq 0 ]; then
+        echo "ERROR: Experiment config file required"
+        echo "Usage: ./run path/to/experiment.toml"
+        exit 1
+    else
+        CONFIG_FILE="${POSITIONAL_ARGS[0]}"
+    fi
+
+    # Build command
+    CMD=(uv run python src/connectome_snns/run_experiment.py "$CONFIG_FILE")
+    if [ -n "$RESUME_DIR" ]; then
+        CMD+=(--resume "$RESUME_DIR")
+    fi
+    if [ -n "$NO_COMMIT" ]; then
+        CMD+=(--no-commit)
+    fi
+    "${CMD[@]}"
+fi

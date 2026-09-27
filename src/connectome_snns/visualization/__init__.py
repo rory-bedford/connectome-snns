@@ -1,0 +1,170 @@
+"""Visualization utilities for connectome-constrained SNN models."""
+
+from pathlib import Path as _Path
+
+import matplotlib.pyplot as _plt
+
+from .colors import (
+    EXCITATORY_COLOR,
+    INHIBITORY_COLOR,
+    FEEDFORWARD_COLOR,
+    CELL_TYPE_COLORS,
+    SYNAPSE_COLORS,
+    TEACHER_COLOR,
+    STUDENT_COLOR,
+    NEUTRAL_BAR_COLOR,
+    RASTER_BAND_COLOR,
+    CMA_PHASE_COLOR,
+    CMA_LOSS_COLOR,
+    GRADIENT_LOSS_COLOR,
+    STRATEGY_COLORS,
+    HIGHLIGHT_COLOR,
+    SCATTER_NEUTRAL_COLOR,
+    BASELINE_BAR_COLOR,
+    QUALITATIVE_COLORS,
+    FIGURE_BLUE,
+    FIGURE_ORANGE,
+    FIGURE_TEAL,
+    FIGURE_CORAL,
+    FIGURE_COLORS,
+    FULL_CONNECTOME_COLOR,
+    LEARNT_RECURRENCE_COLOR,
+    SHUFFLE_WEIGHTS_COLOR,
+    CONFIGURATION_MODEL_COLOR,
+    FIXED_TOPOLOGY_COLOR,
+    OBSERVED_COLOR,
+    UNOBSERVED_COLOR,
+    FLOOR_COLOR,
+    NEURON_REMOVAL_COLOR,
+    SYNAPSE_DROPOUT_COLOR,
+    DIMENSIONALITY_COLOR,
+    SLIDE_BLUE,
+    SLIDE_INK,
+    SLIDE_RED,
+    SLIDE_YELLOW,
+    WEIGHT_NOISE_COLOR,
+)
+from .neuronal_dynamics import (
+    plot_membrane_voltages,
+    plot_synaptic_currents,
+    plot_spike_trains,
+    plot_mitral_cell_spikes,
+    plot_dp_network_spikes,
+    plot_synaptic_conductances,
+)
+from .connectivity import (
+    plot_assembly_graph,
+    plot_connectivity_by_cell_type,
+    plot_weighted_connectivity,
+    plot_input_count_pie_chart,
+    plot_input_count_distribution,
+    plot_charge_transfer_matrix,
+    plot_synaptic_drive_pie_chart,
+    plot_synaptic_drive_distribution,
+    plot_synaptic_input_histogram,
+    plot_feedforward_connectivity,
+)
+from .firing_statistics import (
+    plot_firing_rate_distribution,
+)
+from .odours import (
+    plot_input_firing_rate_histogram,
+    plot_firing_rate_variance_comparison,
+)
+from .scaling_factors import (
+    SF_PATHWAYS,
+    SF_SHORT_KEYS,
+    plot_sf_trajectories,
+    plot_sf_vs_parameter,
+    plot_sf_bar_chart,
+)
+from .training_curves import (
+    plot_loss_trajectories,
+    plot_loss_mean_std,
+    plot_firing_rate_trajectories,
+)
+from .firing_rate_scatter import (
+    plot_firing_rate_scatter,
+    plot_r2_vs_parameter,
+    plot_r2_comparison_bar,
+)
+
+_STYLE_PATH = str(_Path(__file__).parent / "connectome_snn.mplstyle")
+
+
+def use_project_style() -> None:
+    """Activate the project matplotlib style sheet."""
+    _plt.style.use(["seaborn-v0_8-whitegrid", _STYLE_PATH])
+
+
+__all__ = [
+    "EXCITATORY_COLOR",
+    "INHIBITORY_COLOR",
+    "FEEDFORWARD_COLOR",
+    "CELL_TYPE_COLORS",
+    "SYNAPSE_COLORS",
+    "TEACHER_COLOR",
+    "STUDENT_COLOR",
+    "NEUTRAL_BAR_COLOR",
+    "RASTER_BAND_COLOR",
+    "CMA_PHASE_COLOR",
+    "CMA_LOSS_COLOR",
+    "GRADIENT_LOSS_COLOR",
+    "STRATEGY_COLORS",
+    "HIGHLIGHT_COLOR",
+    "SCATTER_NEUTRAL_COLOR",
+    "BASELINE_BAR_COLOR",
+    "QUALITATIVE_COLORS",
+    "FIGURE_BLUE",
+    "FIGURE_ORANGE",
+    "FIGURE_TEAL",
+    "FIGURE_CORAL",
+    "FIGURE_COLORS",
+    "FULL_CONNECTOME_COLOR",
+    "LEARNT_RECURRENCE_COLOR",
+    "SHUFFLE_WEIGHTS_COLOR",
+    "CONFIGURATION_MODEL_COLOR",
+    "FIXED_TOPOLOGY_COLOR",
+    "OBSERVED_COLOR",
+    "UNOBSERVED_COLOR",
+    "FLOOR_COLOR",
+    "NEURON_REMOVAL_COLOR",
+    "SYNAPSE_DROPOUT_COLOR",
+    "DIMENSIONALITY_COLOR",
+    "SLIDE_BLUE",
+    "SLIDE_INK",
+    "SLIDE_RED",
+    "SLIDE_YELLOW",
+    "WEIGHT_NOISE_COLOR",
+    "use_project_style",
+    "plot_membrane_voltages",
+    "plot_synaptic_currents",
+    "plot_spike_trains",
+    "plot_mitral_cell_spikes",
+    "plot_dp_network_spikes",
+    "plot_synaptic_conductances",
+    "plot_assembly_graph",
+    "plot_connectivity_by_cell_type",
+    "plot_weighted_connectivity",
+    "plot_input_count_pie_chart",
+    "plot_input_count_distribution",
+    "plot_charge_transfer_matrix",
+    "plot_synaptic_drive_pie_chart",
+    "plot_synaptic_drive_distribution",
+    "plot_synaptic_input_histogram",
+    "plot_feedforward_connectivity",
+    "plot_firing_rate_distribution",
+    "plot_input_firing_rate_histogram",
+    "plot_firing_rate_variance_comparison",
+    "SF_PATHWAYS",
+    "SF_SHORT_KEYS",
+    "plot_sf_trajectories",
+    "plot_sf_vs_parameter",
+    "plot_sf_bar_chart",
+    "plot_loss_trajectories",
+    "plot_loss_mean_std",
+    "plot_firing_rate_trajectories",
+    "plot_firing_rate_scatter",
+    "plot_r2_vs_parameter",
+    "plot_r2_comparison_bar",
+]
