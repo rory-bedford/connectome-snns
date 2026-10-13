@@ -1,12 +1,12 @@
 # Tests
 
 ```bash
-uv run pytest                 # everything; GPU tests skip without CUDA
-uv run pytest -m "not gpu"    # what CI runs (GitHub, every push)
+uv run --extra cu129 pytest                    # everything; GPU tests skip without CUDA
+uv run --extra cpu pytest -m "not gpu"         # what CI runs (GitHub, every push)
 ```
 
 The full suite also runs before every `git push` once the hooks are installed
-(`uv run pre-commit install`): it is the only place the GPU tests run.
+(`uv run --no-sync pre-commit install`): it is the only place the GPU tests run.
 
 The simulators are chaotic, so "the same simulator" needs a careful definition. The
 suite compares against **fixtures recorded from the simulators before any optimisation**

@@ -1,4 +1,4 @@
-# `uv run pre-commit install` sets up both stages: ruff on every commit, and the full
+# `uv run --no-sync pre-commit install` sets up both stages: ruff on every commit, and the full
 # test suite (GPU tests included when CUDA is available) before every push.
 default_install_hook_types: [pre-commit, pre-push]
 

@@ -103,7 +103,7 @@ for what "correct" means for a chaotic simulator):
 
 ```bash
 uv sync --extra cu129 --group dev
-uv run pytest
+uv run --extra cu129 pytest   # name the extra: uv run re-syncs to it
 ```
 
 The speed badges come from `python benchmarks/speed.py --badges` (on a Quadro RTX
@@ -115,7 +115,7 @@ before every push — the only place the GPU tests run, since GitHub's CI (CPU o
 `pytest -m "not gpu"`, on every push) has no GPU:
 
 ```bash
-uv run pre-commit install
+uv run --no-sync pre-commit install
 ```
 
 Commit messages start with a [gitmoji](https://gitmoji.dev/) (e.g. `:sparkles:`,

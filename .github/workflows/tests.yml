@@ -14,11 +14,13 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --extra cpu --group dev
+      # `uv run` re-syncs to the extras it is given: without --extra cpu it would swap in
+      # PyPI's (CUDA) torch, which fails to load here.
       - name: pytest
         shell: bash
         run: |
           set -o pipefail
-          uv run pytest -m "not gpu" 2>&1 | tee pytest.log
+          uv run --extra cpu pytest -m "not gpu" 2>&1 | tee pytest.log
       # The tail of the output as an annotation, readable without opening the log.
       - name: report failure
         if: failure()
