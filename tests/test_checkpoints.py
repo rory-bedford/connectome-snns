@@ -2,8 +2,8 @@
 
 ``state_dicts.pt`` holds every scenario's ``state_dict`` as master's simulators wrote
 it (``generate.py state_dicts``). The rewritten simulators must accept each one
-strictly — the same keys, shapes and values — so existing runs can be resumed. Buffers
-since removed (``LEGACY_BUFFERS``) are dropped on load.
+strictly — the same keys, shapes and values (floats to a few ulps) — so existing runs
+can be resumed. Buffers since removed (``LEGACY_BUFFERS``) are dropped on load.
 """
 
 import pytest
@@ -28,7 +28,12 @@ def test_old_state_dict_loads(name):
     )
     for key, value in kept.items():
         assert current[key].dtype == value.dtype, key
-        torch.testing.assert_close(current[key], value, rtol=0, atol=0, msg=key)
+        # Floats to a few ulps: values derived with transcendental functions (log
+        # weights) round differently on other CPUs' vector units.
+        exact = not value.is_floating_point()
+        torch.testing.assert_close(
+            current[key], value, rtol=0 if exact else 1e-6, atol=0, msg=key
+        )
     model.load_state_dict(recorded, strict=True)
 
 
