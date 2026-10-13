@@ -1,9 +1,9 @@
 """Current-based network layer configuration."""
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel
 
 from ..network import (
+    cell_type_sign,
     SimpleCellTypesConfig,
     CellTypesConfig,
     TopologyConfig,
@@ -11,9 +11,10 @@ from ..network import (
     ActivityConfig,
 )
 from .physiology import PhysiologyConfig
+from ..base import Config
 
 
-class RecurrentLayerConfig(BaseModel):
+class RecurrentLayerConfig(Config):
     """Recurrent layer configuration for current-based models."""
 
     cell_types: CellTypesConfig | SimpleCellTypesConfig
@@ -57,13 +58,13 @@ class RecurrentLayerConfig(BaseModel):
                 "threshold": self.physiology[cell_name].theta,
                 "rest": self.physiology[cell_name].U_reset,
                 "name": cell_name,
-                "sign": 1 if "excit" in cell_name.lower() else -1,
+                "sign": 1 if cell_type_sign(cell_name) == "excitatory" else -1,
             }
             for idx, cell_name in enumerate(self.cell_types.names)
         }
 
 
-class FeedforwardLayerConfig(BaseModel):
+class FeedforwardLayerConfig(Config):
     """Feedforward layer configuration for current-based models."""
 
     cell_types: CellTypesConfig | SimpleCellTypesConfig

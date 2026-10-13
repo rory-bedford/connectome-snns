@@ -5,7 +5,6 @@ from a zarr archive, optionally smoothed and Bernoulli-resampled.  Only the
 feedforward input strategy varies between subclasses.
 """
 
-import numpy as np
 import torch
 import zarr
 from collections import namedtuple
@@ -13,7 +12,7 @@ from pathlib import Path
 from torch.utils.data import Dataset, Sampler
 from typing import Iterator, Optional, Union
 
-from ._smoothing import smooth_spike_trains
+from ._smoothing import cached_smoothed_rates, read_spikes, sample_spikes
 
 SpikeData = namedtuple(
     "SpikeData",
@@ -42,7 +41,9 @@ class TeacherSpikeDataset(Dataset):
     Args:
         spike_data_path: Path to ``spike_data.zarr``.
         chunk_size: Number of timesteps per chunk.
-        device: Torch device for returned tensors.
+        device: Unused, kept for compatibility (stored as ``self.device``). Datasets
+            always return CPU tensors, so DataLoader workers never touch CUDA and
+            batches can be pinned; the runners move each batch to the device.
         recurrent_smoothing_tau: Gaussian sigma (ms) for smoothing recurrent
             spikes.  ``None`` disables smoothing.
         target_dataset_name: Name of the zarr dataset holding target spikes.
@@ -92,92 +93,30 @@ class TeacherSpikeDataset(Dataset):
         return f"smoothed_rates_tau{self.recurrent_smoothing_tau}"
 
     def _ensure_smoothed_rates(self) -> None:
-        """Compute and cache smoothed recurrent rates in the zarr archive."""
-        key = self._smoothed_rates_key()
-
-        # Try to open an existing cache
-        try:
-            root_rw = zarr.open_group(self.spike_data_path, mode="r+")
-        except Exception:
-            root_rw = zarr.open_group(self.spike_data_path, mode="a")
-
-        if key in root_rw:
-            cached = zarr.open_group(self.spike_data_path, mode="r")[key]
-            # Validate: an interrupted write can leave the tail of the array
-            # zero-filled, silently killing downstream gradients. The Gaussian
-            # kernel is sum-normalised so totals must match the raw spikes.
-            cached_sum = float(np.array(cached[:], dtype=np.float32).sum())
-            raw_sum = float(np.array(self.target_spike_data[:], dtype=np.float32).sum())
-            if cached_sum < 0.5 * raw_sum:
-                print(
-                    f"WARNING: cached smoothed rates ({key}) look truncated "
-                    f"(sum={cached_sum:.2e} vs raw={raw_sum:.2e}); recomputing."
-                )
-                del root_rw[key]
-            else:
-                self._smoothed_rate_data = cached
-                print(
-                    f"Loaded cached smoothed rates ({key}) from {self.spike_data_path}"
-                )
-                return
-
-        print(
-            f"Computing smoothed rates (tau={self.recurrent_smoothing_tau} ms) "
-            f"for {self.spike_data_path} ..."
+        """Smoothed recurrent rates, from (or into) the archive's cache."""
+        self._smoothed_rate_data = cached_smoothed_rates(
+            self.spike_data_path,
+            self.target_spike_data,
+            self._smoothed_rates_key(),
+            self.dt,
+            self.recurrent_smoothing_tau,
+            self.chunk_size,
         )
-
-        # Load full recurrent spikes, smooth, and write back
-        all_spikes = torch.from_numpy(
-            np.array(self.target_spike_data[:], dtype=np.float32)
-        )
-        rates = smooth_spike_trains(all_spikes, self.dt, self.recurrent_smoothing_tau)
-
-        # Store as float16 to halve disk/memory usage — plenty of precision
-        # for Bernoulli probabilities.
-        rates_np = rates.numpy().astype(np.float16)
-        root_rw.create_array(
-            key,
-            shape=rates_np.shape,
-            dtype=rates_np.dtype,
-            chunks=(self.batch_size, self.chunk_size, self.n_neurons),
-            overwrite=True,
-        )
-        root_rw[key][:] = rates_np
-
-        # Re-open read-only for subsequent access
-        self._smoothed_rate_data = zarr.open_group(self.spike_data_path, mode="r")[key]
-        print(f"Cached smoothed rates to {self.spike_data_path}/{key}")
 
     # ------------------------------------------------------------------
     # Recurrent spike loading
     # ------------------------------------------------------------------
 
     def _get_recurrent_chunk(self, start_t: int, end_t: int) -> torch.Tensor:
-        """Load recurrent spikes or Bernoulli-resample from cached rates.
-
-        Returns:
-            Bool tensor of shape ``(batch, chunk_size, n_rec)`` on CPU.
-        """
+        """Recurrent input spikes: resampled from the smoothed rates if smoothing,
+        else exact. Bool ``(batch, chunk_size, n_rec)`` on CPU."""
         if self._smoothed_rate_data is not None:
-            rates = torch.from_numpy(
-                np.array(
-                    self._smoothed_rate_data[:, start_t:end_t, :],
-                    dtype=np.float32,
-                )
-            )
-            return torch.rand_like(rates) < rates
-        else:
-            chunk = np.array(self.target_spike_data[:, start_t:end_t, :])
-            return torch.from_numpy(chunk).bool()
+            return sample_spikes(self._smoothed_rate_data, start_t, end_t)
+        return self._get_target_chunk(start_t, end_t)
 
     def _get_target_chunk(self, start_t: int, end_t: int) -> torch.Tensor:
-        """Load exact target spikes (always un-smoothed).
-
-        Returns:
-            Bool tensor of shape ``(batch, chunk_size, n_rec)`` on CPU.
-        """
-        chunk = np.array(self.target_spike_data[:, start_t:end_t, :])
-        return torch.from_numpy(chunk).bool()
+        """Exact target spikes, bool ``(batch, chunk_size, n_rec)`` on CPU."""
+        return read_spikes(self.target_spike_data, start_t, end_t)
 
     # ------------------------------------------------------------------
     # Subclass hook

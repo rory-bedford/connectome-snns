@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu:
+    # GitHub's runners have no GPU: the tests marked `gpu` skip here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --extra cpu --group dev
+      - name: pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run pytest -m "not gpu" 2>&1 | tee pytest.log
+      # The tail of the output as an annotation, readable without opening the log.
+      - name: report failure
+        if: failure()
+        shell: bash
+        run: |
+          tail -n 60 pytest.log | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}' > tail.txt
+          echo "::error title=pytest::$(cat tail.txt)"

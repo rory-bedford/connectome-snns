@@ -1,0 +1,161 @@
+{
+ "meta": {
+  "commit": "960b4e2b1094330cdef192449c3c89b73c5234e2",
+  "library_dirty": false,
+  "torch": "2.8.0+cu128",
+  "recorded": "2026-10-09"
+ },
+ "outputs": {
+  "recurrent.get_cell_params": [
+   {
+    "name": "excitatory",
+    "cell_id": 0,
+    "tau_mem": 85.0,
+    "theta": -38.0,
+    "U_reset": -60.0,
+    "E_L": -60.0,
+    "g_L": 1.35,
+    "tau_ref": 8.0
+   },
+   {
+    "name": "inhibitory",
+    "cell_id": 1,
+    "tau_mem": 50.0,
+    "theta": -45.0,
+    "U_reset": -60.0,
+    "E_L": -60.0,
+    "g_L": 0.9,
+    "tau_ref": 8.0
+   }
+  ],
+  "recurrent.get_synapse_params": [
+   {
+    "name": "AMPA",
+    "synapse_id": 0,
+    "cell_id": 0,
+    "tau_rise": 0.1,
+    "tau_decay": 5.0,
+    "E_syn": 0.0,
+    "g_bar": 4.0,
+    "g_clip": 40.0
+   },
+   {
+    "name": "NMDA",
+    "synapse_id": 1,
+    "cell_id": 0,
+    "tau_rise": 10.0,
+    "tau_decay": 60.0,
+    "E_syn": 0.0,
+    "g_bar": 0.5,
+    "g_clip": 4.0
+   },
+   {
+    "name": "GABA_A",
+    "synapse_id": 2,
+    "cell_id": 1,
+    "tau_rise": 0.5,
+    "tau_decay": 6.0,
+    "E_syn": -70.0,
+    "g_bar": 8.0,
+    "g_clip": 80.0
+   }
+  ],
+  "recurrent.get_g_bar_by_type": {
+   "excitatory": 4.5,
+   "inhibitory": 8.0
+  },
+  "recurrent.get_tau_rise_by_type": {
+   "excitatory": 0.1,
+   "inhibitory": 0.5
+  },
+  "recurrent.get_tau_decay_by_type": {
+   "excitatory": 5.0,
+   "inhibitory": 6.0
+  },
+  "recurrent.get_E_syn_by_type": {
+   "excitatory": 0.0,
+   "inhibitory": -70.0
+  },
+  "recurrent.get_synapse_names": {
+   "excitatory": [
+    "AMPA",
+    "NMDA"
+   ],
+   "inhibitory": [
+    "GABA_A"
+   ]
+  },
+  "recurrent.get_excitatory_synapse_indices": [
+   0,
+   1
+  ],
+  "recurrent.get_inhibitory_synapse_indices": [
+   2
+  ],
+  "recurrent.get_neuron_params_for_plotting": {
+   "0": {
+    "threshold": -38.0,
+    "rest": -60.0,
+    "name": "excitatory",
+    "sign": 1
+   },
+   "1": {
+    "threshold": -45.0,
+    "rest": -60.0,
+    "name": "inhibitory",
+    "sign": -1
+   }
+  },
+  "feedforward.get_cell_params": [
+   {
+    "name": "mitral",
+    "cell_id": 0
+   }
+  ],
+  "feedforward.get_synapse_params": [
+   {
+    "name": "AMPA",
+    "synapse_id": 0,
+    "cell_id": 0,
+    "tau_rise": 0.1,
+    "tau_decay": 5.0,
+    "E_syn": 0.0,
+    "g_bar": 6.0,
+    "g_clip": 40.0
+   },
+   {
+    "name": "NMDA",
+    "synapse_id": 1,
+    "cell_id": 0,
+    "tau_rise": 10.0,
+    "tau_decay": 70.0,
+    "E_syn": 0.0,
+    "g_bar": 0.1,
+    "g_clip": 4.0
+   }
+  ],
+  "feedforward.get_g_bar_by_type": {
+   "mitral": 6.1
+  },
+  "feedforward.get_tau_rise_by_type": {
+   "mitral": 0.1
+  },
+  "feedforward.get_tau_decay_by_type": {
+   "mitral": 5.0
+  },
+  "feedforward.get_E_syn_by_type": {
+   "mitral": 0.0
+  },
+  "feedforward.get_synapse_names": {
+   "mitral": [
+    "AMPA",
+    "NMDA"
+   ]
+  },
+  "feedforward.get_excitatory_synapse_indices": [
+   0,
+   1
+  ],
+  "feedforward.get_inhibitory_synapse_indices": []
+ }
+}

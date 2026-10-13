@@ -35,33 +35,25 @@ def custom_config_generator(base_params):
     Yields:
         (params_dict, description_string) tuples
     """
-    # Example 1: Simple grid
-    for dt in [0.5, 1.0, 2.0]:
-        for num_neurons in [5000, 10000]:
+    # Example 1: repeat the experiment over seeds.
+    for seed in [44, 45, 46]:
+        params = deepcopy(base_params)
+        params["simulation"]["seed"] = seed
+        yield params, f"seed-{seed}"
+
+    # Example 2: a parameter crossed with seeds. Keys are your parameters.toml's.
+    for observed in [0.1, 0.5]:
+        for seed in [44, 45]:
             params = deepcopy(base_params)
-            params["simulation"]["dt"] = dt
-            params["connectome"]["topology"]["num_neurons"] = num_neurons
-
-            yield params, f"dt={dt}_neurons={num_neurons}"
-
-    # Example 2: Complex modifications
-    for scale in [0.001, 0.002, 0.004]:
-        for assemblies in [10, 20, 40]:
-            params = deepcopy(base_params)
-            params["optimisation"]["scaling_factors"][0][0] = scale
-            params["connectome"]["topology"]["num_assemblies"] = assemblies
-
-            # Conditional logic
-            if scale > 0.002:
-                params["hyperparameters"]["surrgrad_scale"] = 200.0
-
-            yield params, f"scale={scale}_asm={assemblies}"
+            params["simulation"]["seed"] = seed
+            params["student"]["observed_fraction"] = observed
+            yield params, f"obs-{observed}__seed-{seed}"
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("ERROR: Experiment config file required")
-        print("Usage: python src/run_grid_search.py path/to/experiment.toml")
+        print("Usage: python run_grid_search.py path/to/experiment.toml")
         sys.exit(1)
 
     config_path = sys.argv[1]

@@ -3,12 +3,33 @@
 Configuration for network topology and structure that is common across model types.
 """
 
+import re
+from typing import List, Literal, Optional
+
 import numpy as np
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field
+from .base import Config
 
 
-class SimpleCellTypesConfig(BaseModel):
+def cell_type_sign(name: str) -> Optional[Literal["excitatory", "inhibitory"]]:
+    """Whether a cell type is excitatory or inhibitory, read from its name.
+
+    A word of the name starting with "exc" or "inh" decides ("Excitatory",
+    "L23_exc", "inh-fast"); a word preceded by "non"/"not" is skipped, so
+    "non-excitatory" is neither. None if no word decides.
+    """
+    words = re.findall(r"[a-z]+", name.lower())
+    for previous, word in zip([""] + words, words):
+        if previous in ("non", "not"):
+            continue
+        if word.startswith("exc"):
+            return "excitatory"
+        if word.startswith("inh"):
+            return "inhibitory"
+    return None
+
+
+class SimpleCellTypesConfig(Config):
     """Cell types without proportions (for pre-defined networks)."""
 
     names: List[str]
@@ -24,11 +45,10 @@ class CellTypesConfig(SimpleCellTypesConfig):
         """Cell type proportions as numpy array."""
         return np.array(self.proportion_list)
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class TopologyConfig(BaseModel):
+class TopologyConfig(Config):
     """Network topology configuration."""
 
     num_neurons: int
@@ -71,11 +91,10 @@ class TopologyConfig(BaseModel):
             else None
         )
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class WeightsConfig(BaseModel):
+class WeightsConfig(Config):
     """Weight distribution parameters."""
 
     w_mu_list: List[List[float]] = Field(alias="w_mu")
@@ -91,11 +110,10 @@ class WeightsConfig(BaseModel):
         """Weight standard deviations as numpy array."""
         return np.array(self.w_sigma_list)
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class ActivityConfig(BaseModel):
+class ActivityConfig(Config):
     """Input activity configuration."""
 
     firing_rate: float

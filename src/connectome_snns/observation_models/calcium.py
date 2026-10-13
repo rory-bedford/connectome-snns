@@ -8,7 +8,7 @@ directly, with no spike-deconvolution step in between.
 Forward model (per cell)::
 
     a           = (1 + gamma) * gain           # peak ΔF/F per spike
-    c[t]        = gamma * c[t-1] + a * s[t]     # latent calcium; s[t] = spikes in frame t
+    c[t]        = gamma * c[t-1] + a * s[t]     # latent calcium; s[t] = spikes in step t
     pred_dff[t] = b0 + c[t]                     # observed dF/F
 
 - ``gamma`` — AR(1) decay of the indicator, ``gamma = exp(-dt / tau)``. Taken
@@ -31,6 +31,8 @@ Forward model (per cell)::
 
 import torch
 import torch.nn as nn
+
+from connectome_snns.utils.recurrences import ar1_trajectory
 
 
 def _as_param_tensor(value, name):
@@ -65,13 +67,18 @@ class CalciumObservationModel(nn.Module):
         tau: Indicator decay time constant in ms (``gamma = exp(-dt / tau)``).
             Scalar or ``(n_cells,)``. Held constant across cells at present;
             pass a per-cell tensor to model cell-type-specific kinetics.
-        dt: Frame interval in ms.
+        dt: Time step of the spike trains it renders, in ms (the simulation dt
+            under :class:`~connectome_snns.training_utils.losses.CalciumMSELoss`,
+            which frame-averages the rendered trace afterwards).
         baseline: Per-cell resting dF/F ``b0``. Scalar or ``(n_cells,)``.
             Defaults to 0.0 (the 8th-percentile-zero convention).
         trainable_baseline: If True, ``baseline`` becomes a learnable
             ``nn.Parameter`` (pass a per-cell init) instead of a fixed buffer, so
             the optimiser can place each cell's resting dF/F. Default False.
     """
+
+    #: The latent calcium carried from chunk to chunk.
+    CARRIED_STATE = ("prev_c",)
 
     def __init__(self, gain, tau, dt, baseline=0.0, trainable_baseline=False):
         super().__init__()
@@ -124,17 +131,10 @@ class CalciumObservationModel(nn.Module):
         else:
             c = self.prev_c
 
-        gamma = self.gamma
-        a = self.a
-
-        # Sequential AR(1) scan. O(time) and exact; gamma/a broadcast over the
-        # batch and (if per-cell) the cell dimension.
-        outputs = []
-        for t in range(n_time):
-            c = gamma * c + a * spikes[:, t, :]
-            outputs.append(c)
-
-        c_traj = torch.stack(outputs, dim=1)  # (batch, time, n_cells)
+        # c[t] = gamma c[t-1] + a s[t]: an AR(1) recurrence, evaluated in closed form.
+        # Its states s[0..T-1] lag c by one step, so c[0..T-1] = (s[1..T-1], s[T]).
+        states, c = ar1_trajectory(c, self.a * spikes, self.gamma)
+        c_traj = torch.cat([states[:, 1:], c[:, None]], dim=1)  # (batch, time, n_cells)
         pred_dff = self.baseline + c_traj
 
         # Carry the final latent to the next chunk, detached (truncated BPTT).

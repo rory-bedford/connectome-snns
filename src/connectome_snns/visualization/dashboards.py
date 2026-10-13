@@ -1,16 +1,23 @@
-"""Unified dashboard module for comprehensive network visualization.
+"""Multi-panel dashboards combining the individual plots into single figures.
 
-This module creates dashboards displaying connectivity and activity plots
-as subplots in unified figures.
+- :func:`create_connectivity_dashboard`: weighted connectomes plus input-count, weight
+  distribution and weight-statistics summaries.
+- :func:`create_activity_dashboard`: network raster and PSTH, one example neuron's
+  voltage / conductances / currents, and per-cell-type spiking statistics.
+- :func:`create_assembly_activity_dashboard`: OU mixing weights next to the
+  per-assembly population activity they drive.
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 
-from connectome_snns.configs.conductance_based import (
-    EXCITATORY_SYNAPSE_TYPES,
-    INHIBITORY_SYNAPSE_TYPES,
+from connectome_snns.configs.network import cell_type_sign
+
+from connectome_snns.visualization._common import (
+    raster_color_map,
+    split_synapses_by_sign,
+    title_above_axes,
 )
 from connectome_snns.visualization.connectivity import (
     plot_weighted_connectivity,
@@ -39,6 +46,27 @@ from connectome_snns.visualization.neuronal_dynamics import (
 # ===================== CONNECTIVITY DASHBOARD =====================
 
 
+def _scale_by_cell_type(
+    weights: NDArray,
+    scaling_factors: NDArray,
+    source_indices: NDArray,
+    n_source_types: int,
+    target_indices: NDArray,
+    n_target_types: int,
+) -> NDArray:
+    """Copy of ``weights[source, target]`` with each (source type, target type) block
+    scaled by ``scaling_factors[source, target]``."""
+    weights = weights.copy()
+    for source_idx in range(n_source_types):
+        source_mask = source_indices == source_idx
+        for target_idx in range(n_target_types):
+            target_mask = target_indices == target_idx
+            weights[np.ix_(source_mask, target_mask)] *= scaling_factors[
+                source_idx, target_idx
+            ]
+    return weights
+
+
 def create_connectivity_dashboard(
     weights: NDArray[np.float32],
     feedforward_weights: NDArray[np.float32],
@@ -56,6 +84,10 @@ def create_connectivity_dashboard(
     scaling_factors_FF: NDArray[np.float32] | None = None,
 ) -> plt.Figure:
     """Create a connectivity dashboard showing connectomes and weight distributions.
+
+    Layout: the feedforward and recurrent weighted connectomes stacked on the left; on
+    the right a 2x2 grid with the input-count pie chart, the weight violin plot, and
+    the mean / std weight-statistics matrices.
 
     Args:
         weights (NDArray[np.float32]): Weight matrix (N x N).
@@ -77,31 +109,27 @@ def create_connectivity_dashboard(
     Returns:
         plt.Figure: Single comprehensive dashboard figure with connectivity plots arranged.
     """
-    # Apply scaling factors if provided
+    n_cell_types = len(cell_type_names)
     if scaling_factors is not None:
-        weights = weights.copy()
-        for source_idx in range(len(cell_type_names)):
-            source_mask = cell_type_indices == source_idx
-            for target_idx in range(len(cell_type_names)):
-                target_mask = cell_type_indices == target_idx
-                scale = scaling_factors[source_idx, target_idx]
-                weights[np.ix_(target_mask, source_mask)] *= scale
-
+        weights = _scale_by_cell_type(
+            weights,
+            scaling_factors,
+            cell_type_indices,
+            n_cell_types,
+            cell_type_indices,
+            n_cell_types,
+        )
     if scaling_factors_FF is not None:
-        feedforward_weights = feedforward_weights.copy()
-        for source_idx in range(len(input_cell_type_names)):
-            source_mask = input_cell_type_indices == source_idx
-            for target_idx in range(len(cell_type_names)):
-                target_mask = cell_type_indices == target_idx
-                scale = scaling_factors_FF[source_idx, target_idx]
-                feedforward_weights[np.ix_(source_mask, target_mask)] *= scale
+        feedforward_weights = _scale_by_cell_type(
+            feedforward_weights,
+            scaling_factors_FF,
+            input_cell_type_indices,
+            len(input_cell_type_names),
+            cell_type_indices,
+            n_cell_types,
+        )
 
-    # Create main dashboard figure
     fig = plt.figure(figsize=(24, 16))
-
-    # Create layout:
-    # - Left column (2 rows): connectivity heatmaps (feedforward above weighted)
-    # - Right column (2 rows of 2 boxes): pie chart top left, violin plot top right, bottom two empty
     gs_main = fig.add_gridspec(
         2,
         2,
@@ -115,85 +143,431 @@ def create_connectivity_dashboard(
         bottom=0.05,
     )
 
-    # Top left: Feedforward connectivity
-    ax1 = fig.add_subplot(gs_main[0, 0])
-
-    # Middle left: Weighted connectivity (1.5x the size of feedforward)
-    ax2 = fig.add_subplot(gs_main[1, 0])
-
-    # Plot both connectivity matrices
+    # Left column: feedforward connectome above the (larger) recurrent one
+    ax_ff = fig.add_subplot(gs_main[0, 0])
+    ax_rec = fig.add_subplot(gs_main[1, 0])
     plot_feedforward_connectivity(
         feedforward_weights=feedforward_weights,
         input_cell_type_indices=input_cell_type_indices,
         plot_fraction=plot_fraction_feedforward,
-        ax=ax1,
+        ax=ax_ff,
         show_legend=True,
         section_title="Weighted Connectomes",
-        section_title_axes=[ax1, ax2],
+        section_title_axes=[ax_ff, ax_rec],
     )
-
     plot_weighted_connectivity(
         weights=weights,
         cell_type_indices=cell_type_indices,
         num_assemblies=num_assemblies,
         plot_fraction=plot_fraction_recurrent,
         heatmap_inches=heatmap_inches,
-        ax=ax2,
+        ax=ax_rec,
     )
 
-    # Right side: 2x2 grid (pie chart top left, violin plot top right, bottom two empty)
+    # Right column: 2x2 grid of summaries
     gs_right = gs_main[0:2, 1].subgridspec(
         2, 2, hspace=0.3, wspace=0.15, height_ratios=[1, 1]
     )
-
-    # Top left: Pie chart (shift left by adjusting position)
-    ax_pie = fig.add_subplot(gs_right[0, 0])
-    # Shift the pie chart left by 20 pixels (~0.08 figure coordinates at width=24)
-    pos = ax_pie.get_position()
-    ax_pie.set_position([pos.x0 - 0.02, pos.y0, pos.width, pos.height])
-    plot_input_count_pie_chart(
+    type_args = (
         weights,
         feedforward_weights,
         cell_type_indices,
         input_cell_type_indices,
         cell_type_names,
         input_cell_type_names,
-        ax_pie,
     )
 
-    # Top right: Violin plot
+    ax_pie = fig.add_subplot(gs_right[0, 0])
+    pos = ax_pie.get_position()  # nudge the pie chart left
+    ax_pie.set_position([pos.x0 - 0.02, pos.y0, pos.width, pos.height])
+    plot_input_count_pie_chart(*type_args, ax_pie)
+
     ax_violin = fig.add_subplot(gs_right[0, 1])
     plot_weight_distribution_by_input_type(
-        weights,
-        feedforward_weights,
-        cell_type_indices,
-        input_cell_type_indices,
-        cell_type_names,
-        input_cell_type_names,
-        connectome_mask,
-        feedforward_mask,
-        ax_violin,
+        *type_args, connectome_mask, feedforward_mask, ax_violin
     )
 
-    # Bottom left: Mean weight matrix
     ax_mean = fig.add_subplot(gs_right[1, 0])
-    # Bottom right: Std weight matrix
     ax_std = fig.add_subplot(gs_right[1, 1])
-    plot_weight_statistics_matrix(
-        weights,
-        feedforward_weights,
-        cell_type_indices,
-        input_cell_type_indices,
-        cell_type_names,
-        input_cell_type_names,
-        ax_mean,
-        ax_std,
-    )
+    plot_weight_statistics_matrix(*type_args, ax_mean, ax_std)
 
     return fig
 
 
 # ===================== ACTIVITY DASHBOARD =====================
+
+
+def _signed_currents(
+    recurrent_currents: NDArray,
+    feedforward_currents: NDArray,
+    leak_currents: NDArray,
+    cell_type_names: list[str],
+    input_cell_type_names: list[str],
+    recurrent_synapse_names: dict[str, list[str]],
+    feedforward_synapse_names: dict[str, list[str]],
+) -> tuple[NDArray, NDArray]:
+    """Total excitatory and inhibitory(+leak) currents, ``(batch, time, neurons)``.
+
+    Both are negated so that depolarising (excitatory) current plots positive and
+    hyperpolarising (inhibitory, leak) current negative.
+    """
+    exc_rec, inh_rec = split_synapses_by_sign(cell_type_names, recurrent_synapse_names)
+    exc_ff, inh_ff = split_synapses_by_sign(
+        input_cell_type_names, feedforward_synapse_names
+    )
+
+    def summed(currents, synapses):
+        return currents[:, :, :, [idx for idx, _ in synapses]].sum(axis=-1)
+
+    i_exc = -(
+        summed(recurrent_currents, exc_rec) + summed(feedforward_currents, exc_ff)
+    )
+    i_inh = -(
+        summed(recurrent_currents, inh_rec)
+        + summed(feedforward_currents, inh_ff)
+        + leak_currents
+    )
+    return i_exc, i_inh
+
+
+#: Per ``panels`` option: figure size, row height ratios and which rows hold what.
+_ACTIVITY_LAYOUTS = {
+    "raster": dict(figsize=(16, 8), height_ratios=[1, 1], rows=("spikes", "psth")),
+    "neuron": dict(
+        figsize=(16, 12),
+        height_ratios=[1, 2.0, 1],
+        rows=("voltage", "cond", "curr"),
+    ),
+    "left": dict(
+        figsize=(16, 16),
+        height_ratios=[1, 1, 1, 2.0, 1],
+        rows=("spikes", "psth", "voltage", "cond", "curr"),
+    ),
+}
+
+
+def _activity_layout(panels: str):
+    """Create the dashboard figure.
+
+    Returns ``(fig, gs_activity, gs_main, rows)``: the grid of activity rows, the outer
+    two-column grid (only for ``panels="all"``, else None) and a mapping from row name
+    (``spikes``, ``psth``, ``voltage``, ``cond``, ``curr``) to its row index.
+    """
+    layout = _ACTIVITY_LAYOUTS.get(panels)
+    if layout is not None:
+        fig = plt.figure(figsize=layout["figsize"])
+        gs_activity = fig.add_gridspec(
+            len(layout["rows"]),
+            1,
+            hspace=0.4,
+            height_ratios=layout["height_ratios"],
+            left=0.07,
+            right=0.97,
+            top=0.94,
+            bottom=0.05,
+        )
+        rows = {name: i for i, name in enumerate(layout["rows"])}
+        return fig, gs_activity, None, rows
+
+    # "all": activity (left, 2/3 width) and spiking statistics (right)
+    fig = plt.figure(figsize=(24, 16))
+    gs_main = fig.add_gridspec(
+        1,
+        2,
+        hspace=0.3,
+        wspace=0.25,
+        width_ratios=[2, 1],
+        left=0.05,
+        right=0.98,
+        top=0.94,
+        bottom=0.05,
+    )
+    gs_activity = gs_main[0, 0].subgridspec(
+        5, 1, hspace=0.4, height_ratios=[1, 1, 1, 2.0, 1]
+    )
+    rows = {name: i for i, name in enumerate(_ACTIVITY_LAYOUTS["left"]["rows"])}
+    return fig, gs_activity, gs_main, rows
+
+
+def _sample_raster_neurons(
+    output_spikes: NDArray,
+    input_spikes: NDArray,
+    cell_type_indices: NDArray,
+    n_neurons_plot: int,
+    dt: float,
+    random_seed: int,
+) -> tuple[NDArray, NDArray]:
+    """Pick feedforward + recurrent neurons for the network raster.
+
+    The two populations are sampled in proportion to their sizes. Recurrent neurons
+    are taken per cell type (proportionally), choosing those whose rate is closest to
+    their type's mean; input neurons are drawn at random (seeding NumPy's global RNG
+    with ``random_seed``).
+
+    Returns:
+        ``(spikes, cell_type_indices)`` of the sample, inputs first with index -1.
+    """
+    n_input_neurons = input_spikes.shape[2]
+    n_output_neurons = output_spikes.shape[2]
+    n_input_plot = max(
+        1, int(n_neurons_plot * n_input_neurons / (n_input_neurons + n_output_neurons))
+    )
+    n_output_plot = n_neurons_plot - n_input_plot
+
+    duration_s = output_spikes.shape[1] * dt * 1e-3
+    output_rates = output_spikes[0].sum(axis=0) / duration_s
+    selected = []
+    for ct in np.unique(cell_type_indices):
+        ct_indices = np.where(cell_type_indices == ct)[0]
+        n_ct = max(1, round(n_output_plot * len(ct_indices) / n_output_neurons))
+        ct_mean = output_rates[ct_indices].mean()
+        closest = ct_indices[np.argsort(np.abs(output_rates[ct_indices] - ct_mean))]
+        selected.extend(closest[:n_ct].tolist())
+    output_indices = np.array(selected[:n_output_plot])
+
+    np.random.seed(random_seed)
+    input_indices = np.random.choice(n_input_neurons, n_input_plot, replace=False)
+
+    spikes = np.concatenate(
+        [input_spikes[:, :, input_indices], output_spikes[:, :, output_indices]],
+        axis=2,
+    )
+    indices = np.concatenate(
+        [np.full(n_input_plot, -1), cell_type_indices[output_indices]]
+    )
+    return spikes, indices
+
+
+def _plot_raster_and_psth(
+    fig, gs_activity, rows, inputs: dict, n_neurons_plot, window_size, random_seed
+) -> tuple[plt.Axes, plt.Axes]:
+    """Network raster (feedforward + recurrent) above the PSTH."""
+    output_spikes = inputs["output_spikes"]
+    cell_type_names = inputs["cell_type_names"]
+    combined_spikes, combined_indices = _sample_raster_neurons(
+        output_spikes,
+        inputs["input_spikes"],
+        inputs["cell_type_indices"],
+        n_neurons_plot,
+        inputs["dt"],
+        random_seed,
+    )
+
+    ax_spikes = fig.add_subplot(gs_activity[rows["spikes"], 0])
+    plot_spike_trains(
+        spikes=combined_spikes,
+        dt=inputs["dt"],
+        cell_type_indices=combined_indices,
+        cell_type_names=["Feedforward"] + cell_type_names,
+        n_neurons_plot=n_neurons_plot,
+        fraction=1.0,
+        random_seed=None,  # already sampled
+        title="Network Spike Trains (Feedforward + Recurrent)",
+        ylabel="",
+        ax=ax_spikes,
+        cell_type_colors=raster_color_map(len(cell_type_names)),
+    )
+
+    ax_psth = fig.add_subplot(gs_activity[rows["psth"], 0])
+    plot_psth(
+        spike_trains=output_spikes,
+        cell_type_indices=inputs["cell_type_indices"],
+        cell_type_names=cell_type_names,
+        window_size=window_size,
+        dt=inputs["dt"],
+        ax=ax_psth,
+        input_spike_trains=inputs["input_spikes"],
+    )
+    return ax_spikes, ax_psth
+
+
+def _merge_raster_legends(fig, ax_spikes, ax_psth) -> None:
+    """Replace the raster and PSTH legends with one figure legend between them."""
+    raster_leg = ax_spikes.get_legend()
+    psth_leg = ax_psth.get_legend()
+    if raster_leg is not None:
+        handles = raster_leg.legend_handles
+        labels = [t.get_text() for t in raster_leg.get_texts()]
+        raster_leg.remove()
+    else:
+        handles, labels = [], []
+    if psth_leg is not None:
+        psth_leg.remove()
+
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="center right",
+            bbox_to_anchor=(0.97, 0.495),
+            bbox_transform=fig.transFigure,
+            ncol=1,
+            frameon=True,
+        )
+
+
+def _select_example_neuron(
+    output_spikes: NDArray,
+    recurrent_conductances: NDArray,
+    cell_type_indices: NDArray,
+    cell_type_names: list[str],
+    recurrent_synapse_names: dict[str, list[str]],
+    dt: float,
+    assembly_ids: NDArray | None,
+) -> int:
+    """Choose a representative excitatory neuron for the single-neuron panels.
+
+    Candidates are excitatory neurons (restricted to assembly 0 if ``assembly_ids`` is
+    given) that spiked and received both excitatory and inhibitory recurrent
+    conductance. The candidate whose rate is closest to the mean excitatory rate wins;
+    failing that, the first excitatory neuron; failing that, neuron 0.
+    """
+    exc_neuron_indices = [
+        i
+        for i, cell_type_idx in enumerate(cell_type_indices)
+        if cell_type_sign(cell_type_names[cell_type_idx]) == "excitatory"
+    ]
+    if assembly_ids is not None:
+        first_assembly_mask = assembly_ids == 0
+        exc_neuron_indices = [
+            idx for idx in exc_neuron_indices if first_assembly_mask[idx]
+        ]
+    if len(exc_neuron_indices) == 0:
+        return 0
+
+    n_steps_plot = output_spikes.shape[1]  # the full duration
+    g_total = recurrent_conductances.sum(axis=3)  # sum rise/decay components
+    exc_synapses, inh_synapses = split_synapses_by_sign(
+        cell_type_names, recurrent_synapse_names
+    )
+    exc_syn_indices = [idx for idx, _ in exc_synapses]
+    inh_syn_indices = [idx for idx, _ in inh_synapses]
+
+    def receives(cand, syn_indices):
+        if not syn_indices:
+            return False
+        return g_total[0, -n_steps_plot:, cand, syn_indices].sum() > 0
+
+    candidates = [
+        cand
+        for cand in exc_neuron_indices
+        if output_spikes[0, -n_steps_plot:, cand].sum() > 0
+        and receives(cand, exc_syn_indices)
+        and receives(cand, inh_syn_indices)
+    ]
+    if len(candidates) == 0:
+        return exc_neuron_indices[0]
+
+    duration_s = output_spikes.shape[1] * dt * 1e-3
+    exc_mean_rate = (
+        output_spikes[0][:, exc_neuron_indices].sum(axis=0) / duration_s
+    ).mean()
+    candidate_rates = np.array(
+        [output_spikes[0, :, n].sum() / duration_s for n in candidates]
+    )
+    return candidates[np.argmin(np.abs(candidate_rates - exc_mean_rate))]
+
+
+def _plot_example_neuron(fig, gs_activity, rows, inputs: dict, neuron: int) -> None:
+    """Membrane voltage, conductances (E, I, FF) and input currents of one neuron."""
+    dt = inputs["dt"]
+    neuron_types = inputs["neuron_types"]
+
+    ax_voltage = fig.add_subplot(gs_activity[rows["voltage"], 0])
+    plot_membrane_voltages(
+        voltages=inputs["voltages"][:, :, [neuron]],
+        spikes=inputs["output_spikes"][:, :, [neuron]],
+        neuron_types=neuron_types[[neuron]],
+        delta_t=dt,
+        neuron_params=inputs["neuron_params"],
+        n_neurons_plot=1,
+        fraction=1.0,
+        y_min=-80.0,
+        y_max=-20.0,
+        y_tick_step=20.0,
+        ax=[ax_voltage],
+    )
+    ax_voltage.set_title("Membrane Potential", loc="center", pad=10)
+
+    gs_conductances = gs_activity[rows["cond"], 0].subgridspec(3, 1, hspace=0.2)
+    conductance_axes = [fig.add_subplot(gs_conductances[i, 0]) for i in range(3)]
+    plot_synaptic_conductances(
+        # sum the rise/decay components (axis 3) into total conductances
+        recurrent_conductances=inputs["recurrent_conductances"].sum(axis=3),
+        feedforward_conductances=inputs["feedforward_conductances"].sum(axis=3),
+        cell_type_indices=inputs["cell_type_indices"],
+        cell_type_names=inputs["cell_type_names"],
+        input_cell_type_names=inputs["input_cell_type_names"],
+        recurrent_synapse_names=inputs["recurrent_synapse_names"],
+        feedforward_synapse_names=inputs["feedforward_synapse_names"],
+        dt=dt,
+        neuron_id=neuron,
+        fraction=1.0,
+        ax=conductance_axes,
+    )
+    conductance_axes[0].set_title("Conductances", loc="center", pad=10)
+
+    i_exc, i_inh = _signed_currents(
+        inputs["recurrent_currents"],
+        inputs["feedforward_currents"],
+        inputs["leak_currents"],
+        inputs["cell_type_names"],
+        inputs["input_cell_type_names"],
+        inputs["recurrent_synapse_names"],
+        inputs["feedforward_synapse_names"],
+    )
+    i_exc, i_inh = i_exc[:, :, [neuron]], i_inh[:, :, [neuron]]
+    ax_currents = fig.add_subplot(gs_activity[rows["curr"], 0])
+    plot_synaptic_currents(
+        I_exc=i_exc,
+        I_inh=i_inh,  # includes the leak current
+        I_tot=i_exc + i_inh,
+        delta_t=dt,
+        n_neurons_plot=1,
+        fraction=1.0,
+        show_total=False,
+        neuron_types=neuron_types[[neuron]],
+        neuron_params=inputs["neuron_params"],
+        ax=[ax_currents],
+    )
+    ax_currents.set_title("Input Currents", loc="center", pad=10)
+
+
+def _plot_spiking_statistics(fig, gs_column, inputs: dict) -> None:
+    """Right column: firing-rate, CV, ISI and Fano-factor rows, one panel per type."""
+    output_spikes = inputs["output_spikes"]
+    common = dict(
+        cell_type_indices=inputs["cell_type_indices"],
+        cell_type_names=inputs["cell_type_names"],
+        dt=inputs["dt"],
+    )
+    n_cell_types = len(inputs["cell_type_names"])
+    gs_statistics = gs_column.subgridspec(4, 1, hspace=0.6)
+
+    def row_axes(row):
+        gs_row = gs_statistics[row, 0].subgridspec(1, n_cell_types, wspace=0.3)
+        return [fig.add_subplot(gs_row[0, i]) for i in range(n_cell_types)]
+
+    axes = row_axes(0)
+    plot_firing_rate_distribution(output_spikes=output_spikes, ax=axes, **common)
+    title_above_axes(fig, axes, "Firing Rate Distribution")
+
+    axes = row_axes(1)
+    plot_cv_histogram(spike_trains=output_spikes, bins=50, ax=axes, **common)
+    title_above_axes(fig, axes, "Coefficient of Variation")
+
+    axes = row_axes(2)
+    plot_isi_histogram(spike_trains=output_spikes, bins=50, ax=axes, **common)
+    title_above_axes(fig, axes, "Inter-Spike Interval")
+
+    axes = row_axes(3)
+    plot_fano_factor_vs_window_size(
+        spike_trains=output_spikes,
+        window_sizes=np.logspace(0, 3, 20).astype(int),  # 1 to 1000 steps
+        ax=axes,
+        **common,
+    )
+    title_above_axes(fig, axes, "Fano Factor")
 
 
 def create_activity_dashboard(
@@ -223,6 +597,11 @@ def create_activity_dashboard(
 ) -> plt.Figure:
     """Create a comprehensive activity dashboard with two columns: Activity and Spiking Statistics.
 
+    The left column shows a network raster (feedforward + recurrent), the PSTH and one
+    example excitatory neuron's membrane voltage, conductances and currents; the right
+    column shows per-cell-type firing-rate, CV, ISI and Fano-factor statistics. The
+    selected example neuron index is printed.
+
     Args:
         output_spikes (NDArray[np.int32]): Output spike array with shape (batch, time, neurons).
         input_spikes (NDArray[np.int32]): Input spike array with shape (batch, time, neurons).
@@ -242,8 +621,10 @@ def create_activity_dashboard(
         feedforward_synapse_names (dict[str, list[str]]): Synapse names for each feedforward cell type.
         window_size (float): Window size for PSTH in milliseconds. Defaults to 50.0.
         n_neurons_plot (int): Number of neurons to plot in raster. Defaults to 20.
-        fraction (float): Fraction of duration to plot (0-1). Defaults to 1.0.
-        random_seed (int): Random seed for shuffling neurons. Defaults to 42.
+        fraction (float): Unused; every panel shows the full duration. Kept for
+            backward compatibility. Defaults to 1.0.
+        random_seed (int): Random seed for sampling input neurons for the raster
+            (seeds NumPy's global RNG). Defaults to 42.
         assembly_ids (NDArray[np.int32] | None): Optional array of assembly IDs for each neuron.
             If provided, neuron selection for detailed plots is limited to the first assembly (index 0).
         neuron_idx (int | None): Override auto-selected neuron index for single-neuron plots.
@@ -256,491 +637,52 @@ def create_activity_dashboard(
     Returns:
         plt.Figure: Matplotlib figure object containing the activity dashboard.
     """
-    n_cell_types = len(cell_type_names)
-
-    # Split currents into excitatory and inhibitory
-    # Get synapse indices for exc/inh classification
-
-    # Build synapse indices for recurrent currents
-    exc_indices_recurrent = []
-    inh_indices_recurrent = []
-    synapse_idx = 0
-    for cell_name in cell_type_names:
-        synapse_names_list = recurrent_synapse_names[cell_name]
-        for syn_name in synapse_names_list:
-            if syn_name in EXCITATORY_SYNAPSE_TYPES:
-                exc_indices_recurrent.append(synapse_idx)
-            elif syn_name in INHIBITORY_SYNAPSE_TYPES:
-                inh_indices_recurrent.append(synapse_idx)
-            synapse_idx += 1
-
-    # Build synapse indices for feedforward currents
-    exc_indices_ff = []
-    inh_indices_ff = []
-    synapse_idx = 0
-    for cell_name in input_cell_type_names:
-        synapse_names_list = feedforward_synapse_names[cell_name]
-        for syn_name in synapse_names_list:
-            if syn_name in EXCITATORY_SYNAPSE_TYPES:
-                exc_indices_ff.append(synapse_idx)
-            elif syn_name in INHIBITORY_SYNAPSE_TYPES:
-                inh_indices_ff.append(synapse_idx)
-            synapse_idx += 1
-
-    # Sum currents across excitatory and inhibitory synapses
-    # Negate currents so that depolarizing (excitatory) appears positive and hyperpolarizing (inhibitory) appears negative
-    I_exc_recurrent = recurrent_currents[:, :, :, exc_indices_recurrent].sum(axis=-1)
-    I_exc_ff = feedforward_currents[:, :, :, exc_indices_ff].sum(axis=-1)
-    I_exc = -(I_exc_recurrent + I_exc_ff)  # Negate to flip sign for plotting
-
-    I_inh_recurrent = recurrent_currents[:, :, :, inh_indices_recurrent].sum(axis=-1)
-    I_inh_ff = feedforward_currents[:, :, :, inh_indices_ff].sum(axis=-1)
-    # Combine inhibitory and leak currents (both hyperpolarizing), then negate for plotting
-    I_inh = -(
-        I_inh_recurrent + I_inh_ff + leak_currents
-    )  # Negate to flip sign for plotting
-
-    if panels == "raster":
-        fig = plt.figure(figsize=(16, 8))
-        gs_activity = fig.add_gridspec(
-            2,
-            1,
-            hspace=0.4,
-            height_ratios=[1, 1],
-            left=0.07,
-            right=0.97,
-            top=0.94,
-            bottom=0.05,
-        )
-        row_spikes, row_psth = 0, 1
-        row_voltage, row_cond, row_curr = None, None, None
-    elif panels == "neuron":
-        fig = plt.figure(figsize=(16, 12))
-        gs_activity = fig.add_gridspec(
-            3,
-            1,
-            hspace=0.4,
-            height_ratios=[1, 2.0, 1],
-            left=0.07,
-            right=0.97,
-            top=0.94,
-            bottom=0.05,
-        )
-        row_spikes, row_psth = None, None
-        row_voltage, row_cond, row_curr = 0, 1, 2
-    elif panels == "left":
-        fig = plt.figure(figsize=(16, 16))
-        gs_activity = fig.add_gridspec(
-            5,
-            1,
-            hspace=0.4,
-            height_ratios=[1, 1, 1, 2.0, 1],
-            left=0.07,
-            right=0.97,
-            top=0.94,
-            bottom=0.05,
-        )
-        row_spikes, row_psth = 0, 1
-        row_voltage, row_cond, row_curr = 2, 3, 4
-    else:  # "all"
-        # Create figure with 2 columns: Activity (left) and Spiking Statistics (right)
-        fig = plt.figure(figsize=(24, 16))
-        gs_main = fig.add_gridspec(
-            1,
-            2,
-            hspace=0.3,
-            wspace=0.25,
-            width_ratios=[2, 1],
-            left=0.05,
-            right=0.98,
-            top=0.94,
-            bottom=0.05,
-        )
-        gs_activity = gs_main[0, 0].subgridspec(
-            5, 1, hspace=0.4, height_ratios=[1, 1, 1, 2.0, 1]
-        )
-        row_spikes, row_psth = 0, 1
-        row_voltage, row_cond, row_curr = 2, 3, 4
-
-    if panels != "neuron":
-        # Row 0: Combined input and output spike trains
-        # Sample neurons maintaining network ratios
-        n_input_neurons = input_spikes.shape[2]
-        n_output_neurons = output_spikes.shape[2]
-        n_total = n_input_neurons + n_output_neurons
-
-        # Calculate how many of each type to plot (maintain ratio)
-        n_input_plot = max(1, int(n_neurons_plot * n_input_neurons / n_total))
-        n_output_plot = n_neurons_plot - n_input_plot
-
-        # Select output neurons near each cell type's mean firing rate (proportional representation)
-        duration_s = output_spikes.shape[1] * dt * 1e-3
-        output_rates = output_spikes[0].sum(axis=0) / duration_s  # (n_neurons,)
-        unique_cell_types = np.unique(cell_type_indices)
-        selected_output_list = []
-        for ct in unique_cell_types:
-            ct_mask = cell_type_indices == ct
-            ct_indices = np.where(ct_mask)[0]
-            n_ct = max(1, round(n_output_plot * len(ct_indices) / n_output_neurons))
-            ct_mean = output_rates[ct_indices].mean()
-            closest = ct_indices[np.argsort(np.abs(output_rates[ct_indices] - ct_mean))]
-            selected_output_list.extend(closest[:n_ct].tolist())
-        output_indices = np.array(selected_output_list[:n_output_plot])
-
-        # Input neurons: random (all driven by same Poisson process, rates roughly uniform)
-        np.random.seed(random_seed)
-        input_indices = np.random.choice(n_input_neurons, n_input_plot, replace=False)
-
-        # Concatenate spikes: (batch, time, neurons)
-        combined_spikes = np.concatenate(
-            [input_spikes[:, :, input_indices], output_spikes[:, :, output_indices]],
-            axis=2,
-        )
-
-        # Create combined cell type indices and names
-        # Input neurons get a special "feedforward" index
-        combined_cell_type_indices = np.concatenate(
-            [
-                np.full(n_input_plot, -1),  # -1 for feedforward
-                cell_type_indices[output_indices],
-            ]
-        )
-        combined_cell_type_names = ["Feedforward"] + cell_type_names
-
-        ax_combined_spikes = fig.add_subplot(gs_activity[row_spikes, 0])
-        # Use red/blue for exc/inh to match PSTH, firing rate, and conductance plots
-        n_cell_types = len(cell_type_names)
-        from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
-
-        raster_base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-        if n_cell_types <= 2:
-            raster_rec_colors = raster_base_colors[:n_cell_types]
-        else:
-            raster_cmap = plt.cm.get_cmap("tab10")
-            raster_rec_colors = raster_base_colors + [
-                raster_cmap(i) for i in range(n_cell_types - 2)
-            ]
-        raster_colors = {-1: "#808080"}  # Gray for feedforward
-        for i in range(n_cell_types):
-            raster_colors[i] = raster_rec_colors[i]
-
-        plot_spike_trains(
-            spikes=combined_spikes,
-            dt=dt,
-            cell_type_indices=combined_cell_type_indices,
-            cell_type_names=combined_cell_type_names,
-            n_neurons_plot=n_neurons_plot,
-            fraction=1.0,
-            random_seed=None,  # Already sampled
-            title="Network Spike Trains (Feedforward + Recurrent)",
-            ylabel="",
-            ax=ax_combined_spikes,
-            cell_type_colors=raster_colors,
-        )
-
-        # Row 1: PSTH
-        ax_psth = fig.add_subplot(gs_activity[row_psth, 0])
-        plot_psth(
-            spike_trains=output_spikes,
-            cell_type_indices=cell_type_indices,
-            cell_type_names=cell_type_names,
-            window_size=window_size,
-            dt=dt,
-            ax=ax_psth,
-            input_spike_trains=input_spikes,
-        )
-
-    if panels == "raster":
-        # Consolidate the two individual legends into one, placed between the subplots
-        raster_leg = ax_combined_spikes.get_legend()
-        psth_leg = ax_psth.get_legend()
-
-        if raster_leg is not None:
-            handles = raster_leg.legend_handles
-            labels = [t.get_text() for t in raster_leg.get_texts()]
-        else:
-            handles, labels = [], []
-
-        if raster_leg is not None:
-            raster_leg.remove()
-        if psth_leg is not None:
-            psth_leg.remove()
-
-        if handles:
-            # Place legend in the gap between the two subplots, right-hand side
-            fig.legend(
-                handles,
-                labels,
-                loc="center right",
-                bbox_to_anchor=(0.97, 0.495),
-                bbox_transform=fig.transFigure,
-                ncol=1,
-                frameon=True,
-            )
-        return fig
-
-    # Row 2: Membrane voltages (1 excitatory neuron only)
-    # Find a suitable excitatory neuron that:
-    # 1. Is excitatory
-    # 2. Has fired in the time window
-    # 3. Has received excitatory recurrent input (conductance > 0)
-    # 4. Has received inhibitory input (conductance > 0)
-
-    n_steps = output_spikes.shape[1]
-    n_steps_plot = n_steps  # Use full duration for neuron selection
-
-    # Sum over rise/decay components for neuron selection
-    recurrent_g_total_for_selection = recurrent_conductances.sum(
-        axis=3
-    )  # (batch, time, neurons, n_synapses)
-
-    # Find excitatory neurons
-    exc_neuron_indices = []
-    for i, cell_type_idx in enumerate(cell_type_indices):
-        cell_name = cell_type_names[cell_type_idx].lower()
-        if "excit" in cell_name:
-            exc_neuron_indices.append(i)
-
-    # If assembly_ids provided, filter to first assembly (index 0)
-    if assembly_ids is not None:
-        first_assembly_mask = assembly_ids == 0
-        exc_neuron_indices = [
-            idx for idx in exc_neuron_indices if first_assembly_mask[idx]
-        ]
-
-    selected_neuron = None
-
-    if len(exc_neuron_indices) > 0:
-        # Build synapse indices across ALL cell types (same as in plotting function)
-        exc_syn_indices = []
-        inh_syn_indices = []
-        synapse_idx = 0
-        for cell_name in cell_type_names:
-            synapse_names_list = recurrent_synapse_names[cell_name]
-            for syn_name in synapse_names_list:
-                if syn_name in EXCITATORY_SYNAPSE_TYPES:
-                    exc_syn_indices.append(synapse_idx)
-                elif syn_name in INHIBITORY_SYNAPSE_TYPES:
-                    inh_syn_indices.append(synapse_idx)
-                synapse_idx += 1
-
-        candidates = []
-        for cand in exc_neuron_indices:
-            # Check if neuron has spiked in the time window
-            has_spiked = output_spikes[0, -n_steps_plot:, cand].sum() > 0
-
-            # Check if neuron has received excitatory recurrent input
-            has_exc_input = False
-            if exc_syn_indices:
-                exc_conductance_sum = recurrent_g_total_for_selection[
-                    0, -n_steps_plot:, cand, exc_syn_indices
-                ].sum()
-                has_exc_input = exc_conductance_sum > 0
-
-            # Check if neuron has received inhibitory input
-            has_inh_input = False
-            if inh_syn_indices:
-                inh_conductance_sum = recurrent_g_total_for_selection[
-                    0, -n_steps_plot:, cand, inh_syn_indices
-                ].sum()
-                has_inh_input = inh_conductance_sum > 0
-
-            if has_spiked and has_exc_input and has_inh_input:
-                candidates.append(cand)
-
-        # Pick the candidate closest to the mean firing rate of all excitatory neurons
-        if len(candidates) > 0:
-            duration_s = output_spikes.shape[1] * dt * 1e-3
-            exc_mean_rate = (
-                output_spikes[0, :, exc_neuron_indices].sum(axis=0) / duration_s
-            ).mean()
-            candidate_rates = np.array(
-                [output_spikes[0, :, n].sum() / duration_s for n in candidates]
-            )
-            selected_neuron = candidates[
-                np.argmin(np.abs(candidate_rates - exc_mean_rate))
-            ]
-        else:
-            selected_neuron = exc_neuron_indices[0]
-    else:
-        # No excitatory neurons found, use first neuron
-        selected_neuron = 0
-
-    # Override with explicit index if provided
-    if neuron_idx is not None:
-        selected_neuron = neuron_idx
-
-    print(f"Selected neuron index: {selected_neuron}")
-
-    # Create single axis for 1 neuron
-    ax_voltage = fig.add_subplot(gs_activity[row_voltage, 0])
-
-    # Subset voltages and spikes for selected neuron
-    voltages_subset = voltages[:, :, [selected_neuron]]
-    spikes_subset = output_spikes[:, :, [selected_neuron]]
-    neuron_types_subset = neuron_types[[selected_neuron]]
-
-    plot_membrane_voltages(
-        voltages=voltages_subset,
-        spikes=spikes_subset,
-        neuron_types=neuron_types_subset,
-        delta_t=dt,
-        neuron_params=neuron_params,
-        n_neurons_plot=1,
-        fraction=1.0,
-        y_min=-80.0,
-        y_max=-20.0,
-        y_tick_step=20.0,
-        ax=[ax_voltage],
-    )
-    # Add title for membrane potential
-    ax_voltage.set_title("Membrane Potential", loc="center", pad=10)
-
-    # Row 3: Conductances (combined: E, I, Feedforward)
-    # Use the same selected neuron as for membrane voltage
-    # Show only 10% of the time range for detailed view
-    # Sum over rise/decay components (axis 3) to get total conductances
-    recurrent_g_total = recurrent_conductances.sum(
-        axis=3
-    )  # (batch, time, neurons, n_synapses)
-    feedforward_g_total = feedforward_conductances.sum(
-        axis=3
-    )  # (batch, time, neurons, n_synapses)
-
-    gs_conductances = gs_activity[row_cond, 0].subgridspec(3, 1, hspace=0.2)
-    conductance_axes = [fig.add_subplot(gs_conductances[i, 0]) for i in range(3)]
-    plot_synaptic_conductances(
-        recurrent_conductances=recurrent_g_total,
-        feedforward_conductances=feedforward_g_total,
+    inputs = dict(
+        output_spikes=output_spikes,
+        input_spikes=input_spikes,
         cell_type_indices=cell_type_indices,
         cell_type_names=cell_type_names,
+        dt=dt,
+        voltages=voltages,
+        neuron_types=neuron_types,
+        neuron_params=neuron_params,
+        recurrent_currents=recurrent_currents,
+        feedforward_currents=feedforward_currents,
+        leak_currents=leak_currents,
+        recurrent_conductances=recurrent_conductances,
+        feedforward_conductances=feedforward_conductances,
         input_cell_type_names=input_cell_type_names,
         recurrent_synapse_names=recurrent_synapse_names,
         feedforward_synapse_names=feedforward_synapse_names,
-        dt=dt,
-        neuron_id=selected_neuron,
-        fraction=1.0,
-        ax=conductance_axes,
     )
-    # Add title for conductances
-    conductance_axes[0].set_title("Conductances", loc="center", pad=10)
+    fig, gs_activity, gs_main, rows = _activity_layout(panels)
 
-    # Row 4: Currents (same selected neuron)
-    # Subset currents for the selected neuron
-    I_exc_subset = I_exc[:, :, [selected_neuron]]
-    I_inh_subset = I_inh[:, :, [selected_neuron]]  # Already includes leak current
-    I_tot = I_exc_subset + I_inh_subset
-    neuron_types_subset_current = neuron_types[[selected_neuron]]
+    if panels != "neuron":
+        ax_spikes, ax_psth = _plot_raster_and_psth(
+            fig, gs_activity, rows, inputs, n_neurons_plot, window_size, random_seed
+        )
+    if panels == "raster":
+        _merge_raster_legends(fig, ax_spikes, ax_psth)
+        return fig
 
-    ax_currents = fig.add_subplot(gs_activity[row_curr, 0])
-    plot_synaptic_currents(
-        I_exc=I_exc_subset,
-        I_inh=I_inh_subset,
-        I_tot=I_tot,
-        delta_t=dt,
-        n_neurons_plot=1,
-        fraction=1.0,
-        show_total=False,
-        neuron_types=neuron_types_subset_current,
-        neuron_params=neuron_params,
-        ax=[ax_currents],
+    selected_neuron = _select_example_neuron(
+        output_spikes,
+        recurrent_conductances,
+        cell_type_indices,
+        cell_type_names,
+        recurrent_synapse_names,
+        dt,
+        assembly_ids,
     )
-    # Add title for currents
-    ax_currents.set_title("Input Currents", loc="center", pad=10)
+    if neuron_idx is not None:
+        selected_neuron = neuron_idx
+    print(f"Selected neuron index: {selected_neuron}")
+    _plot_example_neuron(fig, gs_activity, rows, inputs, selected_neuron)
 
     if panels in ("left", "neuron"):
         return fig
 
-    # RIGHT COLUMN: Spiking Statistics (CV, firing rate, ISI, Fano factor)
-    gs_statistics = gs_main[0, 1].subgridspec(4, 1, hspace=0.6)
-
-    # Row 0: Firing rate distribution
-    gs_firing_rate = gs_statistics[0, 0].subgridspec(1, n_cell_types, wspace=0.3)
-    firing_rate_axes = [
-        fig.add_subplot(gs_firing_rate[0, i]) for i in range(n_cell_types)
-    ]
-    plot_firing_rate_distribution(
-        output_spikes=output_spikes,
-        cell_type_indices=cell_type_indices,
-        cell_type_names=cell_type_names,
-        dt=dt,
-        ax=firing_rate_axes,
-    )
-    # Add row title centered over the histograms
-    bbox = firing_rate_axes[0].get_position()
-    bbox_right = firing_rate_axes[-1].get_position()
-    x_center = (bbox.x0 + bbox_right.x1) / 2
-    y_top = bbox.y1 + 0.01
-    fig.text(
-        x_center,
-        y_top,
-        "Firing Rate Distribution",
-        ha="center",
-        va="bottom",
-    )
-
-    # Row 1: CV histogram
-    gs_cv = gs_statistics[1, 0].subgridspec(1, n_cell_types, wspace=0.3)
-    cv_axes = [fig.add_subplot(gs_cv[0, i]) for i in range(n_cell_types)]
-    plot_cv_histogram(
-        spike_trains=output_spikes,
-        cell_type_indices=cell_type_indices,
-        cell_type_names=cell_type_names,
-        dt=dt,
-        bins=50,
-        ax=cv_axes,
-    )
-    # Add row title centered over the histograms
-    bbox = cv_axes[0].get_position()
-    bbox_right = cv_axes[-1].get_position()
-    x_center = (bbox.x0 + bbox_right.x1) / 2
-    y_top = bbox.y1 + 0.01
-    fig.text(
-        x_center,
-        y_top,
-        "Coefficient of Variation",
-        ha="center",
-        va="bottom",
-    )
-
-    # Row 2: ISI histogram
-    gs_isi = gs_statistics[2, 0].subgridspec(1, n_cell_types, wspace=0.3)
-    isi_axes = [fig.add_subplot(gs_isi[0, i]) for i in range(n_cell_types)]
-    plot_isi_histogram(
-        spike_trains=output_spikes,
-        cell_type_indices=cell_type_indices,
-        cell_type_names=cell_type_names,
-        dt=dt,
-        bins=50,
-        ax=isi_axes,
-    )
-    # Add row title centered over the histograms
-    bbox = isi_axes[0].get_position()
-    bbox_right = isi_axes[-1].get_position()
-    x_center = (bbox.x0 + bbox_right.x1) / 2
-    y_top = bbox.y1 + 0.01
-    fig.text(x_center, y_top, "Inter-Spike Interval", ha="center", va="bottom")
-
-    # Row 3: Fano factor vs window size
-    gs_fano = gs_statistics[3, 0].subgridspec(1, n_cell_types, wspace=0.3)
-    fano_axes = [fig.add_subplot(gs_fano[0, i]) for i in range(n_cell_types)]
-    # Define window sizes for Fano factor analysis
-    window_sizes = np.logspace(0, 3, 20).astype(int)  # 1 to 1000 steps
-    plot_fano_factor_vs_window_size(
-        spike_trains=output_spikes,
-        window_sizes=window_sizes,
-        cell_type_indices=cell_type_indices,
-        cell_type_names=cell_type_names,
-        dt=dt,
-        ax=fano_axes,
-    )
-    # Add row title centered over the histograms
-    bbox = fano_axes[0].get_position()
-    bbox_right = fano_axes[-1].get_position()
-    x_center = (bbox.x0 + bbox_right.x1) / 2
-    y_top = bbox.y1 + 0.01
-    fig.text(x_center, y_top, "Fano Factor", ha="center", va="bottom")
-
+    _plot_spiking_statistics(fig, gs_main[0, 1], inputs)
     return fig
 
 
@@ -774,25 +716,22 @@ def create_assembly_activity_dashboard(
     if ou_process_weights.ndim == 3:
         ou_process_weights = ou_process_weights[0]
 
-    # Generate shared color palette for assemblies/odourants
-    n_odourants = ou_process_weights.shape[-1]
-    colors = plt.cm.tab20(np.linspace(0, 1, n_odourants))
+    # One colour per assembly / input pattern, shared by both panels
+    n_patterns = ou_process_weights.shape[-1]
+    colors = plt.cm.tab20(np.linspace(0, 1, n_patterns))
 
-    # Left panel: OU process weights
     plot_ou_process_weights(
         weights=ou_process_weights,
         dt=dt,
         ax=axes[0],
-        title="Odourant Mixing Coefficient",
+        title="Pattern Mixing Coefficient",
         colors=colors,
     )
-
-    # Right panel: assembly population activity
     plot_assembly_population_activity(
         spike_trains=output_spikes,
         cell_type_indices=cell_type_indices,
         assembly_ids=assembly_ids,
-        window_size=200.0,  # Gaussian kernel std in ms
+        window_size=200.0,  # smoothing window in ms
         dt=dt,
         excitatory_idx=excitatory_idx,
         title="Assembly Population Activity",

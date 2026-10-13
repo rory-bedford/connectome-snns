@@ -1,7 +1,5 @@
-"""
-Script contains functions to perturb the connectome weight matrices
-to test the robustness of student training.
-"""
+"""Perturbing connectome weights by cell-type scaling factors, to test whether a
+student can recover them."""
 
 import numpy as np
 from numpy.typing import NDArray
@@ -39,78 +37,34 @@ def perturb_weights_scaling_factor(
         target_scaling_factors: Reciprocal of applied scaling factors, or None if not optimizing recurrent.
         target_feedforward_scaling_factors: Reciprocal of applied scaling factors, or None if not optimizing feedforward.
     """
-    # Get unique cell types
-    unique_cell_types = np.unique(cell_type_indices)
-    unique_ff_cell_types = np.unique(feedforward_cell_type_indices)
-    n_recurrent_types = len(unique_cell_types)
-    n_ff_types = len(unique_ff_cell_types)
-
-    # Sample scaling factors per pre-post cell type pair from log-normal with mean=1
-    # For log-normal: mean = exp(mu + sigma^2/2), we want mean=1, so mu = -sigma^2/2
+    n_types = len(np.unique(cell_type_indices))
+    n_ff_types = len(np.unique(feedforward_cell_type_indices))
+    # Log-normal with mean 1: mu = -sigma^2 / 2.
     sigma = np.sqrt(variance)
     mu = -(sigma**2) / 2.0
 
-    # Determine which weights to perturb based on optimization mode
-    perturb_recurrent = optimisable in ["scaling_factors", "scaling_factors_recurrent"]
-    perturb_feedforward = optimisable in [
-        "scaling_factors",
-        "scaling_factors_feedforward",
-    ]
-
-    # Initialize outputs
-    target_scaling_factors = None
-    target_feedforward_scaling_factors = None
-
-    # Perturb recurrent weights if optimizing recurrent scaling factors
-    if perturb_recurrent:
-        # Draw scaling factors for recurrent connections: n_types x n_types matrix
-        # recurrent_scalings[i, j] = scaling for connections from type i to type j
-        recurrent_scalings = np.random.lognormal(
-            mean=mu, sigma=sigma, size=(n_recurrent_types, n_recurrent_types)
+    def perturb(w, pre_types, n_pre_types, enabled):
+        """Scale each (pre type, post type) block by one draw; return the targets."""
+        if not enabled:
+            return w.copy(), None
+        scalings = np.random.lognormal(
+            mean=mu, sigma=sigma, size=(n_pre_types, n_types)
         )
+        # The student must learn the reciprocal to undo the perturbation.
+        return w * scalings[np.ix_(pre_types, cell_type_indices)], 1.0 / scalings
 
-        # Apply scaling to recurrent weights
-        # For each connection weights[i, j], scale by recurrent_scalings[type_i, type_j]
-        perturbed_weights = weights.copy()
-        for pre_idx in range(len(cell_type_indices)):
-            for post_idx in range(len(cell_type_indices)):
-                pre_type = cell_type_indices[pre_idx]
-                post_type = cell_type_indices[post_idx]
-                perturbed_weights[pre_idx, post_idx] *= recurrent_scalings[
-                    pre_type, post_type
-                ]
-
-        # Target scaling factors are the reciprocals (what the student needs to learn)
-        target_scaling_factors = 1.0 / recurrent_scalings
-    else:
-        # Don't perturb recurrent weights
-        perturbed_weights = weights.copy()
-
-    # Perturb feedforward weights if optimizing feedforward scaling factors
-    if perturb_feedforward:
-        # Draw scaling factors for feedforward connections: n_ff_types x n_recurrent_types matrix
-        # ff_scalings[i, j] = scaling for connections from input type i to recurrent type j
-        ff_scalings = np.random.lognormal(
-            mean=mu, sigma=sigma, size=(n_ff_types, n_recurrent_types)
-        )
-
-        # Apply scaling to feedforward weights
-        # For each connection feedforward_weights[i, j], scale by ff_scalings[type_i, type_j]
-        perturbed_feedforward_weights = feedforward_weights.copy()
-        for pre_idx in range(len(feedforward_cell_type_indices)):
-            for post_idx in range(len(cell_type_indices)):
-                pre_type = feedforward_cell_type_indices[pre_idx]
-                post_type = cell_type_indices[post_idx]
-                perturbed_feedforward_weights[pre_idx, post_idx] *= ff_scalings[
-                    pre_type, post_type
-                ]
-
-        # Target scaling factors are the reciprocals (what the student needs to learn)
-        target_feedforward_scaling_factors = 1.0 / ff_scalings
-    else:
-        # Don't perturb feedforward weights
-        perturbed_feedforward_weights = feedforward_weights.copy()
-
+    perturbed_weights, target_scaling_factors = perturb(
+        weights,
+        cell_type_indices,
+        n_types,
+        optimisable in ("scaling_factors", "scaling_factors_recurrent"),
+    )
+    perturbed_feedforward_weights, target_feedforward_scaling_factors = perturb(
+        feedforward_weights,
+        feedforward_cell_type_indices,
+        n_ff_types,
+        optimisable in ("scaling_factors", "scaling_factors_feedforward"),
+    )
     return (
         perturbed_weights,
         perturbed_feedforward_weights,

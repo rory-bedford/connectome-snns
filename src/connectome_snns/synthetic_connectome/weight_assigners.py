@@ -14,7 +14,6 @@ Typical workflow:
 import numpy as np
 from numpy.typing import NDArray
 
-# Type aliases for clarity
 IntArray = NDArray[np.int_]
 BoolArray = NDArray[np.bool_]
 FloatArray = NDArray[np.float64]
@@ -54,78 +53,25 @@ def assign_weights_lognormal(
     Returns:
         FloatArray: Weighted adjacency matrix with log-normal magnitudes and appropriate signs.
     """
-    n_source, n_target = connectivity_graph.shape
-
-    # Input validation
-    assert source_cell_indices.shape[0] == n_source, (
-        "Mismatch between source indices and graph rows."
-    )
-    assert target_cell_indices.shape[0] == n_target, (
-        "Mismatch between target indices and graph columns."
-    )
-
-    # Validate cell_type_signs
-    if cell_type_signs is not None:
-        assert isinstance(cell_type_signs, np.ndarray), (
-            "cell_type_signs must be a numpy array (IntArray) or None."
-        )
-        n_source_types = len(cell_type_signs)
-    else:
-        # Infer number of source types from source_cell_indices
-        n_source_types = max(source_cell_indices) + 1
-
-    # Get the number of unique target types
-    n_target_types = max(target_cell_indices) + 1
-
-    # Allow rectangular matrices for weights between different numbers of source and target types
-    assert w_mu_matrix.shape == (n_source_types, n_target_types), (
-        f"w_mu_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-    assert w_sigma_matrix.shape == (n_source_types, n_target_types), (
-        f"w_sigma_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-    assert parameter_space.lower() in ["log", "linear"], (
+    assert parameter_space.lower() in ("log", "linear"), (
         'parameter_space must be either "log" or "linear"'
     )
-
-    # Convert from desired mean/variance to log-normal parameters if needed
+    w_mu_matrix, w_sigma_matrix = np.asarray(w_mu_matrix), np.asarray(w_sigma_matrix)
     if parameter_space.lower() == "linear":
-        # For lognormal distribution:
-        # If X ~ LogNormal(μ, σ²), then:
-        # E[X] = exp(μ + σ²/2)
-        # Var[X] = [exp(σ²) - 1] * exp(2μ + σ²)
-
-        # Given desired mean (m) and variance (v), we solve for μ and σ:
-        # σ² = log(1 + v/m²)
-        # μ = log(m) - σ²/2
-
-        mean = w_mu_matrix.copy()
-        var = w_sigma_matrix.copy()
-
-        # Avoid division by zero or negative values
-        mean_eps = np.maximum(mean, np.finfo(float).eps)
-        var_ratio = np.maximum(var / (mean_eps * mean_eps), 0)
-
-        log_sigma_squared = np.log(1 + var_ratio)
-        log_mu = np.log(mean_eps) - log_sigma_squared / 2
-
-        w_mu_matrix = log_mu
+        # Mean m and variance v of a log-normal give its log-space parameters:
+        # sigma^2 = log(1 + v / m^2), mu = log(m) - sigma^2 / 2.
+        mean = np.maximum(w_mu_matrix, np.finfo(float).eps)
+        log_sigma_squared = np.log(1 + np.maximum(w_sigma_matrix / (mean * mean), 0))
+        w_mu_matrix = np.log(mean) - log_sigma_squared / 2
         w_sigma_matrix = np.sqrt(log_sigma_squared)
-
-    # Extract parameters for specific connections
-    mu = w_mu_matrix[source_cell_indices][:, target_cell_indices]
-    sigma = w_sigma_matrix[source_cell_indices][:, target_cell_indices]
-
-    weight_magnitudes = np.random.lognormal(mu, sigma)
-
-    # Apply signs if provided (Dale's law), otherwise return unsigned weights
-    if cell_type_signs is not None:
-        source_signs = cell_type_signs[source_cell_indices]
-        weights = weight_magnitudes * source_signs[:, None]
-    else:
-        weights = weight_magnitudes
-
-    return weights * connectivity_graph
+    return _assign(
+        connectivity_graph,
+        source_cell_indices,
+        target_cell_indices,
+        cell_type_signs,
+        {"w_mu_matrix": w_mu_matrix, "w_sigma_matrix": w_sigma_matrix},
+        np.random.lognormal,
+    )
 
 
 def assign_weights_gamma(
@@ -153,48 +99,14 @@ def assign_weights_gamma(
     Returns:
         FloatArray: Weighted adjacency matrix with gamma-distributed magnitudes and appropriate signs.
     """
-    n_source, n_target = connectivity_graph.shape
-
-    assert source_cell_indices.shape[0] == n_source, (
-        "Mismatch between source indices and graph rows."
+    return _assign(
+        connectivity_graph,
+        source_cell_indices,
+        target_cell_indices,
+        cell_type_signs,
+        {"shape_matrix": shape_matrix, "scale_matrix": scale_matrix},
+        np.random.gamma,
     )
-    assert target_cell_indices.shape[0] == n_target, (
-        "Mismatch between target indices and graph columns."
-    )
-
-    # Validate cell_type_signs
-    if cell_type_signs is not None:
-        assert isinstance(cell_type_signs, np.ndarray), (
-            "cell_type_signs must be a numpy array (IntArray) or None."
-        )
-        n_source_types = len(cell_type_signs)
-    else:
-        # Infer number of source types from source_cell_indices
-        n_source_types = max(source_cell_indices) + 1
-
-    # Get the number of unique target types
-    n_target_types = max(target_cell_indices) + 1
-
-    assert shape_matrix.shape == (n_source_types, n_target_types), (
-        f"shape_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-    assert scale_matrix.shape == (n_source_types, n_target_types), (
-        f"scale_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-
-    shape = shape_matrix[source_cell_indices][:, target_cell_indices]
-    scale = scale_matrix[source_cell_indices][:, target_cell_indices]
-
-    weight_magnitudes = np.random.gamma(shape, scale)
-
-    # Apply signs if provided (Dale's law), otherwise return unsigned weights
-    if cell_type_signs is not None:
-        source_signs = cell_type_signs[source_cell_indices]
-        weights = weight_magnitudes * source_signs[:, None]
-    else:
-        weights = weight_magnitudes
-
-    return weights * connectivity_graph
 
 
 def assign_weights_uniform(
@@ -222,45 +134,45 @@ def assign_weights_uniform(
     Returns:
         FloatArray: Weighted adjacency matrix with uniformly distributed magnitudes and appropriate signs.
     """
-    n_source, n_target = connectivity_graph.shape
+    return _assign(
+        connectivity_graph,
+        source_cell_indices,
+        target_cell_indices,
+        cell_type_signs,
+        {"low_matrix": low_matrix, "high_matrix": high_matrix},
+        np.random.uniform,
+    )
 
-    assert source_cell_indices.shape[0] == n_source, (
+
+def _assign(graph, source_types, target_types, signs, matrices, sample):
+    """Draw one weight per possible edge from ``sample(*per-edge parameters)``.
+
+    ``matrices`` maps names to ``(n_source_types, n_target_types)`` parameter matrices;
+    each is looked up per edge by its source and target types. Magnitudes are signed
+    by source type (Dale's law) if ``signs`` is given, then masked by ``graph``.
+    """
+    n_source, n_target = graph.shape
+    assert source_types.shape[0] == n_source, (
         "Mismatch between source indices and graph rows."
     )
-    assert target_cell_indices.shape[0] == n_target, (
+    assert target_types.shape[0] == n_target, (
         "Mismatch between target indices and graph columns."
     )
-
-    # Validate cell_type_signs
-    if cell_type_signs is not None:
-        assert isinstance(cell_type_signs, np.ndarray), (
-            "cell_type_signs must be a numpy array (IntArray) or None."
+    if signs is not None:
+        assert isinstance(signs, np.ndarray), (
+            "cell_type_signs must be a numpy array or None."
         )
-        n_source_types = len(cell_type_signs)
+        n_source_types = len(signs)
     else:
-        # Infer number of source types from source_cell_indices
-        n_source_types = max(source_cell_indices) + 1
-
-    # Get the number of unique target types
-    n_target_types = max(target_cell_indices) + 1
-
-    assert low_matrix.shape == (n_source_types, n_target_types), (
-        f"low_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-    assert high_matrix.shape == (n_source_types, n_target_types), (
-        f"high_matrix must be {n_source_types}x{n_target_types} for {n_source_types} source types and {n_target_types} target types."
-    )
-
-    low = low_matrix[source_cell_indices][:, target_cell_indices]
-    high = high_matrix[source_cell_indices][:, target_cell_indices]
-
-    weight_magnitudes = np.random.uniform(low, high)
-
-    # Apply signs if provided (Dale's law), otherwise return unsigned weights
-    if cell_type_signs is not None:
-        source_signs = cell_type_signs[source_cell_indices]
-        weights = weight_magnitudes * source_signs[:, None]
-    else:
-        weights = weight_magnitudes
-
-    return weights * connectivity_graph
+        n_source_types = max(source_types) + 1
+    n_target_types = max(target_types) + 1
+    for name, matrix in matrices.items():
+        assert np.shape(matrix) == (n_source_types, n_target_types), (
+            f"{name} must be {n_source_types}x{n_target_types} for {n_source_types} "
+            f"source types and {n_target_types} target types."
+        )
+    per_edge = [np.asarray(m)[source_types][:, target_types] for m in matrices.values()]
+    weights = sample(*per_edge)
+    if signs is not None:
+        weights = weights * signs[source_types][:, None]
+    return weights * graph

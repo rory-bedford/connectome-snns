@@ -5,6 +5,14 @@ import torch
 from ._base import SpikeData
 
 
+def recurrent_input(batch: SpikeData) -> torch.Tensor:
+    """The recurrent spikes to feed the model: resampled ones if the dataset provides
+    them (``recurrent_input_spikes``), else the teacher's own spikes."""
+    if batch.recurrent_input_spikes is not None:
+        return batch.recurrent_input_spikes
+    return batch.target_spikes
+
+
 class FeedforwardCollate:
     """Concatenate feedforward and recurrent spikes for feedforward-unrolled training.
 
@@ -27,11 +35,7 @@ class FeedforwardCollate:
         self.dt = dt
 
     def __call__(self, batch: SpikeData) -> SpikeData:
-        rec_input = (
-            batch.recurrent_input_spikes
-            if batch.recurrent_input_spikes is not None
-            else batch.target_spikes
-        )
+        rec_input = recurrent_input(batch)
         concatenated_inputs = torch.cat([batch.input_spikes, rec_input], dim=2)
         return SpikeData(
             input_spikes=concatenated_inputs, target_spikes=batch.target_spikes
@@ -97,11 +101,7 @@ class VisibleSubsetCollate:
 
     def __call__(self, batch: SpikeData) -> SpikeData:
         target_vis = batch.target_spikes[:, :, self.visible_indices]
-        rec_input = (
-            batch.recurrent_input_spikes
-            if batch.recurrent_input_spikes is not None
-            else batch.target_spikes
-        )
+        rec_input = recurrent_input(batch)
         rec_input_vis = rec_input[:, :, self.visible_indices]
         concatenated_inputs = torch.cat([batch.input_spikes, rec_input_vis], dim=2)
         return SpikeData(input_spikes=concatenated_inputs, target_spikes=target_vis)
@@ -117,11 +117,7 @@ def single_neuron_collate_fn(batch: SpikeData) -> SpikeData:
         ``SpikeData`` with ``input_spikes`` of shape ``(batch, time, n_ff + n_rec)``
         and ``target_spikes`` of shape ``(batch, time, 1)``.
     """
-    rec_input = (
-        batch.recurrent_input_spikes
-        if batch.recurrent_input_spikes is not None
-        else batch.target_spikes
-    )
+    rec_input = recurrent_input(batch)
     concatenated_inputs = torch.cat([batch.input_spikes, rec_input], dim=2)
     single_neuron_target = batch.target_spikes[:, :, 0:1]
     return SpikeData(

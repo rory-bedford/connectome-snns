@@ -49,6 +49,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pytest_tmp/
 cover/
 
 # Translations
@@ -221,3 +222,7 @@ activate
 
 # Claude code
 .claude/
+
+# Speed benchmarks: the script is tracked, its results and caches are not
+benchmarks/*
+!benchmarks/speed.py

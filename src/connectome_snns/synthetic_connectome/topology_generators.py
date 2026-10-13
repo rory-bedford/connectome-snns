@@ -1,13 +1,9 @@
 """Generate graph topologies with cell type assignments.
 
-This module provides functions to generate boolean adjacency matrices with
-cell type assignments based on connectivity probability matrices between cell types.
-
-Features:
-- Multiple cell types (not limited to excitatory/inhibitory)
-- Connectivity probability matrices between cell types
-- Boolean (unsigned) adjacency matrices
-- Cell type indices based on position in configuration
+Each generator returns a boolean adjacency matrix ``A[source, target]`` whose edge
+probabilities come from a matrix of connection probabilities between cell types
+(any number of types, not just excitatory/inhibitory). Randomness comes from NumPy's
+global generator, so ``np.random.seed`` fixes the graph.
 
 Typical workflow:
     >>> # First assign cell types
@@ -23,14 +19,20 @@ Typical workflow:
     >>> # adj is a boolean adjacency matrix
 """
 
+from typing import List, Tuple
+
 import numpy as np
 from numpy.typing import NDArray
-from typing import List, Tuple
 
 # Type aliases for clarity
 IntArray = NDArray[np.int_]
 BoolArray = NDArray[np.bool_]
 FloatArray = NDArray[np.float64]
+
+METHODS = ("erdos-renyi", "configuration")
+
+#: Rounds of stub swapping before the configuration model gives up.
+MAX_SWAP_ROUNDS = 10_000
 
 
 def sparse_graph_generator(
@@ -41,149 +43,70 @@ def sparse_graph_generator(
     method: str = "erdos-renyi",
 ) -> BoolArray:
     """
-    Generate a sparse random graph using the Erdos-Renyi model with cell types.
-    Creates boolean adjacency matrix based on connectivity probability matrix
-    between different cell types. Supports both recurrent and feedforward connections.
+    Generate a sparse random graph between typed neurons.
 
     Args:
         source_cell_types (IntArray): Cell type indices for source neurons.
         target_cell_types (IntArray): Cell type indices for target neurons.
         conn_matrix (List[List[float]]): Matrix of connection probabilities from source to target cell types.
         allow_self_loops (bool): Whether to allow connections from neuron i to itself.
+            Only applies to a recurrent graph (see Note); a feedforward graph keeps
+            its edges from input i to neuron i.
         method (str): Method for graph generation. Either "erdos-renyi" or "configuration".
 
     Returns:
         BoolArray: Boolean adjacency matrix of shape (len(source_cell_types), len(target_cell_types)).
 
+    Raises:
+        ValueError: For an unknown method, a cell type without a row/column of
+            ``conn_matrix``, or a configuration graph that asks for more edges than
+            exist.
+        RuntimeError: If the configuration model cannot remove repeated edges and
+            self-loops (a nearly complete graph).
+
     Note:
-        For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
-        The "configuration" method generates graphs with fixed degree sequences sampled from the
-        connectivity probabilities, while "erdos-renyi" samples each edge independently.
+        For recurrent connections, pass the same array for both source_cell_types and
+        target_cell_types: a graph is recurrent when the two are equal.
+        "erdos-renyi" samples each edge independently. "configuration" places exactly
+        ``round(p * n_source * n_target)`` edges per cell-type pair, with in- and
+        out-degrees as even as possible.
     """
-    assert method in ["erdos-renyi", "configuration"], (
-        f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
+    _check_method(method)
+    probabilities = _probabilities(
+        conn_matrix, source_cell_types, target_cell_types, "conn_matrix"
+    )
+    allow_self_loops = allow_self_loops or not _is_recurrent(
+        source_cell_types, target_cell_types
+    )
+    return _sparse_graph(
+        source_cell_types, target_cell_types, probabilities, allow_self_loops, method
     )
 
-    n_source = len(source_cell_types)
-    n_target = len(target_cell_types)
-    conn_matrix_np = np.array(conn_matrix)
-    n_source_types, n_target_types = conn_matrix_np.shape
 
-    # Basic assertions
-    assert source_cell_types.max() < n_source_types, (
-        f"source_cell_types max {source_cell_types.max()} exceeds conn_matrix rows {n_source_types}"
-    )
-    assert target_cell_types.max() < n_target_types, (
-        f"target_cell_types max {target_cell_types.max()} exceeds conn_matrix columns {n_target_types}"
-    )
-
+def _sparse_graph(
+    source_cell_types, target_cell_types, probabilities, allow_self_loops, method
+) -> BoolArray:
+    """``sparse_graph_generator`` on checked probabilities; ``allow_self_loops=False``
+    removes every edge from position i to position i."""
+    n_source, n_target = len(source_cell_types), len(target_cell_types)
     if method == "erdos-renyi":
-        # Use advanced indexing to get probability matrix for all connections
-        prob_matrix = conn_matrix_np[source_cell_types[:, None], target_cell_types]
-
-        # Generate random matrix and compare to probabilities
+        prob_matrix = probabilities[source_cell_types[:, None], target_cell_types]
         adjacency = np.random.random((n_source, n_target)) < prob_matrix
+        if not allow_self_loops:  # as in the configuration model: no i -> i edges
+            np.fill_diagonal(adjacency, False)
+        return adjacency
 
-    else:  # method == "configuration"
-        # Configuration model: process each cell type pair separately
-        adjacency = np.zeros((n_source, n_target), dtype=bool)
-
-        # Loop over all combinations of source and target cell types
-        for src_type in range(n_source_types):
-            for tgt_type in range(n_target_types):
-                # Get connection probability for this cell type pair
-                conn_prob = conn_matrix_np[src_type, tgt_type]
-
-                if conn_prob == 0:
-                    continue
-
-                # Find all neurons of these types
-                src_mask = source_cell_types == src_type
-                tgt_mask = target_cell_types == tgt_type
-                src_indices = np.where(src_mask)[0]
-                tgt_indices = np.where(tgt_mask)[0]
-
-                n_src = len(src_indices)
-                n_tgt = len(tgt_indices)
-
-                if n_src == 0 or n_tgt == 0:
-                    continue
-
-                # Calculate total number of edges to create
-                total_edges = int(np.round(conn_prob * n_src * n_tgt))
-
-                # We will create more stubs than needed then randomly remove to get exact total_edges count
-                expected_src = int(np.ceil(total_edges / n_src))
-                expected_tgt = int(np.ceil(total_edges / n_tgt))
-
-                # Shuffle indices once, then tile
-                shuffled_src = src_indices.copy()
-                np.random.shuffle(shuffled_src)
-                shuffled_tgt = tgt_indices.copy()
-                np.random.shuffle(shuffled_tgt)
-
-                # Create stub lists by tiling the shuffled indices
-                out_stubs = np.tile(shuffled_src, expected_src)[:total_edges]
-                in_stubs = np.tile(shuffled_tgt, expected_tgt)[:total_edges]
-
-                # Final shuffle
-                np.random.shuffle(out_stubs)
-                np.random.shuffle(in_stubs)
-
-                # Clean up repeated edges and self-loops
-                while True:
-                    # Find repeated edges and self-loops
-                    # Create edge pairs
-                    edges = np.column_stack([out_stubs, in_stubs])
-
-                    # Find self-loops (where source == target) only if not allowed
-                    if not allow_self_loops:
-                        self_loop_indices = np.where(out_stubs == in_stubs)[0]
-                    else:
-                        self_loop_indices = np.array([], dtype=int)
-
-                    # Find repeated edges (excluding first occurrence)
-                    # Use edges directly without sorting to detect exact duplicates (i,j) == (i,j)
-                    _, first_occurrence_indices, inverse_indices, counts = np.unique(
-                        edges,
-                        axis=0,
-                        return_index=True,
-                        return_inverse=True,
-                        return_counts=True,
-                    )
-
-                    # Vectorized: Find indices where edges are repeated (count > 1) AND it's not the first occurrence
-                    # Create mask for first occurrences
-                    is_first_occurrence = np.zeros(len(edges), dtype=bool)
-                    is_first_occurrence[first_occurrence_indices] = True
-
-                    # Find repeated edges that are not first occurrences
-                    is_repeated = counts[inverse_indices] > 1
-                    repeated_edge_indices = np.where(
-                        is_repeated & ~is_first_occurrence
-                    )[0]
-
-                    if len(self_loop_indices) == 0 and len(repeated_edge_indices) == 0:
-                        break  # No self-loops or repeated edges, we're done
-
-                    # Combine all problematic indices
-                    problematic_indices = np.concatenate(
-                        [self_loop_indices, repeated_edge_indices]
-                    )
-
-                    # For each problematic index, swap its in_stub with a random position
-                    for idx in problematic_indices:
-                        # Choose a random position to swap with
-                        swap_idx = np.random.randint(0, len(in_stubs))
-                        # Swap
-                        in_stubs[idx], in_stubs[swap_idx] = (
-                            in_stubs[swap_idx],
-                            in_stubs[idx],
-                        )
-
-                # Match stubs
-                adjacency[out_stubs, in_stubs] = True
-
+    adjacency = np.zeros((n_source, n_target), dtype=bool)
+    for src_type, tgt_type in np.ndindex(probabilities.shape):
+        conn_prob = probabilities[src_type, tgt_type]
+        src_indices = np.flatnonzero(source_cell_types == src_type)
+        tgt_indices = np.flatnonzero(target_cell_types == tgt_type)
+        if conn_prob == 0 or len(src_indices) == 0 or len(tgt_indices) == 0:
+            continue
+        out_stubs, in_stubs = _configuration_edges(
+            src_indices, tgt_indices, conn_prob, allow_self_loops
+        )
+        adjacency[out_stubs, in_stubs] = True
     return adjacency
 
 
@@ -209,7 +132,6 @@ def dense_graph_generator(
     Note:
         For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
     """
-    # Create all-ones connectivity matrix based on cell types present
     n_source_types = source_cell_types.max() + 1
     n_target_types = target_cell_types.max() + 1
     conn_matrix = [[1.0] * n_target_types for _ in range(n_source_types)]
@@ -234,8 +156,10 @@ def assembly_generator(
 ) -> Tuple[BoolArray, IntArray]:
     """
     Generate a graph with assembly structure and cell types.
-    Creates boolean adjacency matrix with assembly structure using
-    connectivity probability matrices between different cell types.
+
+    Neurons are split, in index order, into ``num_assemblies`` equal assemblies;
+    pairs in the same assembly connect with ``conn_within``, pairs in different
+    assemblies with ``conn_between`` (both cell type x cell type probabilities).
 
     Args:
         source_cell_types (IntArray): Cell type indices for source neurons.
@@ -243,146 +167,265 @@ def assembly_generator(
         num_assemblies (int): Number of assemblies to create.
         conn_within (List[List[float]]): Matrix of connection probabilities within assemblies between cell types.
         conn_between (List[List[float]]): Matrix of connection probabilities between assemblies between cell types.
-        allow_self_loops (bool): Whether to allow connections from neuron i to itself.
+        allow_self_loops (bool): Whether to allow connections from neuron i to itself
+            (in a recurrent graph only, as for ``sparse_graph_generator``).
         method (str): Method for graph generation. Either "erdos-renyi" or "configuration".
 
     Returns:
         Tuple[BoolArray, IntArray]:
-            - Boolean adjacency matrix of shape (len(source_cell_types), len(target_cell_types))
-            - 0-indexed array of assembly IDs for source neurons (shape: len(source_cell_types))
-              Neurons not assigned to assemblies get ID -1
+            - Boolean adjacency matrix of shape ``(n_source_used, n_target_used)``:
+              only the neurons that fit into equal assemblies,
+              ``n_used = (n // num_assemblies) * num_assemblies``
+            - 0-indexed array of assembly IDs for all source neurons (shape:
+              ``len(source_cell_types)``); neurons left out of the assemblies get -1
+
+    Raises:
+        ValueError: For an unknown method, more assemblies than neurons, mismatched
+            ``conn_within`` / ``conn_between`` shapes, or cell types without
+            probabilities.
 
     Note:
         For recurrent connections, pass the same array for both source_cell_types and target_cell_types.
-        The "configuration" method uses configuration model for both within-assembly and between-assembly connections.
-        For between-assembly connections, each source assembly connects to targets across all other assemblies.
-        Assemblies are made equal-sized; any remaining neurons are discarded and assigned assembly ID -1.
+        The "configuration" method places within- and between-assembly edges with
+        the configuration model, one block per (source assembly, target assembly);
+        between-assembly blocks never have self-loops.
     """
-    assert method in ["erdos-renyi", "configuration"], (
-        f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
+    _check_method(method)
+    allow_self_loops = allow_self_loops or not _is_recurrent(
+        source_cell_types, target_cell_types
     )
-
-    n_source = len(source_cell_types)
-    n_target = len(target_cell_types)
-
-    # Calculate equal assembly sizes
-    source_assembly_size = n_source // num_assemblies
-    target_assembly_size = n_target // num_assemblies
-
-    # Use only neurons that fit evenly into assemblies
-    n_source_used = source_assembly_size * num_assemblies
-    n_target_used = target_assembly_size * num_assemblies
-
-    # Basic assertions
-    assert num_assemblies <= min(n_source, n_target), (
-        "Number of assemblies cannot exceed min(n_source, n_target)"
+    n_source, n_target = len(source_cell_types), len(target_cell_types)
+    if num_assemblies > min(n_source, n_target):
+        raise ValueError(
+            f"num_assemblies ({num_assemblies}) cannot exceed "
+            f"min(n_source, n_target) = {min(n_source, n_target)}"
+        )
+    within = _probabilities(
+        conn_within, source_cell_types, target_cell_types, "conn_within"
     )
+    between = np.array(conn_between)
+    if within.shape != between.shape:
+        raise ValueError(
+            f"conn_within {within.shape} and conn_between {between.shape} must have "
+            "the same shape"
+        )
 
-    conn_within_np = np.array(conn_within)
-    conn_between_np = np.array(conn_between)
-    n_source_types, n_target_types = conn_within_np.shape
-
-    assert conn_within_np.shape == conn_between_np.shape, (
-        "conn_within and conn_between must have same shape"
-    )
-    assert source_cell_types.max() < n_source_types, (
-        f"source_cell_types max {source_cell_types.max()} exceeds conn_within rows {n_source_types}"
-    )
-    assert target_cell_types.max() < n_target_types, (
-        f"target_cell_types max {target_cell_types.max()} exceeds conn_within columns {n_target_types}"
-    )
-
-    # Create equal-sized assembly assignments
-    assembly_assignments_source = [
-        np.arange(i * source_assembly_size, (i + 1) * source_assembly_size)
-        for i in range(num_assemblies)
-    ]
-    assembly_assignments_target = [
-        np.arange(i * target_assembly_size, (i + 1) * target_assembly_size)
-        for i in range(num_assemblies)
-    ]
-
-    # Create assembly membership arrays (only for neurons in assemblies)
-    source_assembly_id = np.repeat(np.arange(num_assemblies), source_assembly_size)
-    target_assembly_id = np.repeat(np.arange(num_assemblies), target_assembly_size)
-
-    # Create within-assembly mask using broadcasting
-    # Shape: (n_source_used, n_target_used)
-    within_assembly_mask = source_assembly_id[:, None] == target_assembly_id
+    source_size = n_source // num_assemblies
+    target_size = n_target // num_assemblies
+    source_assembly_id = np.repeat(np.arange(num_assemblies), source_size)
+    target_assembly_id = np.repeat(np.arange(num_assemblies), target_size)
+    n_source_used, n_target_used = len(source_assembly_id), len(target_assembly_id)
 
     if method == "erdos-renyi":
-        # Get probability matrices for all connections using advanced indexing
-        # Only use neurons that are in assemblies
-        source_types_used = source_cell_types[:n_source_used]
-        target_types_used = target_cell_types[:n_target_used]
-
-        prob_within = conn_within_np[source_types_used[:, None], target_types_used]
-        prob_between = conn_between_np[source_types_used[:, None], target_types_used]
-
-        # Select appropriate probabilities based on assembly membership
-        prob_matrix = np.where(within_assembly_mask, prob_within, prob_between)
-
-        # Generate random matrix and compare to probabilities
+        source_types = source_cell_types[:n_source_used, None]
+        target_types = target_cell_types[:n_target_used]
+        prob_matrix = np.where(
+            source_assembly_id[:, None] == target_assembly_id,
+            within[source_types, target_types],
+            between[source_types, target_types],
+        )
         adjacency = np.random.random((n_source_used, n_target_used)) < prob_matrix
-
-    else:  # method == "configuration"
+    else:
         adjacency = np.zeros((n_source_used, n_target_used), dtype=bool)
-
-        # Process within-assembly connections using configuration model
-        for assembly_id in range(num_assemblies):
-            src_indices = assembly_assignments_source[assembly_id]
-            tgt_indices = assembly_assignments_target[assembly_id]
-
-            # Get cell types for neurons in this assembly
-            src_types = source_cell_types[src_indices]
-            tgt_types = target_cell_types[tgt_indices]
-
-            # Use sparse_graph_generator with configuration method for this assembly
-            assembly_adjacency = sparse_graph_generator(
-                src_types,
-                tgt_types,
-                conn_within,
-                allow_self_loops=allow_self_loops,
-                method="configuration",
+        sources = [
+            np.arange(i * source_size, (i + 1) * source_size)
+            for i in range(num_assemblies)
+        ]
+        targets = [
+            np.arange(i * target_size, (i + 1) * target_size)
+            for i in range(num_assemblies)
+        ]
+        # Within-assembly blocks first, then every between-assembly block
+        # NB: between-assembly blocks drop their edges k -> k (positions within the
+        # block, so different neurons), as they always have.
+        blocks = [(i, i, within, allow_self_loops) for i in range(num_assemblies)]
+        blocks += [
+            (i, j, between, False)
+            for i in range(num_assemblies)
+            for j in range(num_assemblies)
+            if i != j
+        ]
+        for i, j, conn, self_loops in blocks:
+            adjacency[np.ix_(sources[i], targets[j])] = _sparse_graph(
+                source_cell_types[sources[i]],
+                target_cell_types[targets[j]],
+                conn,
+                self_loops,
+                "configuration",
             )
 
-            # Map assembly adjacency back to global adjacency matrix
-            adjacency[np.ix_(src_indices, tgt_indices)] = assembly_adjacency
-
-        # Process between-assembly connections using configuration model
-        # Loop over all pairs of source and target assemblies
-        for src_assembly_id in range(num_assemblies):
-            for tgt_assembly_id in range(num_assemblies):
-                # Skip within-assembly connections (already handled above)
-                if src_assembly_id == tgt_assembly_id:
-                    continue
-
-                src_indices = assembly_assignments_source[src_assembly_id]
-                tgt_indices = assembly_assignments_target[tgt_assembly_id]
-
-                # Get cell types for neurons in this source and target assembly pair
-                src_types = source_cell_types[src_indices]
-                tgt_types = target_cell_types[tgt_indices]
-
-                # Use configuration model for between-assembly connections
-                between_adjacency = sparse_graph_generator(
-                    src_types,
-                    tgt_types,
-                    conn_between,
-                    allow_self_loops=False,  # Never allow self-loops between assemblies
-                    method="configuration",
-                )
-
-                # Map between-assembly adjacency back to global adjacency matrix
-                adjacency[np.ix_(src_indices, tgt_indices)] = between_adjacency
-
-    # Mask out self-loops if not allowed
     if not allow_self_loops and n_source_used == n_target_used:
         np.fill_diagonal(adjacency, False)
 
-    # Create assembly ID array for all source neurons
-    # Neurons not in assemblies (if n_source > n_source_used) get ID -1
     assembly_ids = np.full(n_source, -1, dtype=np.int32)
     assembly_ids[:n_source_used] = source_assembly_id
-
     return adjacency, assembly_ids
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _is_recurrent(source_cell_types: IntArray, target_cell_types: IntArray) -> bool:
+    """Whether source and target are one population (so i -> i is a self-loop)."""
+    return source_cell_types is target_cell_types or np.array_equal(
+        source_cell_types, target_cell_types
+    )
+
+
+def _check_method(method: str) -> None:
+    if method not in METHODS:
+        raise ValueError(
+            f"method must be 'erdos-renyi' or 'configuration', got '{method}'"
+        )
+
+
+def _probabilities(conn, source_cell_types, target_cell_types, name) -> FloatArray:
+    """``conn`` as an array, checked to cover every source and target cell type."""
+    probabilities = np.array(conn)
+    n_source_types, n_target_types = probabilities.shape
+    if source_cell_types.max() >= n_source_types:
+        raise ValueError(
+            f"source_cell_types max {source_cell_types.max()} exceeds {name} rows "
+            f"{n_source_types}"
+        )
+    if target_cell_types.max() >= n_target_types:
+        raise ValueError(
+            f"target_cell_types max {target_cell_types.max()} exceeds {name} columns "
+            f"{n_target_types}"
+        )
+    return probabilities
+
+
+def _configuration_edges(
+    src_indices: IntArray, tgt_indices: IntArray, conn_prob: float, allow_self_loops
+) -> Tuple[IntArray, IntArray]:
+    """Edges ``(out_stubs[k], in_stubs[k])`` of one cell-type block.
+
+    Each neuron gets an (as near as possible) equal share of the
+    ``round(p * n_src * n_tgt)`` stubs: the shuffled indices are tiled and cut to
+    length, then both stub lists are shuffled and paired. Repeated edges and
+    self-loops are then broken up by swapping their in-stubs with random others.
+    """
+    n_src, n_tgt = len(src_indices), len(tgt_indices)
+    total_edges = int(np.round(conn_prob * n_src * n_tgt))
+    available = n_src * n_tgt
+    if not allow_self_loops:
+        available -= len(np.intersect1d(src_indices, tgt_indices))
+    if total_edges > available:
+        raise ValueError(
+            f"A configuration graph block with {n_src} x {n_tgt} neurons cannot have "
+            f"{total_edges} edges without self-loops (at most {available})"
+        )
+
+    # Stubs hold positions in src_indices / tgt_indices (shuffling positions draws
+    # the same permutation as shuffling the indices themselves).
+    shuffled_src = np.arange(n_src)
+    np.random.shuffle(shuffled_src)
+    shuffled_tgt = np.arange(n_tgt)
+    np.random.shuffle(shuffled_tgt)
+    out_stubs = np.tile(shuffled_src, int(np.ceil(total_edges / n_src)))[:total_edges]
+    in_stubs = np.tile(shuffled_tgt, int(np.ceil(total_edges / n_tgt)))[:total_edges]
+    np.random.shuffle(out_stubs)
+    np.random.shuffle(in_stubs)
+
+    own_target = None  # position in tgt_indices of each source neuron itself, or -1
+    if not allow_self_loops:
+        own_target = np.full(n_src, -1)
+        shared, src_pos, tgt_pos = np.intersect1d(
+            src_indices, tgt_indices, return_indices=True
+        )
+        own_target[src_pos] = tgt_pos
+
+    conflicts = _Conflicts(out_stubs, in_stubs, n_tgt, own_target)
+    for _ in range(MAX_SWAP_ROUNDS):
+        positions = conflicts.positions
+        if len(positions) == 0:
+            return src_indices[out_stubs], tgt_indices[in_stubs]
+        partners = np.random.randint(0, len(in_stubs), size=len(positions))
+        touched = np.unique(np.concatenate([positions, partners]))
+        before = conflicts.keys[touched]
+        _swap_in_order(in_stubs, positions, partners)
+        conflicts.update(touched, before)
+    raise RuntimeError(
+        f"The configuration model could not remove repeated edges and self-loops "
+        f"after {MAX_SWAP_ROUNDS} rounds ({total_edges} edges in a {n_src} x {n_tgt} "
+        "block); use a lower connection probability or 'erdos-renyi'."
+    )
+
+
+class _Conflicts:
+    """The edges a configuration graph must still move, kept up to date as stubs swap.
+
+    ``positions`` lists the self-loops (if not allowed), then the repeats of an
+    earlier edge, each in ascending order. After the first round only the edges that
+    share a key with a swapped edge are re-examined, so a round costs one pass over
+    the edges rather than a sort of them.
+    """
+
+    #: Blocks with more possible edges than this re-sort every round instead (the
+    #: incremental update keeps one flag per possible edge).
+    MAX_TRACKED_EDGES = 1 << 28
+
+    def __init__(self, out_stubs, in_stubs, n_tgt, own_target):
+        self.out_stubs, self.in_stubs, self.n_tgt = out_stubs, in_stubs, n_tgt
+        self.own_target = own_target
+        self.keys = out_stubs.astype(np.int64) * n_tgt + in_stubs
+        self.self_loops = self._self_loops(np.arange(len(in_stubs)))
+        self.repeats = _repeats(np.arange(len(in_stubs)), self.keys)
+        n_keys = (int(out_stubs.max()) + 1) * n_tgt if len(out_stubs) else 0
+        self.affected = (
+            np.zeros(n_keys, dtype=bool) if n_keys <= self.MAX_TRACKED_EDGES else None
+        )
+
+    @property
+    def positions(self) -> IntArray:
+        return np.concatenate([self.self_loops, self.repeats])
+
+    def update(self, touched: IntArray, keys_before: IntArray) -> None:
+        """Account for new in-stubs at the (sorted, unique) ``touched`` positions."""
+        self.keys[touched] = (
+            self.out_stubs[touched].astype(np.int64) * self.n_tgt
+            + self.in_stubs[touched]
+        )
+        self.self_loops = np.union1d(
+            self.self_loops[~np.isin(self.self_loops, touched)],
+            self._self_loops(touched),
+        )
+        if self.affected is None:
+            self.repeats = _repeats(np.arange(len(self.keys)), self.keys)
+            return
+        # Only edges sharing a key with a touched edge can change status.
+        changed = np.concatenate([keys_before, self.keys[touched]])
+        self.affected[changed] = True
+        candidates = np.flatnonzero(self.affected[self.keys])
+        self.affected[changed] = False
+        self.repeats = np.union1d(
+            self.repeats[~np.isin(self.repeats, candidates)],
+            _repeats(candidates, self.keys[candidates]),
+        )
+
+    def _self_loops(self, positions: IntArray) -> IntArray:
+        if self.own_target is None:
+            return np.array([], dtype=int)
+        own = self.own_target[self.out_stubs[positions]]
+        return positions[own == self.in_stubs[positions]]
+
+
+def _repeats(positions: IntArray, keys: IntArray) -> IntArray:
+    """The ``positions`` (ascending) whose key equals that of an earlier position."""
+    order = np.argsort(keys, kind="stable")  # equal keys keep their order
+    repeated = order[1:][keys[order[1:]] == keys[order[:-1]]]
+    return np.sort(positions[repeated])
+
+
+def _swap_in_order(stubs, positions, partners) -> None:
+    """Swap ``stubs[positions[k]]`` with ``stubs[partners[k]]`` for k = 0, 1, ...
+
+    Vectorised when no position is touched twice (the usual case), else in order.
+    """
+    touched = np.concatenate([positions, partners])
+    if len(np.unique(touched)) == len(touched):
+        stubs[positions], stubs[partners] = stubs[partners], stubs[positions]
+        return
+    for i, j in zip(positions.tolist(), partners.tolist()):
+        stubs[i], stubs[j] = stubs[j], stubs[i]

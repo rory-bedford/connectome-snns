@@ -10,6 +10,8 @@ import numpy as np
 import zarr
 from numpy.typing import NDArray
 
+from .utils import by_cell_type, mean_and_std
+
 
 def firing_rates_from_spikes(spikes: NDArray, dt: float) -> NDArray:
     """Per-neuron firing rates in Hz from a spike array.
@@ -76,54 +78,27 @@ def compute_spike_train_cv(
         NDArray[np.float32]: CV values of shape (batch_size, n_neurons) or
             (batch_size, n_patterns, n_neurons). Returns NaN for neurons with fewer than 3 spikes.
     """
-    # Determine input dimensions
-    if spike_trains.ndim == 4:
-        batch_size, n_patterns, n_steps, n_neurons = spike_trains.shape
-        output_shape = (batch_size, n_patterns, n_neurons)
-    else:
-        batch_size, n_steps, n_neurons = spike_trains.shape
-        output_shape = (batch_size, n_neurons)
-        # Add pattern dimension for uniform processing
-        spike_trains = spike_trains[:, np.newaxis, :, :]  # (batch, 1, steps, neurons)
-        n_patterns = 1
+    # One row per train: (batch[, pattern], neuron) x time.
+    output_shape = spike_trains.shape[:-2] + spike_trains.shape[-1:]
+    trains = np.moveaxis(spike_trains, -1, -2).reshape(-1, spike_trains.shape[-2])
+    train, step = np.nonzero(trains > 0)  # sorted by train, then time
 
-    # Initialize CV values with NaN
-    cv_values = np.full(output_shape, np.nan, dtype=np.float32)
+    times = step.astype(np.float32) * np.float32(dt)
+    same = train[1:] == train[:-1]  # consecutive spikes of one train
+    isi, owner = (times[1:] - times[:-1])[same], train[1:][same]
+    n = np.bincount(owner, minlength=len(trains))
+    total = np.bincount(owner, weights=isi, minlength=len(trains))
+    squares = np.bincount(
+        owner, weights=isi.astype(np.float64) ** 2, minlength=len(trains)
+    )
 
-    # Create time indices
-    time_indices = np.arange(n_steps, dtype=np.float32) * dt
-
-    # Loop over batch, patterns, and neurons
-    for batch_idx in range(batch_size):
-        for pattern_idx in range(n_patterns):
-            for neuron_idx in range(n_neurons):
-                # Find time indices where spikes occur
-                spike_indices = np.where(
-                    spike_trains[batch_idx, pattern_idx, :, neuron_idx] > 0
-                )[0]
-
-                # Need at least 3 spikes to compute CV with unbiased std (at least 2 ISIs)
-                if len(spike_indices) < 3:
-                    continue
-
-                # Convert to time units
-                spike_times = time_indices[spike_indices]
-
-                # Compute inter-spike intervals
-                isis = spike_times[1:] - spike_times[:-1]
-
-                # Compute CV = std(ISI) / mean(ISI)
-                mean_isi = isis.mean()
-                if mean_isi > 0:
-                    std_isi = isis.std(ddof=1)  # unbiased std
-                    if output_shape == (batch_size, n_neurons):
-                        cv_values[batch_idx, neuron_idx] = std_isi / mean_isi
-                    else:
-                        cv_values[batch_idx, pattern_idx, neuron_idx] = (
-                            std_isi / mean_isi
-                        )
-
-    return cv_values
+    # At least 2 intervals (3 spikes) for an unbiased standard deviation.
+    cv = np.full(len(trains), np.nan)
+    ok = (n >= 2) & (total > 0)
+    mean = total[ok] / n[ok]
+    std = np.sqrt(np.maximum(squares[ok] - n[ok] * mean**2, 0.0) / (n[ok] - 1))
+    cv[ok] = std / mean
+    return cv.astype(np.float32).reshape(output_shape)
 
 
 def compute_spike_train_fano_factor(
@@ -204,44 +179,17 @@ def compute_firing_rate_by_cell_type(
             - "std_firing_rate_hz": Standard deviation of firing rates (Hz)
             - "n_silent_cells": Number of cells that don't fire at all
     """
-    batch_size, n_steps, n_neurons = spike_trains.shape
-
-    # Compute total spike count per neuron across all timesteps and batches
-    # Sum over time and batch dimensions
-    total_spikes = spike_trains.sum(axis=(0, 1))  # Shape: (n_neurons,)
-
-    # Convert duration from ms to seconds for Hz calculation
-    duration_sec = duration / 1000.0
-
-    # Compute firing rate in Hz for each neuron
-    firing_rates_hz = total_spikes / (duration_sec * batch_size)  # Shape: (n_neurons,)
-
-    # Get unique cell types
-    unique_cell_types = np.unique(cell_type_indices)
-
-    # Compute statistics by cell type
-    stats_by_type = {}
-    for cell_type in unique_cell_types.tolist():
-        # Get indices of neurons belonging to this cell type
-        mask = cell_type_indices == cell_type
-        cell_type_rates = firing_rates_hz[mask]
-
-        # Compute mean and std
-        mean_rate = float(cell_type_rates.mean())
-        std_rate = (
-            float(cell_type_rates.std(ddof=1)) if len(cell_type_rates) > 1 else 0.0
-        )
-
-        # Count cells that don't fire at all (firing rate = 0)
-        n_silent = int((cell_type_rates == 0).sum())
-
-        stats_by_type[cell_type] = {
-            "mean_firing_rate_hz": mean_rate,
-            "std_firing_rate_hz": std_rate,
-            "n_silent_cells": n_silent,
+    batch_size = spike_trains.shape[0]
+    rates = spike_trains.sum(axis=(0, 1)) / (duration / 1000.0 * batch_size)
+    stats = {}
+    for cell_type, type_rates in by_cell_type(rates, cell_type_indices).items():
+        mean, std = mean_and_std(type_rates)
+        stats[cell_type] = {
+            "mean_firing_rate_hz": mean,
+            "std_firing_rate_hz": std,
+            "n_silent_cells": int((type_rates == 0).sum()),
         }
-
-    return stats_by_type
+    return stats
 
 
 def compute_cv_by_cell_type(
@@ -264,39 +212,10 @@ def compute_cv_by_cell_type(
             - "mean_cv": Mean CV across neurons of this type
             - "std_cv": Standard deviation of CV values
     """
-    # Compute CV for all neurons
-    cv_values = compute_spike_train_cv(
-        spike_trains, dt=dt
-    )  # Shape: (batch_size, n_neurons)
-
-    # Average CV across batches for each neuron
-    # Suppress warning for all-NaN slices (expected when neurons have no spikes)
-    with np.errstate(invalid="ignore"):
-        cv_per_neuron = np.nanmean(cv_values, axis=0)  # Shape: (n_neurons,)
-
-    # Get unique cell types
-    unique_cell_types = np.unique(cell_type_indices)
-
-    # Compute statistics by cell type
-    stats_by_type = {}
-    for cell_type in unique_cell_types.tolist():
-        # Get indices of neurons belonging to this cell type
-        mask = cell_type_indices == cell_type
-        cell_type_cvs = cv_per_neuron[mask]
-
-        # Filter out NaN values
-        valid_cvs = cell_type_cvs[~np.isnan(cell_type_cvs)]
-
-        if len(valid_cvs) > 0:
-            mean_cv = float(valid_cvs.mean())
-            std_cv = float(valid_cvs.std(ddof=1)) if len(valid_cvs) > 1 else 0.0
-        else:
-            mean_cv = float("nan")
-            std_cv = float("nan")
-
-        stats_by_type[cell_type] = {
-            "mean_cv": mean_cv,
-            "std_cv": std_cv,
-        }
-
-    return stats_by_type
+    with np.errstate(invalid="ignore"):  # all-NaN neurons (fewer than 3 spikes)
+        cv_per_neuron = np.nanmean(compute_spike_train_cv(spike_trains, dt=dt), axis=0)
+    stats = {}
+    for cell_type, cvs in by_cell_type(cv_per_neuron, cell_type_indices).items():
+        mean, std = mean_and_std(cvs)
+        stats[cell_type] = {"mean_cv": mean, "std_cv": std}
+    return stats

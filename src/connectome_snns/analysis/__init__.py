@@ -1,4 +1,5 @@
-"""Analysis utilities for network statistics."""
+"""Analysis of simulated activity: firing and voltage statistics, R², and cached test
+inputs."""
 
 import pandas as pd
 from numpy.typing import NDArray
@@ -15,14 +16,19 @@ from .utils import (
     interleave_spike_trains,
     make_grid_colormap,
 )
-from .inference import (
-    run_feedforward_inference,
-    run_recurrent_inference,
-    run_visible_driven_inference,
-    run_two_layer_inference,
-    run_two_layer_tracked_inference,
-)
-from .test_inputs import ensure_test_inputs
+
+# Names whose modules load the simulators and runners: imported on first use, so that
+# ``from connectome_snns.analysis import r_squared`` stays light.
+_LAZY = {"ensure_test_inputs": "test_inputs"}
+
+
+def __getattr__(name):
+    if name in _LAZY:
+        import importlib
+
+        module = importlib.import_module(f".{_LAZY[name]}", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def compute_network_statistics(
@@ -103,10 +109,5 @@ __all__ = [
     "firing_rates_from_spikes",
     "interleave_spike_trains",
     "make_grid_colormap",
-    "run_feedforward_inference",
-    "run_recurrent_inference",
-    "run_visible_driven_inference",
-    "run_two_layer_inference",
-    "run_two_layer_tracked_inference",
     "ensure_test_inputs",
 ]

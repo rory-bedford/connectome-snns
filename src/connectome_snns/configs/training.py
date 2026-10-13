@@ -1,30 +1,14 @@
-"""Shared training configuration parameters.
+"""Training configuration of the archived student runs.
 
-Configuration for training settings that are common across all model types.
+Only archived run scripts use these classes. They read keys the classes do not declare
+from the same tables, so unlike the current configs (``base.Config``) these ignore
+unknown keys.
 """
 
-from typing import Dict, Literal, Optional
+from typing import Dict, Optional
 from pydantic import BaseModel
 
-
-class TrainingConfig(BaseModel):
-    """Basic training parameters."""
-
-    chunks_per_update: int
-    log_interval: int
-    checkpoint_interval: int
-    mixed_precision: bool
-    plot_size: int
-    optimisable: (
-        Literal[
-            "weights",
-            "scaling_factors",
-            "scaling_factors_recurrent",
-            "scaling_factors_feedforward",
-            None,
-        ]
-        | None
-    ) = None
+from .simulation import Optimisable
 
 
 class StudentTrainingConfig(BaseModel):
@@ -39,16 +23,7 @@ class StudentTrainingConfig(BaseModel):
     weight_perturbation_variance: float
     burn_in_chunks: int = 0
     recurrent_smoothing_tau: Optional[float] = None
-    optimisable: (
-        Literal[
-            "weights",
-            "scaling_factors",
-            "scaling_factors_recurrent",
-            "scaling_factors_feedforward",
-        ]
-        | Dict[str, Optional[str]]
-        | None
-    ) = None
+    optimisable: Optimisable | Dict[str, Optional[str]] | None = None
 
     def total_chunks(self, num_chunks_per_epoch: int) -> int:
         """Total number of chunks across all epochs.
@@ -101,22 +76,7 @@ class EMTrainingConfig(BaseModel):
     mixed_precision: bool
     weight_perturbation_variance: float
     burn_in_chunks: int = 0
-    optimisable: Literal[
-        "weights",
-        "scaling_factors",
-        "scaling_factors_recurrent",
-        "scaling_factors_feedforward",
-    ]
-
-
-class LossWeights(BaseModel):
-    """Loss function weights for homeostatic plasticity."""
-
-    firing_rate: float
-    cv: float
-    silent_penalty: float
-    membrane_variance: float
-    weight_ratio: float
+    optimisable: Optimisable
 
 
 class StudentLossWeights(BaseModel):
@@ -132,17 +92,6 @@ class StudentLossWeights(BaseModel):
     ff_matrix_l1: float = 0.0  # fallback for all cell types
     ff_l1_excitatory: float = 0.0  # per-type override (0 = use ff_matrix_l1)
     ff_l1_inhibitory: float = 0.0
-
-
-class Hyperparameters(BaseModel):
-    """Optimization hyperparameters for homeostatic plasticity."""
-
-    surrgrad_scale: float
-    learning_rate: float
-    beta1: float = 0.9
-    beta2: float = 0.999
-    grad_norm_clip: Optional[float] = None
-    loss_weight: LossWeights
 
 
 class StudentHyperparameters(BaseModel):
@@ -161,92 +110,6 @@ class StudentHyperparameters(BaseModel):
     loss_weight: StudentLossWeights
 
 
-# ---------------------------------------------------------------------------
-# Solving-bias experiment hyperparameter models
-# ---------------------------------------------------------------------------
-# Each sub-experiment declares exactly the fields it needs — no defaults,
-# no optional fields.  The base class holds what every variant shares.
-
-
-class _StudentHyperparametersBase(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    surrgrad_scale: float
-    learning_rate: float
-    lr_min: Optional[float] = None
-    beta1: float = 0.9
-    beta2: float = 0.999
-    grad_norm_clip: Optional[float] = None
-
-
-# -- Loss-weight inner models --
-
-
-class VanRossumLossWeights(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    van_rossum: float
-
-
-class VanRossumFiringRateLossWeights(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    van_rossum: float
-    firing_rate: float
-
-
-class VanRossumRateLossWeights(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    van_rossum: float
-    van_rossum_rate: float
-
-
-class PoissonLossWeights(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    poisson: float
-
-
-class PoissonKLLossWeights(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    poisson_kl: float
-
-
-# -- Concrete hyperparameter models --
-
-
-class VanRossumHyperparameters(_StudentHyperparametersBase):
-    van_rossum_tau_rise: float
-    van_rossum_tau_decay: float
-    loss_weight: VanRossumLossWeights
-
-
-class VanRossumFiringRateHyperparameters(_StudentHyperparametersBase):
-    van_rossum_tau_rise: float
-    van_rossum_tau_decay: float
-    loss_weight: VanRossumFiringRateLossWeights
-
-
-class VanRossumRateHyperparameters(_StudentHyperparametersBase):
-    van_rossum_tau_rise: float
-    van_rossum_tau_decay: float
-    van_rossum_rate_tau_rise: float
-    van_rossum_rate_tau_decay: float
-    loss_weight: VanRossumRateLossWeights
-
-
-class PoissonHyperparameters(_StudentHyperparametersBase):
-    loss_weight: PoissonLossWeights
-
-
-class PoissonKLHyperparameters(_StudentHyperparametersBase):
-    van_rossum_tau_rise: float
-    van_rossum_tau_decay: float
-    loss_weight: PoissonKLLossWeights
-
-
 class Targets(BaseModel):
     """Target values for homeostatic plasticity training."""
 
@@ -254,3 +117,22 @@ class Targets(BaseModel):
     alpha: Dict[str, float]
     threshold_ratio: Dict[str, float]
     weight_ratio: float
+
+
+# Unused, kept importable from here (see legacy.py).
+from .legacy import (  # noqa: E402, F401
+    Hyperparameters,
+    LossWeights,
+    PoissonHyperparameters,
+    PoissonKLHyperparameters,
+    PoissonKLLossWeights,
+    PoissonLossWeights,
+    _StudentHyperparametersBase,
+    TrainingConfig,
+    VanRossumFiringRateHyperparameters,
+    VanRossumFiringRateLossWeights,
+    VanRossumHyperparameters,
+    VanRossumLossWeights,
+    VanRossumRateHyperparameters,
+    VanRossumRateLossWeights,
+)

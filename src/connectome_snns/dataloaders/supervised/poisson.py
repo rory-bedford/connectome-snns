@@ -16,7 +16,7 @@ class HomogeneousPoissonFFDataset(TeacherSpikeDataset):
     Args:
         spike_data_path: Path to ``spike_data.zarr``.
         chunk_size: Number of timesteps per chunk.
-        device: Torch device for returned tensors.
+        device: Unused: datasets return CPU tensors (see ``TeacherSpikeDataset``).
         firing_rate_override: If provided, use this rate (Hz) instead of
             computing from the data.
         recurrent_smoothing_tau: Gaussian sigma (ms) for smoothing recurrent

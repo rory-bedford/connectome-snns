@@ -5,7 +5,7 @@ the configuration sections they need, rather than requiring monolithic parameter
 
 Example usage:
     import toml
-    from connectome_snns.configs import SimulationConfig, TrainingConfig
+    from connectome_snns.configs import SimulationConfig, StudentTrainingConfig
     from connectome_snns.configs.conductance_based import RecurrentLayerConfig, FeedforwardLayerConfig
 
     data = toml.load(params_file)
@@ -16,13 +16,15 @@ Example usage:
 # Shared configs
 from .simulation import SimulationConfig, StudentSimulationConfig
 from .training import (
-    TrainingConfig,
     StudentTrainingConfig,
     EMTrainingConfig,
-    LossWeights,
-    Hyperparameters,
     StudentHyperparameters,
     Targets,
+)
+from .legacy import (
+    TrainingConfig,
+    LossWeights,
+    Hyperparameters,
     VanRossumHyperparameters,
     VanRossumFiringRateHyperparameters,
     VanRossumRateHyperparameters,

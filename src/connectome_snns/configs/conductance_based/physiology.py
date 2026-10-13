@@ -2,18 +2,21 @@
 
 import numpy as np
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field
+from ..base import Config
 
 
-class PhysiologyConfig(BaseModel):
+class PhysiologyConfig(Config):
     """Neuronal physiology parameters for conductance-based models."""
+
+    #: The refractory period, never simulated (removed; old files still carry it).
+    LEGACY_KEYS = ("tau_ref",)
 
     tau_mem: float  # Membrane time constant (ms)
     theta: float  # Spike threshold voltage (mV)
     U_reset: float  # Reset voltage after spike (mV)
     E_L: float  # Leak reversal potential (mV)
     g_L: float  # Leak conductance (nS)
-    tau_ref: float  # Refractory period (ms)
 
 
 # Synapse type constants
@@ -21,7 +24,7 @@ EXCITATORY_SYNAPSE_TYPES = ["AMPA", "NMDA"]
 INHIBITORY_SYNAPSE_TYPES = ["GABA_A", "GABA_B"]
 
 
-class SynapseConfig(BaseModel):
+class SynapseConfig(Config):
     """Synapse parameters for conductance-based models.
 
     Supports multiple synapse types per cell type (e.g., AMPA and NMDA for excitatory cells).
@@ -63,5 +66,4 @@ class SynapseConfig(BaseModel):
             return None
         return np.array(self.g_clip_list)
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)

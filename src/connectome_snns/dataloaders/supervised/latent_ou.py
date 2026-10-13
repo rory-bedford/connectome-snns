@@ -9,25 +9,24 @@ from ._base import TeacherSpikeDataset
 
 
 class LatentOUDataset(TeacherSpikeDataset):
-    """Returns OU latent trajectories as **continuous floats** (not spikes).
+    """The OU latent trajectory as feedforward input: continuous floats, not spikes.
 
-    Unlike :class:`OUReconstructedFFDataset` which Poisson-samples binary
-    spikes from the OU rates, this dataset returns the raw OU mixing weights
-    directly.  The ``SpikeData.input_spikes`` field will therefore contain
-    continuous real-valued activations (shape ``batch × time × n_latents``),
-    not binary 0/1 spike trains.  The simulator treats these values exactly
-    like spike counts in the conductance update (einsum), so they act as
-    continuous rate inputs.
+    Where :class:`OUReconstructedFFDataset` Poisson-samples binary spikes from the
+    rates the latents imply, this dataset returns the latents themselves (the
+    archive's time-varying OU mixing ``weights``), letting the network learn a
+    linear map from latents to neurons.
 
-    The ``weights`` array in the zarr archive contains the time-varying OU
-    mixing weights.  This dataset returns them directly as continuous floats,
-    letting the network learn a linear mapping from latents to neurons.
+    ``SpikeData.input_spikes`` therefore holds real values, ``(batch, time,
+    n_latents)`` float32: the field keeps its name because every dataset fills the
+    same tuple. The simulators accept it unchanged -- an input "spike" only ever
+    enters as a weight on the conductance update, so a float acts as a continuous
+    rate input (the sparse-input path switches itself off for dense inputs).
 
     Args:
         spike_data_path: Path to ``spike_data.zarr`` with ``weights``
             and ``output_spikes``.
         chunk_size: Number of timesteps per chunk.
-        device: Torch device for returned tensors.
+        device: Unused: datasets return CPU tensors (see ``TeacherSpikeDataset``).
         recurrent_smoothing_tau: Gaussian sigma (ms) for smoothing recurrent
             input spikes.  ``None`` disables smoothing.
     """
@@ -62,10 +61,7 @@ class LatentOUDataset(TeacherSpikeDataset):
         )
 
     def _get_ff_spikes(self, start_t: int, end_t: int) -> torch.Tensor:
-        """Return continuous OU latent activations (NOT binary spikes).
-
-        Despite the inherited method name, this returns float-valued OU mixing
-        weights, not 0/1 spike trains.
-        """
+        """The latents in the window, float32 (the hook's name is shared with the
+        spiking datasets)."""
         w_chunk = self.weight_data[:, start_t:end_t, :]  # (batch, chunk, n_latents)
         return torch.from_numpy(np.array(w_chunk, dtype=np.float32))

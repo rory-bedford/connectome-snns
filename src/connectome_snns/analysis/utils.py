@@ -78,3 +78,19 @@ def make_grid_colormap(
     norm = plt.Normalize(min(param_values), max(param_values))
     color_dict = {v: cmap(norm(v)) for v in param_values}
     return norm, color_dict
+
+
+def mean_and_std(values: NDArray) -> tuple[float, float]:
+    """Mean and unbiased std of the non-NaN values (std 0 for one value, NaN for none)."""
+    values = values[~np.isnan(values)]
+    if len(values) == 0:
+        return float("nan"), float("nan")
+    return float(values.mean()), float(values.std(ddof=1)) if len(values) > 1 else 0.0
+
+
+def by_cell_type(values: NDArray, cell_type_indices: NDArray) -> dict[int, NDArray]:
+    """Per-neuron ``values`` grouped by cell type: ``{cell_type: values of its neurons}``."""
+    return {
+        int(cell_type): values[cell_type_indices == cell_type]
+        for cell_type in np.unique(cell_type_indices)
+    }

@@ -1,55 +1,95 @@
-"""Scaling-factor trajectory and comparison plots."""
+"""Scaling-factor plots: per-pathway trajectories over training and final values.
+
+Scaling factors are logged per pathway (e.g. ``excitatory_to_inhibitory``); see
+:data:`SF_PATHWAYS` for the canonical pathways and their display labels. A pathway
+whose source is :data:`FEEDFORWARD_SOURCE` stands for the input from whichever
+feedforward cell type the log has (any source that is not a recurrent type), so the
+same plots work whatever the input population is called.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+#: Source name in :data:`SF_PATHWAYS` that matches any feedforward cell type.
+FEEDFORWARD_SOURCE = "feedforward"
+#: Cell types that are recurrent (any other source of a pathway is feedforward).
+RECURRENT_TYPES = ("excitatory", "inhibitory")
 
 # Canonical pathway definitions shared across all experiments.
 # Each entry is ``(csv_key_suffix, display_label)``.
 SF_PATHWAYS: list[tuple[str, str]] = [
-    ("excitatory_to_excitatory", "Exc \u2192 Exc"),
-    ("excitatory_to_inhibitory", "Exc \u2192 Inh"),
-    ("inhibitory_to_excitatory", "Inh \u2192 Exc"),
-    ("inhibitory_to_inhibitory", "Inh \u2192 Inh"),
-    ("mitral_to_excitatory", "FF \u2192 Exc"),
-    ("mitral_to_inhibitory", "FF \u2192 Inh"),
+    ("excitatory_to_excitatory", "Exc → Exc"),
+    ("excitatory_to_inhibitory", "Exc → Inh"),
+    ("inhibitory_to_excitatory", "Inh → Exc"),
+    ("inhibitory_to_inhibitory", "Inh → Inh"),
+    ("feedforward_to_excitatory", "FF → Exc"),
+    ("feedforward_to_inhibitory", "FF → Inh"),
 ]
 
-# Short-form aliases used in some older experiments (noisy-weights).
+# Short-form aliases used in some older experiments (noisy-weights); a feedforward
+# source keeps its own name, e.g. ``<input>_to_exc``.
 SF_SHORT_KEYS: dict[str, str] = {
     "exc_to_exc": "excitatory_to_excitatory",
     "exc_to_inh": "excitatory_to_inhibitory",
     "inh_to_exc": "inhibitory_to_excitatory",
     "inh_to_inh": "inhibitory_to_inhibitory",
-    "mitral_to_exc": "mitral_to_excitatory",
-    "mitral_to_inh": "mitral_to_inhibitory",
 }
+_SHORT_TYPES = {"exc": "excitatory", "inh": "inhibitory"}
+
+
+def _pathway(name: str) -> tuple[str, str] | None:
+    """``(source, target)`` of a logged name, long-form; None if it is not a pathway.
+
+    Accepts ``scaling_factors/<pathway>_value`` and bare (long or short) pathways.
+    """
+    if name.startswith("scaling_factors/"):
+        if not name.endswith("_value"):
+            return None
+        name = name.removeprefix("scaling_factors/").removesuffix("_value")
+    if "/" in name or "_to_" not in name:
+        return None
+    source, target = name.split("_to_", 1)
+    return _SHORT_TYPES.get(source, source), _SHORT_TYPES.get(target, target)
+
+
+def _matching_key(keys: Iterable[str], key: str) -> str | None:
+    """The first of ``keys`` (columns, dict keys) that holds pathway ``key``."""
+    source, target = key.split("_to_", 1)
+    for candidate in keys:
+        pathway = _pathway(candidate)
+        if pathway is None or pathway[1] != target:
+            continue
+        if pathway[0] == source or (
+            source == FEEDFORWARD_SOURCE and pathway[0] not in RECURRENT_TYPES
+        ):
+            return candidate
+    return None
 
 
 def _resolve_sf_column(df: pd.DataFrame, key: str) -> str | None:
-    """Find the actual column name for a scaling-factor key in *df*.
+    """The column of ``df`` holding scaling-factor pathway ``key``, or None.
 
-    Tries common prefixes: ``scaling_factors/{key}_value``, ``{key}``,
-    and short-form aliases.
+    Prefers ``scaling_factors/{key}_value``, then bare ``key``, then any other
+    spelling of the same pathway (short forms, the feedforward type's own name).
     """
-    candidates = [
-        f"scaling_factors/{key}_value",
-        key,
-    ]
-    # Also try short-form
-    for short, long in SF_SHORT_KEYS.items():
-        if long == key:
-            candidates.append(short)
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
+    for column in (f"scaling_factors/{key}_value", key):
+        if column in df.columns:
+            return column
+    return _matching_key(df.columns, key)
+
+
+def _pathway_value(values: dict, key: str, default=None):
+    """``values[key]``, with ``key`` matched as in :func:`_resolve_sf_column`."""
+    if key in values:
+        return values[key]
+    match = _matching_key(values, key)
+    return default if match is None else values[match]
 
 
 # ── Single-run / multi-seed trajectory plots ─────────────────────────
@@ -198,8 +238,9 @@ def plot_sf_vs_parameter(
     fig, axes = plt.subplots(2, 3, figsize=figsize)
     for idx, (sf_key, sf_label) in enumerate(pathways):
         ax = axes.flat[idx]
-        if sf_key in final_sfs:
-            ax.plot(param_values, final_sfs[sf_key], "o-", linewidth=1.5, markersize=4)
+        values = _pathway_value(final_sfs, sf_key)
+        if values is not None:
+            ax.plot(param_values, values, "o-", linewidth=1.5, markersize=4)
         if target is not None:
             ax.axhline(y=target, color="black", linestyle="--", linewidth=1, alpha=0.5)
         ax.set_title(sf_label)
@@ -238,7 +279,7 @@ def plot_sf_bar_chart(
             Multi-condition: ``{condition_label: {pathway_key: value}}``.
         pathways: Pathway definitions. Defaults to :data:`SF_PATHWAYS`.
         condition_labels: Explicit ordering of conditions (multi-condition
-            only).  Defaults to ``sorted(sf_values.keys())``.
+            only).  Defaults to the order of ``sf_values``.
         condition_colors: One color per condition.
         target: Horizontal target line (set *None* to hide).
         figsize: Figure size.
@@ -272,7 +313,7 @@ def plot_sf_bar_chart(
             condition_colors = [f"C{i}" for i in range(n_cond)]
         width = 0.8 / n_cond
         for i, cond in enumerate(condition_labels):
-            vals = [sf_values[cond].get(k, 0.0) for k in pw_keys]
+            vals = [_pathway_value(sf_values[cond], k, 0.0) for k in pw_keys]
             ax.bar(
                 x + (i - (n_cond - 1) / 2) * width,
                 vals,
@@ -284,7 +325,7 @@ def plot_sf_bar_chart(
                 linewidth=0.5,
             )
     else:
-        vals = [sf_values.get(k, 0.0) for k in pw_keys]
+        vals = [_pathway_value(sf_values, k, 0.0) for k in pw_keys]
         ax.bar(x, vals, color="C0", alpha=0.8)
 
     if target is not None:

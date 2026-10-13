@@ -1,4 +1,4 @@
-"""Dataset that reconstructs feedforward inputs from OU latent trajectory."""
+"""Dataset that reconstructs feedforward inputs from the OU latent trajectory."""
 
 import numpy as np
 import torch
@@ -7,20 +7,24 @@ from typing import Optional, Union
 
 from ._base import TeacherSpikeDataset
 
+#: Archive arrays that may hold the static input patterns, newest name first.
+PATTERN_KEYS = ("input_patterns", "odourant_patterns")
+
 
 class OUReconstructedFFDataset(TeacherSpikeDataset):
     """Reconstruct FF rates from OU mixing weights and Poisson-sample spikes.
 
-    Loads the low-dimensional OU latent trajectory and odourant patterns from
-    ``spike_data.zarr``, reconstructs per-neuron firing rates via
-    ``rates = weights @ odourant_patterns``, and Poisson-samples fresh FF
-    spikes on each access.
+    Loads the low-dimensional OU latent trajectory (``weights``) and the static
+    input patterns from ``spike_data.zarr``, reconstructs per-neuron firing rates via
+    ``rates = weights @ patterns``, and Poisson-samples fresh FF spikes on each
+    access.
 
     Args:
-        spike_data_path: Path to ``spike_data.zarr`` with ``weights``,
-            ``odourant_patterns``, and ``output_spikes``.
+        spike_data_path: Path to ``spike_data.zarr`` with ``weights``, the patterns
+            (``input_patterns``, or ``odourant_patterns`` in older archives) and
+            ``output_spikes``.
         chunk_size: Number of timesteps per chunk.
-        device: Torch device for returned tensors.
+        device: Unused: datasets return CPU tensors (see ``TeacherSpikeDataset``).
         recurrent_smoothing_tau: Gaussian sigma (ms) for smoothing recurrent
             input spikes.  ``None`` disables smoothing.
     """
@@ -39,21 +43,19 @@ class OUReconstructedFFDataset(TeacherSpikeDataset):
             recurrent_smoothing_tau=recurrent_smoothing_tau,
         )
 
-        for key in ("weights", "odourant_patterns"):
-            if key not in self._root:
-                raise ValueError(
-                    f"Zarr file at {spike_data_path} is missing '{key}'. "
-                    "Re-run generate-teacher-activity or apply "
-                    "_unsorted/patch_save_odourant_patterns.py."
-                )
+        patterns_key = next((k for k in PATTERN_KEYS if k in self._root), None)
+        if "weights" not in self._root or patterns_key is None:
+            raise ValueError(
+                f"Zarr file at {spike_data_path} needs 'weights' (the OU latent "
+                f"trajectory) and one of {PATTERN_KEYS} (the static input patterns); "
+                "re-generate the teacher activity with both saved."
+            )
 
-        self.odourant_patterns = torch.from_numpy(
-            self._root["odourant_patterns"][:].astype(np.float32)
-        )
+        self.patterns = torch.from_numpy(self._root[patterns_key][:].astype(np.float32))
         self.weight_data = self._root["weights"]
 
         _, _, self.n_patterns = self.weight_data.shape
-        self.n_input_neurons = self.odourant_patterns.shape[1]
+        self.n_input_neurons = self.patterns.shape[1]
 
         print(
             f"OUReconstructedFFDataset: {self.n_patterns} OU patterns → "
@@ -66,6 +68,6 @@ class OUReconstructedFFDataset(TeacherSpikeDataset):
             np.array(self.weight_data[:, start_t:end_t, :], dtype=np.float32)
         )
 
-        rates_hz = w_chunk @ self.odourant_patterns
+        rates_hz = w_chunk @ self.patterns
         spike_prob = rates_hz * (self.dt / 1000.0)
         return torch.rand_like(spike_prob) < spike_prob

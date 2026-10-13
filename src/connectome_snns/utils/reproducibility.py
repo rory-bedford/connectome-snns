@@ -11,81 +11,70 @@ Usage in your scripts:
 
         # Your code here...
         # Errors are automatically caught and logged
+
+The pieces live in their own modules and are importable from here too: reading
+experiment configs (``experiment_config``), git facts (``git``), and the inputs,
+metadata and README written to the output directory (``experiment_outputs``).
 """
 
-import subprocess
-import sys
-import toml
 import json
 import shutil
+import subprocess
+import sys
 import traceback
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import toml
+
+from .experiment_config import (  # noqa: F401 (re-exported)
+    absolute_config,
+    get_repo_root,
+    load_experiment_config,
+    resolve_path,
+    resolve_relative_to_repo,
+)
+from .experiment_outputs import (
+    append_json_line,
+    experiment_readme,
+    link_inputs,
+    write_json,
+)
+from .git import (  # noqa: F401 (re-exported)
+    code_changes,
+    library_info,
+    repository_info,
+    uncommitted_files,
+)
+
+REQUIRED_FIELDS = ("script", "output_dir", "parameters_file", "log_file")
 
 
-def get_repo_root():
-    """Get the repository root directory."""
-    # Navigate up from this file (src/utils/reproducibility.py) to repo root
-    return Path(__file__).resolve().parent.parent.parent
+def _is_configuration(path: str) -> bool:
+    """Files an experiment may run with uncommitted: parameters, workspace, TOML."""
+    return (
+        path.startswith("parameters/")
+        or path.startswith("workspace/")
+        or path.endswith(".toml")
+    )
 
 
-def resolve_relative_to_repo(path_str):
-    """
-    Resolve a path relative to the repository root if it's not absolute.
-
-    Args:
-        path_str: String path that may be relative or absolute
-
-    Returns:
-        Path object resolved to absolute path
-    """
-    path = Path(path_str)
-    if path.is_absolute():
-        return path
-    else:
-        return (get_repo_root() / path).resolve()
-
-
-def load_experiment_config(toml_path):
-    """
-    Load an experiment.toml and return its paths as a dictionary.
-
-    Useful in analysis notebooks to avoid hardcoding paths::
-
-        from connectome_snns.utils.reproducibility import load_experiment_config
-        config = load_experiment_config("experiment.toml")
-        results = Path(config["output_dir"])
-
-    Args:
-        toml_path: Path to experiment.toml (relative paths resolved from CWD).
-
-    Returns:
-        Dict with keys: output_dir, parameters_file, script, and optionally
-        data_inputs (list of input paths from [[data.inputs]]).
-    """
-    raw = toml.load(Path(toml_path))
-
-    config = {
-        "output_dir": Path(raw["output_dir"]),
-        "parameters_file": Path(raw["parameters_file"]),
-        "script": Path(raw["script"]),
-    }
-
-    if "data" in raw:
-        config["data_inputs"] = [
-            Path(entry["path"]) for entry in raw["data"].get("inputs", [])
-        ]
-
-    return config
+def _banner(title: str, *lines: str) -> None:
+    rule = "=" * len(title)
+    print("\n".join(["", rule, title, *lines, rule, ""]))
 
 
 class ExperimentTracker:
     """
     Tracks experiment reproducibility by checking git status, logging metadata,
     and managing output directories.
+
+    With ``resume_dir``, the run continues in that existing output directory: its
+    inputs and files are kept, and ``metadata.json``, the README and the central log
+    record the resumed session (under ``resumes``).
     """
 
-    def __init__(self, config_path=None, skip_git_check=False):
+    def __init__(self, config_path=None, skip_git_check=False, resume_dir=None):
         """
         Initialize the experiment tracker.
 
@@ -93,12 +82,15 @@ class ExperimentTracker:
             config_path: Path to the TOML configuration file.
                         Defaults to workspace/experiment.toml in the repository root.
             skip_git_check: If True, skip git status validation (useful for development).
+            resume_dir: An existing output directory to continue in (see the class
+                docstring). None starts a new run.
         """
         if config_path is None:
             # Default to workspace/experiment.toml in repository root
             config_path = get_repo_root() / "workspace" / "experiment.toml"
         self.config_path = Path(config_path)
         self.skip_git_check = skip_git_check
+        self.resume_dir = None if resume_dir is None else Path(resume_dir)
         self.config = self._load_config()
         self.start_time = None
         self.git_info = None
@@ -118,13 +110,16 @@ class ExperimentTracker:
     def __exit__(self, exc_type, exc_value, exc_tb):
         """Context manager exit - handle success or failure."""
         if exc_type is None:
-            # No exception - successful completion
             self._end_tracking_success()
         else:
-            # Exception occurred - handle failure
             self._end_tracking_failure(exc_type, exc_value, exc_tb)
-            # Return False to re-raise the exception
-            return False
+            return False  # re-raise the exception
+
+    def resolve(self, path_str) -> Path:
+        """A path from the config: absolute, or relative to the config's directory."""
+        return resolve_path(path_str, self.config_path.resolve().parent)
+
+    # ── Checks ───────────────────────────────────────────────────────────────
 
     def _load_config(self):
         """Load experiment configuration from TOML file."""
@@ -132,95 +127,30 @@ class ExperimentTracker:
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         return toml.load(self.config_path)
 
-    def _check_git_status(self):
-        """Check if there are uncommitted changes and get current commit hash.
+    def _validate_config(self):
+        """Required fields are present; the script and parameters file exist."""
+        for field in REQUIRED_FIELDS:
+            if field not in self.config:
+                raise ValueError(f"Missing required field '{field}' in config")
+        script_path = self.resolve(self.config["script"])
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script not found: {script_path}")
+        params_path = self.resolve(self.config["parameters_file"])
+        if not params_path.exists():
+            raise FileNotFoundError(f"Parameters file not found: {params_path}")
 
-        Allows uncommitted changes to parameters/*.toml and workspace/* files,
-        but requires all code files to be committed for reproducibility.
+    def _check_git_status(self):
+        """The repository's commit, branch and remote; exits if code is uncommitted.
+
+        Uncommitted parameters/*, workspace/* and .toml files are allowed; with
+        ``skip_git_check`` nothing is checked.
         """
         try:
-            # If skipping git checks, still get commit info but don't validate cleanliness
             if self.skip_git_check:
                 print("⚠️  Skipping git status validation (--no-commit flag used)")
             else:
-                # Check for uncommitted changes
-                result = subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-
-                if result.stdout.strip():
-                    # Parse dirty files
-                    dirty_files = []
-                    for line in result.stdout.strip().split("\n"):
-                        if line:
-                            # Format: "XY filename" where X and Y are status codes
-                            # XY is exactly 2 chars; find first space/whitespace after that
-                            # to handle edge cases more robustly
-                            rest = line[2:]  # Skip the 2 status chars
-                            filename = rest.lstrip().strip()
-                            if filename:
-                                dirty_files.append(filename)
-
-                    # Filter out allowed dirty files (parameters, workspace, and .toml files)
-                    code_dirty_files = [
-                        f
-                        for f in dirty_files
-                        if not f.startswith("parameters/")
-                        and not f.startswith("workspace/")
-                        and not f.endswith(".toml")
-                    ]
-
-                    if code_dirty_files:
-                        print("ERROR: You have uncommitted changes in code files:")
-                        for f in code_dirty_files:
-                            print(f"  {f}")
-                        print(
-                            "\nPlease commit code changes before running experiments."
-                        )
-                        print(
-                            "Note: Changes to .toml files, parameters/*, and workspace/* are allowed."
-                        )
-                        print("Or use --no-commit flag to skip this check entirely.")
-                        sys.exit(1)
-                    elif dirty_files:
-                        # Only .toml/parameter/workspace files are dirty - this is fine
-                        print("ℹ️  Uncommitted config files detected (allowed):")
-                        for f in dirty_files:
-                            print(f"  {f}")
-
-            # Get current commit hash
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-            )
-            commit_hash = result.stdout.strip()
-
-            # Get branch name
-            result = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            branch = result.stdout.strip()
-
-            # Get remote URL
-            result = subprocess.run(
-                ["git", "config", "--get", "remote.origin.url"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            remote_url = result.stdout.strip()
-
-            return {
-                "commit_hash": commit_hash,
-                "branch": branch,
-                "remote_url": remote_url,
-            }
-
+                self._require_committed_code()
+            return repository_info()
         except subprocess.CalledProcessError as e:
             print(f"ERROR: Git command failed: {e}")
             sys.exit(1)
@@ -228,165 +158,132 @@ class ExperimentTracker:
             print("ERROR: Git not found. Is this a git repository?")
             sys.exit(1)
 
-    def _get_library_info(self):
-        """Git commit (+ dirty flag) of the installed connectome_snns library.
-
-        The library is an editable dependency, so a result depends on BOTH the
-        experiment repo's commit (``git_commit``) and the library's commit. We
-        resolve the library's own repo from this file's location and record its
-        HEAD. A dirty library is a reproducibility hole, so we flag it (but do not
-        block — the library is co-developed). Degrades to ``None`` when the library
-        is installed non-editably (e.g. from a wheel) and has no git checkout.
-        """
-        lib_dir = Path(__file__).resolve().parent  # inside the connectome_snns repo
-        commit = dirty = None
-        try:
-            commit = subprocess.run(
-                ["git", "-C", str(lib_dir), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-            dirty = bool(
-                subprocess.run(
-                    ["git", "-C", str(lib_dir), "status", "--porcelain"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.strip()
+    def _require_committed_code(self) -> None:
+        dirty_files = uncommitted_files()
+        code_dirty_files = code_changes(dirty_files, _is_configuration)
+        if code_dirty_files:
+            print("ERROR: You have uncommitted changes in code files:")
+            for f in code_dirty_files:
+                print(f"  {f}")
+            print("\nPlease commit code changes before running experiments.")
+            print(
+                "Note: Changes to .toml files, parameters/*, and workspace/* are allowed."
             )
-        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-            pass  # not an editable git checkout — no commit info available
-        try:
-            from importlib.metadata import version
+            print("Or use --no-commit flag to skip this check entirely.")
+            sys.exit(1)
+        if dirty_files:
+            print("ℹ️  Uncommitted config files detected (allowed):")
+            for f in dirty_files:
+                print(f"  {f}")
 
-            pkg_version = version("connectome-snns")
-        except Exception:
-            pkg_version = None
-        if dirty and not self.skip_git_check:
+    def _get_library_info(self):
+        """Git commit (+ dirty flag) and version of the imported connectome_snns.
+
+        A dirty library is a reproducibility hole, so it is flagged (but does not
+        block — the library is co-developed).
+        """
+        lib = library_info()
+        if lib["dirty"] and not self.skip_git_check:
             print(
                 "⚠️  connectome_snns library has uncommitted changes — recording "
                 "connectome_snns_dirty=true (result not fully reproducible)."
             )
-        return {"commit": commit, "dirty": dirty, "version": pkg_version}
-
-    def _validate_config(self):
-        """Validate that required fields are present in config."""
-        required_fields = ["script", "output_dir", "parameters_file", "log_file"]
-        for field in required_fields:
-            if field not in self.config:
-                raise ValueError(f"Missing required field '{field}' in config")
-
-        # Validate that script exists (resolve relative paths to repo root)
-        script_path = resolve_relative_to_repo(self.config["script"])
-        if not script_path.exists():
-            raise FileNotFoundError(f"Script not found: {script_path}")
-
-        # Validate that parameters file exists (resolve relative paths to repo root)
-        params_path = resolve_relative_to_repo(self.config["parameters_file"])
-        if not params_path.exists():
-            raise FileNotFoundError(f"Parameters file not found: {params_path}")
+        return lib
 
     def _extract_wandb_config(self):
         """Extract wandb configuration from config if present."""
-        if "wandb" in self.config:
-            return self.config["wandb"]
-        return None
+        return self.config.get("wandb")
+
+    # ── Output directory ─────────────────────────────────────────────────────
+
+    def _choose_output_dir(self) -> Path:
+        """The configured output directory, asking what to do if it exists."""
+        output_dir = self.resolve(self.config["output_dir"])
+        while output_dir.exists():
+            print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
+            print("\nChoose an option:")
+            print("  [c] Cancel experiment")
+            print("  [o] Overwrite existing folder")
+            print("  [n] Specify a new output folder")
+            response = input("\nYour choice (c/o/n): ").lower().strip()
+
+            if response == "c":
+                print("Experiment cancelled.")
+                sys.exit(0)
+            elif response == "o":
+                print(f"⚠️  Overwriting: {output_dir}")
+                shutil.rmtree(output_dir)
+                break
+            elif response == "n":
+                new_path = input("Enter new output folder path: ").strip()
+                if new_path:
+                    output_dir = Path(new_path)
+                    self.config["output_dir"] = str(output_dir)
+                    print(f"Updated output directory to: {output_dir}")
+                else:
+                    print("Invalid path. Please try again.")
+            else:
+                print("Invalid choice. Please enter 'c', 'o', or 'n'.")
+        return output_dir
 
     def _setup_input_data(self, output_dir):
+        """Link or copy the config's ``[[data.inputs]]`` into ``output_dir/inputs``.
+
+        Returns the inputs directory, or None if the config lists no inputs.
         """
-        Setup input data directory based on config.
-
-        Creates output_dir/inputs/ with either symlinks or copies of source data,
-        depending on strategy specified in config.
-
-        Args:
-            output_dir: Path to experiment output directory
-
-        Returns:
-            Path to inputs directory, or None if no data inputs specified
-        """
-        if "data" not in self.config:
+        entries = self.config.get("data", {}).get("inputs", [])
+        if not entries:
             return None
-
-        data_config = self.config["data"]
-
-        # Get input entries
-        input_entries = data_config.get("inputs", [])
-        if not input_entries:
-            # No inputs specified - this is fine, just return None
-            return None
-
-        # Create inputs directory in output folder
         inputs_dir = output_dir / "inputs"
-        inputs_dir.mkdir(parents=True, exist_ok=True)
-
         print("\nSetting up input data...")
-
-        # Process each input entry
-        for i, entry in enumerate(input_entries):
-            if not isinstance(entry, dict):
-                raise ValueError(
-                    f"Input entry {i} must be a dict with 'path' and 'strategy' keys"
-                )
-
-            source_path_str = entry.get("path")
-            if not source_path_str:
-                raise ValueError(f"Input entry {i} missing 'path' key")
-
-            strategy = entry.get("strategy")
-            if not strategy:
-                raise ValueError(
-                    f"Input entry {i} missing 'strategy' key. Must be 'symlink' or 'copy'."
-                )
-
-            # Validate strategy
-            if strategy not in ["symlink", "copy"]:
-                raise ValueError(
-                    f"Invalid strategy '{strategy}' for {source_path_str}. Must be 'symlink' or 'copy'."
-                )
-
-            source_path = resolve_relative_to_repo(source_path_str)
-
-            # Check if source exists
-            if not source_path.exists():
-                raise FileNotFoundError(f"Input data not found: {source_path}")
-
-            # Determine destination name. An optional `name` key overrides the
-            # source basename, so scripts can load fixed, generic filenames
-            # (e.g. "connectome.npy") regardless of the dated source file.
-            dest_name = entry.get("name") or source_path.name
-            dest_path = inputs_dir / dest_name
-            if dest_path.exists() or dest_path.is_symlink():
-                raise ValueError(
-                    f"Duplicate input destination '{dest_name}' in inputs/ "
-                    f"(from {source_path}); give one entry a unique 'name'."
-                )
-
-            # Handle files vs directories
-            if source_path.is_file():
-                if strategy == "symlink":
-                    dest_path.symlink_to(source_path.absolute())
-                    print(f"  ✓ Linked: {source_path.name} -> {dest_name}")
-                else:  # copy
-                    shutil.copy2(source_path, dest_path)
-                    print(f"  ✓ Copied: {source_path.name} -> {dest_name}")
-            elif source_path.is_dir():
-                if strategy == "symlink":
-                    dest_path.symlink_to(
-                        source_path.absolute(), target_is_directory=True
-                    )
-                    print(f"  ✓ Linked: {source_path.name}/ -> {dest_name}/")
-                else:  # copy
-                    shutil.copytree(source_path, dest_path)
-                    print(f"  ✓ Copied: {source_path.name}/ -> {dest_name}/")
-            else:
-                raise ValueError(
-                    f"Input path is neither file nor directory: {source_path}"
-                )
-
+        link_inputs(entries, inputs_dir, self.resolve)
         print(f"✓ Input data ready: {inputs_dir}")
         return inputs_dir
+
+    def _prepare_new_output(self) -> None:
+        """Create the output directory with the parameters, inputs and config."""
+        output_dir = self._choose_output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Created output directory: {output_dir}")
+
+        # The run reads its own copy of the parameters, so concurrent runs sharing a
+        # source parameters.toml don't race on whatever it says when main() loads it.
+        params_path = self.resolve(self.config["parameters_file"])
+        params_filename = f"parameters{params_path.suffix}"
+        self.params_file = output_dir / params_filename
+        shutil.copy2(params_path, self.params_file)
+        print(f"✓ Copied parameters file to: {self.params_file}")
+
+        self.input_dir = self._setup_input_data(output_dir)
+
+        # The config, with paths pointing at the copies in the output directory
+        copied_config = self.config.copy()
+        copied_config["parameters_file"] = str(self.params_file.resolve())
+        copied_config["output_dir"] = str(output_dir.resolve())
+        copied_config["log_file"] = str(self.resolve(self.config["log_file"]))
+        if "data" in copied_config and self.input_dir:
+            copied_config["data"]["inputs"] = [str(self.input_dir.resolve())]
+        dest_toml = output_dir / "experiment.toml"
+        with open(dest_toml, "w") as f:
+            toml.dump(copied_config, f)
+        print(f"✓ Copied experiment config to: {dest_toml}")
+        self.output_dir = output_dir
+
+    def _prepare_resumed_output(self) -> None:
+        """Continue in ``resume_dir``: its inputs, with the config's parameters."""
+        if not self.resume_dir.exists():
+            print(f"ERROR: Resume directory not found: {self.resume_dir}")
+            sys.exit(1)
+        self.output_dir = self.resume_dir
+        self.params_file = self.resolve(self.config["parameters_file"])
+        input_dir = self.resume_dir / "inputs"
+        if self.config.get("data", {}).get("inputs") and not input_dir.exists():
+            print(f"ERROR: No inputs directory found in {self.resume_dir}")
+            sys.exit(1)
+        self.input_dir = input_dir if input_dir.exists() else None
+        print(f"✓ Resuming in: {self.output_dir}")
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
 
     def _create_initial_metadata(self):
         """Create initial metadata at experiment start."""
@@ -406,8 +303,27 @@ class ExperimentTracker:
             "status": "running",
         }
 
+    def _resumed_metadata(self) -> dict:
+        """The run's metadata with this session appended to ``resumes``."""
+        session = self._create_initial_metadata()
+        path = self.output_dir / "metadata.json"
+        metadata = json.loads(path.read_text()) if path.exists() else dict(session)
+        resume = {
+            key: session[key]
+            for key in (
+                "start_time",
+                "parameters_file",
+                "git_commit",
+                "connectome_snns_commit",
+                "connectome_snns_dirty",
+            )
+        }
+        metadata["resumes"] = [*metadata.get("resumes", []), resume]
+        metadata["status"] = "running"
+        return metadata
+
     def _finalize_metadata(self, end_time, success=True):
-        """Finalize metadata with end time and status."""
+        """Finalize metadata with end time and status (of this session)."""
         metadata = self.initial_metadata.copy()
         metadata["end_time"] = end_time.isoformat()
         metadata["duration_seconds"] = (end_time - self.start_time).total_seconds()
@@ -416,307 +332,91 @@ class ExperimentTracker:
 
     def _log_metadata(self, metadata, log_file):
         """Append metadata to log file."""
-        log_file = Path(log_file)
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Append as JSON lines
-        with open(log_file, "a") as f:
-            f.write(json.dumps(metadata) + "\n")
-
+        append_json_line(metadata, log_file)
         print(f"✓ Logged metadata to: {log_file}")
-
-    def _end_tracking_failure(self, exc_type, exc_value, exc_tb):
-        """Handle experiment failure by logging error and saving partial results."""
-        end_time = datetime.now()
-
-        # Format error trace
-        error_trace = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-
-        # Save error trace to log.err in output directory
-        error_file = self.output_dir / "log.err"
-        error_file.write_text(error_trace)
-        print(f"\n✗ Error trace saved to: {error_file}")
-
-        # Update metadata with failure status
-        metadata = self._finalize_metadata(end_time, success=False)
-        metadata["error_file"] = str(error_file)
-
-        # Update metadata.json in output directory
-        metadata_file = self.output_dir / "metadata.json"
-        with open(metadata_file, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        # Create README in output directory
-        readme_content = self._create_readme(metadata)
-        readme_file = self.output_dir / "README.md"
-        with open(readme_file, "w") as f:
-            f.write(readme_content)
-
-        # Log failed experiment to central log
-        log_file = resolve_relative_to_repo(self.config["log_file"])
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, "a") as f:
-            f.write(json.dumps(metadata) + "\n")
-
-        print(
-            f"✗ Experiment failed. Partial results and error log saved to: {self.output_dir}"
-        )
-        print(f"✗ Failure logged to: {log_file}\n")
 
     def _create_readme(self, metadata):
         """Generate a README for the experiment output folder."""
-        status = metadata.get("status", "unknown")
-        status_emoji = "✓" if status == "completed" else "✗"
+        return experiment_readme(metadata, self.output_dir)
 
-        # Extract repo name from URL
-        repo_url = metadata["git_remote_url"]
-        if repo_url.endswith(".git"):
-            repo_name = repo_url.split("/")[-1][:-4]
-        else:
-            repo_name = repo_url.split("/")[-1]
+    def _write_results_record(self, metadata) -> None:
+        """``metadata.json`` and ``README.md`` in the output directory."""
+        write_json(metadata, self.output_dir / "metadata.json")
+        (self.output_dir / "README.md").write_text(self._create_readme(metadata))
 
-        # Absolute path to the reproducibility copy of experiment.toml in output dir
-        # Use metadata["output_dir"] which is written earlier when the file is copied
-        try:
-            experiment_toml_abs = str(
-                (Path(metadata["output_dir"]) / "experiment.toml").resolve()
-            )
-        except Exception:
-            # Fallback to self.output_dir if metadata is unexpectedly formatted
-            experiment_toml_abs = str((self.output_dir / "experiment.toml").resolve())
-
-        readme = f"""# Experiment Run - {status_emoji} {status.upper()}
-
-## Description
-{metadata.get("description", "No description provided.")}
-
-## Execution Details
-- **Script**: `{metadata["script"]}`
-- **Start Time**: {metadata["start_time"]}
-- **End Time**: {metadata.get("end_time", "N/A")}
-- **Duration**: {metadata.get("duration_seconds", 0):.2f} seconds
-- **Status**: {status_emoji} **{status.upper()}**
-"""
-
-        if status == "failed" and "error_file" in metadata:
-            readme += f"""
-## Error Information
-⚠️ **This experiment failed during execution.**
-
-Error details saved to: `{Path(metadata["error_file"]).name}`
-
-See the error file in this directory for the full traceback.
-"""
-
-        readme += f"""
-## Git Information
-- **Repository**: {metadata["git_remote_url"]}
-- **Commit**: {metadata["git_commit"]}
-- **Branch**: {metadata["git_branch"]}
-- **connectome_snns library commit**: {metadata.get("connectome_snns_commit") or "n/a"}{" (DIRTY — uncommitted library changes)" if metadata.get("connectome_snns_dirty") else ""}
-
-## Parameters
-Parameters loaded from: `{metadata["parameters_file"]}`
-
-See `parameters.{Path(metadata["parameters_file"]).suffix[1:]}` in this directory for the exact parameters used.
-
-## Reproducibility
-
-To reproduce this experiment exactly:
-
-### 1. Clone the repository
-```bash
-git clone {metadata["git_remote_url"]}
-cd {repo_name}
-```
-
-### 2. Check out the exact commit
-```bash
-git checkout {metadata["git_commit"]}
-```
-
-This experiment also depends on the **connectome_snns** library at commit
-`{metadata.get("connectome_snns_commit") or "n/a"}`{" (which had uncommitted changes — see warning above)" if metadata.get("connectome_snns_dirty") else ""}; check that out in your connectome-snns clone too.
-
-### 3. Set up the Python environment
-```bash
-# Using uv (recommended)
-uv sync --extra cpu  # or --extra gpu
-
-# Or using pip
-pip install -e .
-```
-
-### 4. Run the experiment
-```bash
-# Using the executable wrapper (recommended)
-./run {experiment_toml_abs}
-
-# Or using uv directly
-uv run python run_experiment.py {experiment_toml_abs}
-
-You will most likeley be prompted to enter a new output directory to avoid overwriting existing results.
-```
-
-**Note**: The command above uses the absolute path to the `experiment.toml` file in this output directory, which contains the exact parameters and paths for this specific run.
-
-## Files in This Directory
-- `parameters.{Path(metadata["parameters_file"]).suffix[1:]}` - Exact parameters used for this run
-- `experiment.toml` - Configuration file (with paths updated to this directory)
-- `metadata.json` - Machine-readable metadata
-- `README.md` - This file
-"""
-        if status == "failed":
-            readme += "- `log.err` - Error traceback from failed run\n"
-
-        return readme
+    # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def _start_tracking(self):
         """Start tracking the experiment (called by context manager)."""
-        # Validate configuration
         self._validate_config()
-
-        # Extract wandb config
         self.wandb_config = self._extract_wandb_config()
 
-        title = "Starting Experiment Tracking"
-        print(f"\n{'=' * len(title)}")
-        print(title)
-        print(f"{'=' * len(title)}\n")
+        _banner(
+            "Resuming Experiment Tracking"
+            if self.resume_dir
+            else "Starting Experiment Tracking"
+        )
         print(f"Script: {self.config['script']}")
         print(f"Parameters: {self.config['parameters_file']}")
-        print(f"Output: {self.config['output_dir']}")
+        print(f"Output: {self.resume_dir or self.config['output_dir']}")
         print(f"Description: {self.config.get('description', 'N/A')}")
         if self.wandb_config and self.wandb_config.get("enabled", False):
             print(f"W&B Project: {self.wandb_config.get('project', 'N/A')}")
 
-        # Check git status
+        print(
+            "\nChecking git status"
+            + (" (--no-commit mode)..." if self.skip_git_check else "...")
+        )
+        self.git_info = self._check_git_status()
+        commit = self.git_info["commit_hash"][:8]
         if self.skip_git_check:
-            print("\nChecking git status (--no-commit mode)...")
-            self.git_info = self._check_git_status()
-            print(f"⚠️  Git check skipped (commit: {self.git_info['commit_hash'][:8]})")
+            print(f"⚠️  Git check skipped (commit: {commit})")
         else:
-            print("\nChecking git status...")
-            self.git_info = self._check_git_status()
-            print(f"✓ Git status clean (commit: {self.git_info['commit_hash'][:8]})")
+            print(f"✓ Git status clean (commit: {commit})")
 
-        # Check if output directory exists (resolve relative paths to repo root)
-        output_dir = resolve_relative_to_repo(self.config["output_dir"])
-        while output_dir.exists():
-            print(f"\n⚠️  WARNING: Output directory already exists: {output_dir}")
-            print("\nChoose an option:")
-            print("  [c] Cancel experiment")
-            print("  [o] Overwrite existing folder")
-            print("  [n] Specify a new output folder")
-            response = input("\nYour choice (c/o/n): ").lower().strip()
+        if self.resume_dir:
+            self._prepare_resumed_output()
+        else:
+            self._prepare_new_output()
 
-            if response == "c":
-                print("Experiment cancelled.")
-                sys.exit(0)
-            elif response == "o":
-                print(f"⚠️  Overwriting: {output_dir}")
-                # Remove existing directory and its contents
-                shutil.rmtree(output_dir)
-                break
-            elif response == "n":
-                new_path = input("Enter new output folder path: ").strip()
-                if new_path:
-                    output_dir = Path(new_path)
-                    # Update config with new path
-                    self.config["output_dir"] = str(output_dir)
-                    print(f"Updated output directory to: {output_dir}")
-                else:
-                    print("Invalid path. Please try again.")
-            else:
-                print("Invalid choice. Please enter 'c', 'o', or 'n'.")
-
-        # Create output directory
-        output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"✓ Created output directory: {output_dir}")
-
-        # Copy parameters file to output folder
-        params_path = resolve_relative_to_repo(self.config["parameters_file"])
-        params_filename = f"parameters{params_path.suffix}"
-        dest_params = output_dir / params_filename
-        shutil.copy2(params_path, dest_params)
-        print(f"✓ Copied parameters file to: {dest_params}")
-
-        # Setup input data if specified in config
-        self.input_dir = self._setup_input_data(output_dir)
-
-        # Copy and modify experiment.toml to output folder
-        dest_toml = output_dir / "experiment.toml"
-        modified_config = self.config.copy()
-        # Update paths to point to copied files in output directory
-        modified_config["parameters_file"] = str(
-            (output_dir / params_filename).resolve()
-        )
-        modified_config["output_dir"] = str(output_dir.resolve())
-        # Keep log_file absolute as-is (resolve relative paths to repo root)
-        modified_config["log_file"] = str(
-            resolve_relative_to_repo(self.config["log_file"])
-        )
-        # If data section exists, update inputs to point to local inputs folder
-        if "data" in modified_config and self.input_dir:
-            modified_config["data"]["inputs"] = [str(self.input_dir.resolve())]
-        # Keep script relative to repo root
-        with open(dest_toml, "w") as f:
-            toml.dump(modified_config, f)
-        print(f"✓ Copied experiment config to: {dest_toml}")
-
-        # Store params_file for easy access — point at the snapshot in
-        # the output dir, not the live file in the experiments tree, so
-        # concurrent runs sharing a source parameters.toml don't race on
-        # whatever it happens to say when main() calls toml.load().
-        self.params_file = dest_params
-
-        # Record start time and output directory
         self.start_time = datetime.now()
-        self.output_dir = output_dir
+        self.initial_metadata = (
+            self._resumed_metadata()
+            if self.resume_dir
+            else self._create_initial_metadata()
+        )
+        write_json(self.initial_metadata, self.output_dir / "metadata.json")
+        print(f"✓ Saved initial metadata to: {self.output_dir / 'metadata.json'}")
 
-        # Create and save initial metadata
-        self.initial_metadata = self._create_initial_metadata()
-        metadata_file = output_dir / "metadata.json"
-        with open(metadata_file, "w") as f:
-            json.dump(self.initial_metadata, f, indent=2)
-        print(f"✓ Saved initial metadata to: {metadata_file}")
-
-        title = "Experiment tracking initialized. Running your code now."
-        print(f"\n{'=' * len(title)}")
-        print(title)
-        print(f"{'=' * len(title)}\n")
+        _banner("Experiment tracking initialized. Running your code now.")
 
     def _end_tracking_success(self):
         """End tracking for successful experiment completion."""
-        end_time = datetime.now()
-
-        title = "Finalizing Experiment Tracking"
-        print(f"\n{'=' * len(title)}")
-        print(title)
-        print(f"{'=' * len(title)}\n")
-
-        # Finalize metadata with success status
-        metadata = self._finalize_metadata(end_time, success=True)
-
-        # Update metadata file in output folder
-        metadata_file = self.output_dir / "metadata.json"
-        with open(metadata_file, "w") as f:
-            json.dump(metadata, f, indent=2)
-        print(f"✓ Updated metadata: {metadata_file}")
-
-        # Create README
-        readme_content = self._create_readme(metadata)
-        readme_file = self.output_dir / "README.md"
-        with open(readme_file, "w") as f:
-            f.write(readme_content)
-        print(f"✓ Generated README: {readme_file}")
-
-        # Log to central log file
-        log_file = resolve_relative_to_repo(self.config["log_file"])
-        self._log_metadata(metadata, log_file)
+        _banner("Finalizing Experiment Tracking")
+        metadata = self._finalize_metadata(datetime.now(), success=True)
+        self._write_results_record(metadata)
+        print(f"✓ Updated metadata: {self.output_dir / 'metadata.json'}")
+        print(f"✓ Generated README: {self.output_dir / 'README.md'}")
+        self._log_metadata(metadata, self.resolve(self.config["log_file"]))
 
         title = f"Experiment complete! Results saved to: {self.output_dir}"
-        print(f"\n{'=' * len(title)}")
-        print(title)
-        print(f"Duration: {metadata['duration_seconds']:.2f} seconds")
-        print(f"{'=' * len(title)}\n")
+        _banner(title, f"Duration: {metadata['duration_seconds']:.2f} seconds")
+
+    def _end_tracking_failure(self, exc_type, exc_value, exc_tb):
+        """Handle experiment failure by logging error and saving partial results."""
+        error_file = self.output_dir / "log.err"
+        error_file.write_text(
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        )
+        print(f"\n✗ Error trace saved to: {error_file}")
+
+        metadata = self._finalize_metadata(datetime.now(), success=False)
+        metadata["error_file"] = str(error_file)
+        self._write_results_record(metadata)
+
+        log_file = self.resolve(self.config["log_file"])
+        append_json_line(metadata, log_file)
+        print(
+            f"✗ Experiment failed. Partial results and error log saved to: {self.output_dir}"
+        )
+        print(f"✗ Failure logged to: {log_file}\n")

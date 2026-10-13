@@ -5,9 +5,18 @@ Configuration for simulation settings that are common across all model types.
 
 from typing import Literal, Optional
 from pydantic import BaseModel
+from .base import Config
+
+#: What a model trains: its weights, or its scaling factors on one or both sides.
+Optimisable = Literal[
+    "weights",
+    "scaling_factors",
+    "scaling_factors_recurrent",
+    "scaling_factors_feedforward",
+]
 
 
-class SimulationConfig(BaseModel):
+class SimulationConfig(Config):
     """Basic simulation parameters."""
 
     dt: float
@@ -16,16 +25,7 @@ class SimulationConfig(BaseModel):
     chunk_size: int = 1000
     batch_size: Optional[int] = None
     plot_size: Optional[int] = None
-    optimisable: (
-        Literal[
-            "weights",
-            "scaling_factors",
-            "scaling_factors_recurrent",
-            "scaling_factors_feedforward",
-            None,
-        ]
-        | None
-    ) = None
+    optimisable: Optimisable | None = None
 
     @property
     def num_chunks(self) -> int:
@@ -49,6 +49,9 @@ class StudentSimulationConfig(BaseModel):
     Unlike SimulationConfig, this doesn't have dt or duration in TOML.
     Instead, dt comes from the dataset and num_chunks is computed from
     epochs * chunks_per_epoch. Call setup() after loading the dataset.
+
+    Only archived run scripts use it, and they read keys it does not declare from the
+    same table, so unlike the current configs it ignores unknown keys.
     """
 
     seed: int

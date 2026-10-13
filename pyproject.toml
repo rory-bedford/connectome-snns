@@ -77,8 +77,16 @@ explicit = true
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
+    "pytest>=9.1.1",
     "ruff>=0.14.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+cache_dir = "tests/.pytest_cache"
+addopts = "--basetemp=tests/.pytest_tmp"
+markers = ["gpu: needs a CUDA GPU (skipped without one)"]
+filterwarnings = ["ignore::UserWarning:torch.*"]
 
 [tool.ruff.lint]
 ignore = ["E741"]

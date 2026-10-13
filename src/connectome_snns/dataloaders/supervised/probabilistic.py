@@ -3,9 +3,8 @@
 Designed for real data where deconvolved calcium traces have been converted
 to spike probabilities (values in [0, 1] per timestep per neuron).
 
-Feedforward inputs are resampled via Bernoulli on every access (stochastic
-input). Target spikes are sampled once at initialisation and cached for
-stable supervision.
+Both the feedforward inputs and the targets are Bernoulli-resampled from their
+probabilities on every access.
 
 Expected zarr layout (two separate zarr groups)::
 
@@ -18,7 +17,6 @@ Expected zarr layout (two separate zarr groups)::
         probabilities: (batch, time, n_rec)  float16/float32
 """
 
-import numpy as np
 import torch
 import zarr
 from pathlib import Path
@@ -26,6 +24,7 @@ from torch.utils.data import Dataset
 from typing import Union
 
 from ._base import SpikeData
+from ._smoothing import sample_spikes
 
 
 class ProbabilisticSpikeDataset(Dataset):
@@ -37,7 +36,7 @@ class ProbabilisticSpikeDataset(Dataset):
         target_zarr_path: Path to zarr group containing target probabilities
             (dataset ``probabilities`` with shape ``(batch, time, n_rec)``).
         chunk_size: Number of timesteps per chunk.
-        device: Torch device for returned tensors.
+        device: Unused: datasets return CPU tensors (see ``TeacherSpikeDataset``).
         dataset_name: Name of the probability dataset within each zarr group.
     """
 
@@ -61,7 +60,6 @@ class ProbabilisticSpikeDataset(Dataset):
         self._ff_probs = ff_root[dataset_name]
         self.batch_size, self.total_time, self.n_ff = self._ff_probs.shape
 
-        # Target probabilities — sample once, cache as bool tensor
         target_root = zarr.open_group(Path(target_zarr_path), mode="r")
         target_dt = float(target_root.attrs.get("dt", self.dt))
         if target_dt != self.dt:
@@ -96,17 +94,8 @@ class ProbabilisticSpikeDataset(Dataset):
         start_t = idx * self.chunk_size
         end_t = start_t + self.chunk_size
 
-        # FF: Bernoulli-sample fresh each access
-        ff_probs = torch.from_numpy(
-            np.array(self._ff_probs[:, start_t:end_t, :], dtype=np.float32)
-        )
-        ff_spikes = torch.rand_like(ff_probs) < ff_probs
-
-        # Targets: Bernoulli-sample fresh each access
-        target_probs = torch.from_numpy(
-            np.array(self._target_probs[:, start_t:end_t, :], dtype=np.float32)
-        )
-        target_spikes = torch.rand_like(target_probs) < target_probs
+        ff_spikes = sample_spikes(self._ff_probs, start_t, end_t)
+        target_spikes = sample_spikes(self._target_probs, start_t, end_t)
 
         return SpikeData(
             input_spikes=ff_spikes,

@@ -1,9 +1,9 @@
 """Current-based model physiology configuration."""
 
-from pydantic import BaseModel
+from ..base import Config
 
 
-class PhysiologyConfig(BaseModel):
+class PhysiologyConfig(Config):
     """Neuronal physiology parameters for current-based models.
 
     Current-based models use simplified single-exponential synapses

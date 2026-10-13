@@ -1,14 +1,23 @@
+# `uv run pre-commit install` sets up both stages: ruff on every commit, and the full
+# test suite (GPU tests included when CUDA is available) before every push.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
-  - repo: local
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0  # keep in step with the dev group's ruff
     hooks:
       - id: ruff-check
         name: Ruff Lint
-        entry: uv run --active ruff check --fix
-        language: system
-        types: [python]
-
+        args: [--fix]
       - id: ruff-format
         name: Ruff Format
-        entry: uv run --active ruff format
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Test suite
+        # --no-sync: test the environment as it is, never re-resolve it mid-push.
+        entry: uv run --no-sync pytest -q -x
         language: system
-        types: [python]
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -1,4 +1,19 @@
-"""Visualization utilities for connectome-constrained SNN models."""
+"""Visualization utilities for connectome-constrained SNN models.
+
+Modules:
+
+- :mod:`.colors` -- the canonical colour palette (import colours from here).
+- :mod:`.neuronal_dynamics` -- voltage / current / conductance traces and spike rasters.
+- :mod:`.firing_statistics` -- firing-rate, CV, ISI, Fano-factor and PSTH plots.
+- :mod:`.connectivity` -- weight matrices and per-input-source summaries.
+- :mod:`.dashboards` -- multi-panel connectivity / activity / assembly dashboards.
+- :mod:`.inputs` -- input-rate distributions and pattern-vs-control variability.
+- :mod:`.scaling_factors`, :mod:`.training_curves`, :mod:`.firing_rate_scatter` --
+  training diagnostics and teacher-vs-student comparisons.
+
+Call :func:`use_project_style` to apply the project Matplotlib style. The most used
+names are re-exported here; everything else is importable from its module.
+"""
 
 from pathlib import Path as _Path
 
@@ -48,6 +63,8 @@ from .neuronal_dynamics import (
     plot_membrane_voltages,
     plot_synaptic_currents,
     plot_spike_trains,
+    plot_input_spikes,
+    plot_network_spikes,
     plot_mitral_cell_spikes,
     plot_dp_network_spikes,
     plot_synaptic_conductances,
@@ -67,7 +84,7 @@ from .connectivity import (
 from .firing_statistics import (
     plot_firing_rate_distribution,
 )
-from .odours import (
+from .inputs import (
     plot_input_firing_rate_histogram,
     plot_firing_rate_variance_comparison,
 )
@@ -140,6 +157,8 @@ __all__ = [
     "plot_membrane_voltages",
     "plot_synaptic_currents",
     "plot_spike_trains",
+    "plot_input_spikes",
+    "plot_network_spikes",
     "plot_mitral_cell_spikes",
     "plot_dp_network_spikes",
     "plot_synaptic_conductances",

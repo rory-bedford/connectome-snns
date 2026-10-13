@@ -3,6 +3,8 @@
 import numpy as np
 from numpy.typing import NDArray
 
+from .utils import mean_and_std
+
 
 def compute_membrane_potential_by_cell_type(
     voltages: NDArray[np.float32],
@@ -27,46 +29,17 @@ def compute_membrane_potential_by_cell_type(
             - "mean_of_stds": Mean of per-neuron voltage standard deviations
             - "std_of_stds": Standard deviation of per-neuron voltage standard deviations
     """
-    batch_size, n_steps, n_neurons = voltages.shape
-
-    # Compute mean voltage per neuron across time and batches
-    # Shape: (n_neurons,)
-    mean_voltage_per_neuron = voltages.mean(axis=(0, 1))
-
-    # Compute std voltage per neuron across time and batches
-    # Shape: (n_neurons,)
-    std_voltage_per_neuron = voltages.std(axis=(0, 1), ddof=1)
-
-    # Get unique cell types
-    unique_cell_types = np.unique(cell_type_indices)
-
-    # Compute statistics by cell type
-    stats_by_type = {}
-    for cell_type in unique_cell_types:
-        # Get indices of neurons belonging to this cell type
+    means = voltages.mean(axis=(0, 1))
+    stds = voltages.std(axis=(0, 1), ddof=1)
+    stats = {}
+    for cell_type in np.unique(cell_type_indices).tolist():
         mask = cell_type_indices == cell_type
-
-        # Extract statistics for neurons of this cell type
-        cell_type_means = mean_voltage_per_neuron[mask]
-        cell_type_stds = std_voltage_per_neuron[mask]
-
-        # Compute mean and std of means
-        mean_of_means = float(cell_type_means.mean())
-        std_of_means = (
-            float(cell_type_means.std(ddof=1)) if len(cell_type_means) > 1 else 0.0
-        )
-
-        # Compute mean and std of stds
-        mean_of_stds = float(cell_type_stds.mean())
-        std_of_stds = (
-            float(cell_type_stds.std(ddof=1)) if len(cell_type_stds) > 1 else 0.0
-        )
-
-        stats_by_type[int(cell_type)] = {
+        mean_of_means, std_of_means = mean_and_std(means[mask])
+        mean_of_stds, std_of_stds = mean_and_std(stds[mask])
+        stats[cell_type] = {
             "mean_of_means": mean_of_means,
             "std_of_means": std_of_means,
             "mean_of_stds": mean_of_stds,
             "std_of_stds": std_of_stds,
         }
-
-    return stats_by_type
+    return stats

@@ -1,4 +1,8 @@
-"""Canonical colours used across all visualization modules."""
+"""Canonical colours used across all visualization modules.
+
+Every colour the plotting modules draw with is named here, so a colour means one thing
+throughout and can be changed in one place. Values are plain Matplotlib colour strings.
+"""
 
 # ── Cell-type colours ────────────────────────────────────────────────────────
 
@@ -6,6 +10,35 @@ EXCITATORY_COLOR = "#CC3333"  # muted red
 INHIBITORY_COLOR = "#3366AA"  # muted blue
 FEEDFORWARD_COLOR = "#808080"  # gray
 CELL_TYPE_COLORS = [EXCITATORY_COLOR, INHIBITORY_COLOR]  # indexed by cell_type_indices
+#: Cell types beyond excitatory/inhibitory take colours from this colormap, in order.
+EXTRA_CELL_TYPE_CMAP = "tab10"
+
+# ── Connectivity-summary colours (pie / box / violin charts by input source) ──
+
+FEEDFORWARD_SOURCE_COLOR = "#00AA00"  # saturated green: feedforward input sources
+MITRAL_COLOR = FEEDFORWARD_SOURCE_COLOR  # deprecated alias
+UNKNOWN_CELL_TYPE_COLOR = "#888888"  # gray: sources that are neither E nor I
+# Saturated variants for the weight-statistics tick labels and violins: feedforward
+# sources, then recurrent ones by sign (see ``configs.network.cell_type_sign``; "gray"
+# if the name gives none).
+SATURATED_EXCITATORY_COLOR = "#DD0000"
+SATURATED_INHIBITORY_COLOR = "#0000DD"
+SATURATED_CELL_TYPE_COLORS = {
+    "feedforward": FEEDFORWARD_SOURCE_COLOR,
+    "excitatory": SATURATED_EXCITATORY_COLOR,
+    "inhibitory": SATURATED_INHIBITORY_COLOR,
+}
+
+# ── Raster shading ───────────────────────────────────────────────────────────
+
+RASTER_ROW_SHADING_COLOR = "#f5f5f5"  # near-white (alternating spike-raster rows)
+
+# ── Matplotlib default-cycle colours used explicitly ─────────────────────────
+
+TAB_BLUE = (
+    "#1f77b4"  # Matplotlib C0 (pattern-modulated condition, input-rate histogram)
+)
+TAB_ORANGE = "#ff7f0e"  # Matplotlib C1 (control condition)
 
 # ── Synapse-type colours ─────────────────────────────────────────────────────
 
@@ -42,7 +75,7 @@ STRATEGY_COLORS = {
 
 # ── Highlight colours ────────────────────────────────────────────────────────
 
-HIGHLIGHT_COLOR = "#e74c3c"  # vivid red (active odourant, emphasis)
+HIGHLIGHT_COLOR = "#e74c3c"  # vivid red (active input pattern, emphasis)
 SCATTER_NEUTRAL_COLOR = "#555555"  # dark gray (neutral scatter points)
 BASELINE_BAR_COLOR = "steelblue"  # baseline/default bars
 

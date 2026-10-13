@@ -15,6 +15,67 @@ from typing import Any, Optional, Dict, Callable
 import numpy as np
 
 
+#: Plot inputs that describe the model (copied when a plot is submitted), as opposed
+#: to the recorded activity.
+MODEL_KEYS = (
+    "weights",
+    "feedforward_weights",
+    "connectome_mask",
+    "feedforward_mask",
+    "scaling_factors",
+    "scaling_factors_FF",
+)
+
+
+def accepted_kwargs(fn: Callable, kwargs: dict) -> dict:
+    """The ``kwargs`` that ``fn`` takes (all of them if it has ``**kwargs``)."""
+    import inspect
+
+    parameters = inspect.signature(fn).parameters.values()
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters):
+        return kwargs
+    names = {p.name for p in parameters}
+    return {k: v for k, v in kwargs.items() if k in names}
+
+
+def save_figures(
+    plot_generator: Callable,
+    plot_kwargs: dict,
+    epoch: int,
+    output_dir: str | Path,
+    log_images: Optional[Callable] = None,
+) -> Path:
+    """Make figures with ``plot_generator`` and save them as PNGs.
+
+    The generator gets the ``plot_kwargs`` it accepts and returns ``{name: figure}``;
+    each is saved to ``output_dir/figures/chunk_{epoch + 1:06d}/{name}.png``, handed
+    to ``log_images({"plots/name": wandb.Image, ...}, epoch)`` if given, and closed.
+    Returns the figures directory.
+    """
+    from matplotlib import pyplot as plt
+
+    figures = plot_generator(**accepted_kwargs(plot_generator, plot_kwargs))
+    figures_dir = Path(output_dir) / "figures" / f"chunk_{epoch + 1:06d}"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    for name, fig in figures.items():
+        fig.savefig(figures_dir / f"{name}.png", dpi=300, bbox_inches="tight")
+    if log_images is not None:
+        import wandb
+
+        log_images(
+            {f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()},
+            epoch,
+        )
+    for fig in figures.values():
+        plt.close(fig)
+    return figures_dir
+
+
+def _column_order(names) -> list[str]:
+    """CSV columns: ``epoch`` first, the rest sorted."""
+    return sorted(names, key=lambda name: (name != "epoch", name))
+
+
 class AsyncLogger:
     """Asynchronous logger for training metrics.
 
@@ -43,7 +104,6 @@ class AsyncLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self.queue: Queue = Queue(maxsize=max_queue_size)
-        self._running = True
 
         # CSV file tracking
         self.csv_path = self.log_dir / "training_metrics.csv"
@@ -84,75 +144,37 @@ class AsyncLogger:
                 self.queue.task_done()
 
     def _write_csv_row(self, data: dict[str, Any]):
-        """Write a single row to CSV file immediately."""
-        # Update fieldnames if new fields are present
-        all_fieldnames = set(data.keys())
-        if self.csv_fieldnames:
-            all_fieldnames.update(self.csv_fieldnames)
+        """Append a row; if it brings new columns, rewrite the file with them.
 
-        # Sort fieldnames (epoch first)
-        sorted_fieldnames = sorted(all_fieldnames)
-        if "epoch" in sorted_fieldnames:
-            sorted_fieldnames.remove("epoch")
-            sorted_fieldnames = ["epoch"] + sorted_fieldnames
-
-        fieldnames_changed = self.csv_fieldnames != sorted_fieldnames
-        file_exists = self.csv_path.exists()
-
-        if fieldnames_changed:
-            self.csv_fieldnames = sorted_fieldnames
-
-            if file_exists:
-                # Rewrite file with new header, incorporating any columns
-                # from existing rows that aren't in the current fieldnames
-                with open(self.csv_path, "r") as read_f:
-                    reader = csv.DictReader(read_f)
-                    existing_data = list(reader)
-                    # Include columns from the on-disk header too
-                    if reader.fieldnames:
-                        all_fieldnames.update(reader.fieldnames)
-
-                # Re-sort after incorporating on-disk columns
-                sorted_fieldnames = sorted(all_fieldnames)
-                if "epoch" in sorted_fieldnames:
-                    sorted_fieldnames.remove("epoch")
-                    sorted_fieldnames = ["epoch"] + sorted_fieldnames
-                self.csv_fieldnames = sorted_fieldnames
-
-                with open(self.csv_path, "w", newline="") as write_f:
-                    writer = csv.DictWriter(
-                        write_f,
-                        fieldnames=self.csv_fieldnames,
-                        extrasaction="ignore",
-                    )
-                    writer.writeheader()
-                    for row in existing_data:
-                        writer.writerow(row)
-                    writer.writerow(data)
-            else:
-                # New file
-                with open(self.csv_path, "w", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
-                    writer.writeheader()
-                    writer.writerow(data)
-        else:
-            # Append to existing file
+        Columns are sorted with ``epoch`` first. Rows written before a column existed
+        get it blank.
+        """
+        columns = _column_order(set(data) | set(self.csv_fieldnames or ()))
+        if columns == self.csv_fieldnames:
             with open(self.csv_path, "a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
-                writer.writerow(data)
+                csv.DictWriter(f, fieldnames=columns).writerow(data)
+            return
+
+        rows = []
+        if self.csv_path.exists():
+            with open(self.csv_path, newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                columns = _column_order(set(columns) | set(reader.fieldnames or ()))
+        self.csv_fieldnames = columns
+        with open(self.csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows([*rows, data])
 
     def _save_weights(self, data: dict[str, Any]):
-        """Save weights to disk as compressed numpy arrays."""
-        epoch = data["epoch"]
+        """``weights/{kind}_weights_epoch_{epoch:06d}.npz`` for each kind given."""
         weights_dir = self.log_dir / "weights"
         weights_dir.mkdir(exist_ok=True)
-
-        recurrent_path = weights_dir / f"recurrent_weights_epoch_{epoch:06d}.npz"
-        np.savez_compressed(recurrent_path, weights=data["recurrent_weights"])
-
-        if "feedforward_weights" in data:
-            ff_path = weights_dir / f"feedforward_weights_epoch_{epoch:06d}.npz"
-            np.savez_compressed(ff_path, weights=data["feedforward_weights"])
+        for kind in ("recurrent", "feedforward"):
+            if f"{kind}_weights" in data:
+                path = weights_dir / f"{kind}_weights_epoch_{data['epoch']:06d}.npz"
+                np.savez_compressed(path, weights=data[f"{kind}_weights"])
 
     def log(self, epoch: int, **metrics: float):
         """Log metrics for a given epoch."""
@@ -165,7 +187,8 @@ class AsyncLogger:
         recurrent_weights: np.ndarray,
         feedforward_weights: Optional[np.ndarray] = None,
     ):
-        """Save network weights to disk asynchronously."""
+        """Save network weights to disk asynchronously (``weights/`` in the log
+        directory). Not used by the trainer; kept for scripts that snapshot weights."""
         data = {"epoch": epoch, "recurrent_weights": recurrent_weights}
         if feedforward_weights is not None:
             data["feedforward_weights"] = feedforward_weights
@@ -173,7 +196,6 @@ class AsyncLogger:
 
     def close(self):
         """Close the logger and wait for all pending writes."""
-        self._running = False
         self.queue.put(None, block=True)
         self.worker.join(timeout=10.0)
 
@@ -233,7 +255,6 @@ class AsyncPlotter:
         # Thread-safe queue for plot jobs
         self.plot_queue: Queue = Queue(maxsize=max_queue_size)
         self.shutdown_event = threading.Event()
-        self._running = True
 
         # Start background plotting thread
         self.plot_thread = threading.Thread(target=self._plot_worker, daemon=True)
@@ -257,6 +278,8 @@ class AsyncPlotter:
                 - feedforward_mask (optional): Binary mask for feedforward connections
                 - scaling_factors (optional): Recurrent scaling factors
                 - scaling_factors_FF (optional): Feedforward scaling factors
+                The dict is not modified; the model arrays are copied, so training
+                can go on updating them.
             epoch (int): Current epoch number
             block (bool): If True, wait for space in queue. If False, skip if queue full.
             timeout (Optional[float]): Maximum time to wait if blocking (None = wait forever)
@@ -264,37 +287,18 @@ class AsyncPlotter:
         Returns:
             bool: True if job was queued, False if queue full and not blocking or timeout
         """
-        # Extract weights and masks from plot_data
-        weights = plot_data.pop("weights", None)
-        weights_ff = plot_data.pop("feedforward_weights", None)
-        connectome_mask = plot_data.pop("connectome_mask", None)
-        feedforward_mask = plot_data.pop("feedforward_mask", None)
-        scaling_factors = plot_data.pop("scaling_factors", None)
-        scaling_factors_FF = plot_data.pop("scaling_factors_FF", None)
-
-        # Create plot job with already-copied numpy data
         plot_job = {
-            "plot_data": plot_data.copy(),  # Shallow copy of dict
+            "plot_data": {k: v for k, v in plot_data.items() if k not in MODEL_KEYS},
+            "model": {
+                key: np.copy(plot_data[key])
+                for key in MODEL_KEYS
+                if plot_data.get(key) is not None
+            },
             "epoch": epoch,
-            "weights": weights.copy() if weights is not None else None,
-            "weights_ff": weights_ff.copy() if weights_ff is not None else None,
-            "connectome_mask": connectome_mask.copy()
-            if connectome_mask is not None
-            else None,
-            "feedforward_mask": feedforward_mask.copy()
-            if feedforward_mask is not None
-            else None,
-            "scaling_factors": scaling_factors.copy()
-            if scaling_factors is not None
-            else None,
-            "scaling_factors_FF": scaling_factors_FF.copy()
-            if scaling_factors_FF is not None
-            else None,
             "timestamp": time.time(),
         }
 
-        # In blocking mode, execute plot job immediately (synchronously)
-        if self.blocking_mode:
+        if self.blocking_mode:  # plot now, in this thread
             try:
                 self._process_plot_job(plot_job)
                 return True
@@ -304,118 +308,58 @@ class AsyncPlotter:
                 traceback.print_exc()
                 return False
 
-        # Normal async mode
         try:
             if block:
-                # Block until queue has space (with timeout)
                 self.plot_queue.put(plot_job, block=True, timeout=timeout)
-                return True
             else:
-                # Non-blocking: skip if queue is full
                 self.plot_queue.put_nowait(plot_job)
-                return True
-        except Full:
-            # Queue is full - either timed out or non-blocking skip
+            return True
+        except Full:  # timed out, or full and not blocking
             return False
 
     def _plot_worker(self) -> None:
         """Background worker that processes plotting jobs."""
         while not self.shutdown_event.is_set():
             try:
-                # Get next job with timeout
                 job = self.plot_queue.get(timeout=1.0)
-
-                # Process the plotting job
-                self._process_plot_job(job)
-
-                # Mark job as done
-                self.plot_queue.task_done()
-
             except Empty:
-                # Timeout - continue waiting
                 continue
+            try:
+                self._process_plot_job(job)
             except Exception:
-                # Catch any plotting errors to prevent thread crash
+                # Plotting errors must not kill the thread
                 import traceback
 
                 traceback.print_exc()
-                # Still mark task as done to prevent hanging
-                try:
-                    self.plot_queue.task_done()
-                except ValueError:
-                    pass  # task_done called too many times
+            finally:
+                self.plot_queue.task_done()
 
     def _process_plot_job(self, job: Dict[str, Any]) -> None:
-        """Process a single plotting job.
-
-        Args:
-            job (Dict[str, Any]): Plot job containing data and metadata
-        """
-        import inspect
-
+        """Make, save (and upload) the figures of one job."""
         epoch = job["epoch"]
-
-        # Create output directory for this epoch
-        figures_dir = self.output_dir / "figures" / f"chunk_{epoch + 1:06d}"
-        figures_dir.mkdir(parents=True, exist_ok=True)
-
-        # Prepare all available kwargs
-        all_kwargs = job["plot_data"].copy()  # Start with all activity data
-        all_kwargs["epoch"] = epoch
-        all_kwargs["weights"] = job["weights"]
-
-        if job["weights_ff"] is not None:
-            all_kwargs["feedforward_weights"] = job["weights_ff"]
-        if job["connectome_mask"] is not None:
-            all_kwargs["connectome_mask"] = job["connectome_mask"]
-        if job["feedforward_mask"] is not None:
-            all_kwargs["feedforward_mask"] = job["feedforward_mask"]
-        if job["scaling_factors"] is not None:
-            all_kwargs["scaling_factors"] = job["scaling_factors"]
-        if job["scaling_factors_FF"] is not None:
-            all_kwargs["scaling_factors_FF"] = job["scaling_factors_FF"]
-
-        # Filter kwargs to only include parameters that plot_generator accepts
-        sig = inspect.signature(self.plot_generator)
-        accepted_params = set(sig.parameters.keys())
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        kwargs = {
+            **job["plot_data"],
+            "epoch": epoch,
+            "weights": job["model"].get("weights"),
+            **job["model"],
+        }
+        save_figures(
+            self.plot_generator,
+            kwargs,
+            epoch,
+            self.output_dir,
+            log_images=self._upload if self.wandb_logger else None,
         )
 
-        if has_var_keyword:
-            # Function accepts **kwargs, so pass everything
-            plot_kwargs = all_kwargs
+    def _upload(self, images: Dict[str, Any], epoch: int) -> None:
+        """Log images to wandb against the fractional data epoch."""
+        import wandb
+
+        if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
+            fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
         else:
-            # Filter to only accepted parameters
-            plot_kwargs = {k: v for k, v in all_kwargs.items() if k in accepted_params}
-
-        # Generate plots using the provided function
-        figures = self.plot_generator(**plot_kwargs)
-
-        # Save plots to disk
-        for plot_name, fig in figures.items():
-            fig_path = figures_dir / f"{plot_name}.png"
-            fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-
-        # Upload to wandb if available
-        if self.wandb_logger:
-            import wandb
-
-            wandb_plots = {
-                f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
-            }
-            # Compute fractional epoch for x-axis consistency
-            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
-                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
-            else:
-                fractional_epoch = epoch + 1
-            wandb.log({"epoch": fractional_epoch, **wandb_plots})
-
-        # Close figures to free memory
-        from matplotlib import pyplot as plt
-
-        for fig in figures.values():
-            plt.close(fig)
+            fractional_epoch = epoch + 1
+        wandb.log({"epoch": fractional_epoch, **images})
 
     def has_pending(self) -> bool:
         """Check if there are pending plots in the queue.

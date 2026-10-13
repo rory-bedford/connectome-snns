@@ -1,323 +1,138 @@
-"""Conductance-based network layer configuration."""
+"""Conductance-based network layer configuration.
+
+A layer config describes a population of sources: its cell types, the synapses each
+cell type makes, and (optionally) how its connectivity and weights are generated. It
+turns them into the parameter lists the simulators take (``get_cell_params``,
+``get_synapse_params``). A recurrent layer also has physiology; a feedforward layer's
+cells are pure sources.
+"""
 
 from typing import Dict, List, Optional
-from pydantic import BaseModel
+
 
 from ..network import (
-    SimpleCellTypesConfig,
+    cell_type_sign,
+    ActivityConfig,
     CellTypesConfig,
+    SimpleCellTypesConfig,
     TopologyConfig,
     WeightsConfig,
-    ActivityConfig,
 )
 from .physiology import (
-    PhysiologyConfig,
-    SynapseConfig,
     EXCITATORY_SYNAPSE_TYPES,
     INHIBITORY_SYNAPSE_TYPES,
+    PhysiologyConfig,
+    SynapseConfig,
 )
+from ..base import Config
 
 
-class RecurrentLayerConfig(BaseModel):
-    """Recurrent layer configuration for conductance-based models."""
-
-    cell_types: CellTypesConfig | SimpleCellTypesConfig
-    physiology: Dict[str, PhysiologyConfig]
-    synapses: Dict[str, SynapseConfig]
-    topology: Optional[TopologyConfig] = None
-    weights: Optional[WeightsConfig] = None
-
-    def get_cell_params(self) -> List[Dict[str, float | int | str]]:
-        """Convert physiology to list of cell parameter dicts.
-
-        Returns:
-            List of dicts with keys: 'name', 'cell_id', 'tau_mem', 'theta',
-            'U_reset', 'E_L', 'g_L', 'tau_ref'.
-        """
-        cell_params = []
-        for i, cell_type_name in enumerate(self.cell_types.names):
-            physiology = self.physiology[cell_type_name]
-            cell_params.append(
-                {
-                    "name": cell_type_name,
-                    "cell_id": i,
-                    "tau_mem": physiology.tau_mem,
-                    "theta": physiology.theta,
-                    "U_reset": physiology.U_reset,
-                    "E_L": physiology.E_L,
-                    "g_L": physiology.g_L,
-                    "tau_ref": physiology.tau_ref,
-                }
-            )
-        return cell_params
-
-    def get_synapse_params(self) -> List[Dict[str, float | int | str]]:
-        """Convert synapse config to list of synapse parameter dicts.
-
-        Returns:
-            List of dicts with keys: 'name', 'synapse_id', 'cell_id',
-            'tau_rise', 'tau_decay', 'E_syn', 'g_bar', and optionally 'g_clip'.
-        """
-        cell_params = self.get_cell_params()
-        synapse_params = []
-        for cell_type_name, synapse_config in self.synapses.items():
-            cell_id = next(
-                cp["cell_id"] for cp in cell_params if cp["name"] == cell_type_name
-            )
-            for i, synapse_name in enumerate(synapse_config.names):
-                d = {
-                    "name": synapse_name,
-                    "synapse_id": len(synapse_params),
-                    "cell_id": cell_id,
-                    "tau_rise": synapse_config.tau_rise[i],
-                    "tau_decay": synapse_config.tau_decay[i],
-                    "E_syn": synapse_config.E_syn[i],
-                    "g_bar": synapse_config.g_bar[i],
-                }
-                if synapse_config.g_clip is not None:
-                    d["g_clip"] = synapse_config.g_clip[i]
-                synapse_params.append(d)
-        return synapse_params
-
-    def get_g_bar_by_type(self) -> Dict[str, float]:
-        """Get total maximal conductance for each cell type.
-
-        Returns:
-            Dict mapping cell type names to total g_bar values.
-        """
-        return {
-            cell_type: float(sum(synapse_config.g_bar))
-            for cell_type, synapse_config in self.synapses.items()
-        }
-
-    def get_tau_rise_by_type(self) -> Dict[str, float]:
-        """Get rise time constant for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to tau_rise values.
-        """
-        return {
-            cell_type: float(synapse_config.tau_rise[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
-
-    def get_tau_decay_by_type(self) -> Dict[str, float]:
-        """Get decay time constant for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to tau_decay values.
-        """
-        return {
-            cell_type: float(synapse_config.tau_decay[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
-
-    def get_E_syn_by_type(self) -> Dict[str, float]:
-        """Get reversal potential for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to E_syn values.
-        """
-        return {
-            cell_type: float(synapse_config.E_syn[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
-
-    def get_neuron_params_for_plotting(self) -> Dict[int, Dict[str, float | str]]:
-        """Get neuron parameters formatted for visualization functions.
-
-        Returns:
-            Dict mapping cell type indices to parameter dicts with keys:
-            'threshold', 'rest', 'name', 'sign'.
-        """
-        return {
-            idx: {
-                "threshold": self.physiology[cell_name].theta,
-                "rest": self.physiology[cell_name].U_reset,
-                "name": cell_name,
-                "sign": 1 if "excit" in cell_name.lower() else -1,
-            }
-            for idx, cell_name in enumerate(self.cell_types.names)
-        }
-
-    def get_synapse_names(self) -> Dict[str, List[str]]:
-        """Get synapse names for each cell type.
-
-        Returns:
-            Dict mapping cell type names to lists of synapse names.
-        """
-        return {
-            cell_type_name: synapse_config.names
-            for cell_type_name, synapse_config in self.synapses.items()
-        }
-
-    def get_excitatory_synapse_indices(self) -> List[int]:
-        """Get indices of excitatory synapses across all cell types.
-
-        Returns:
-            List of synapse indices (flattened across all cell types) that are excitatory.
-        """
-        excitatory_indices = []
-        synapse_idx = 0
-        for cell_type_name in self.cell_types.names:
-            if cell_type_name in self.synapses:
-                synapse_config = self.synapses[cell_type_name]
-                for syn_name in synapse_config.names:
-                    if syn_name in EXCITATORY_SYNAPSE_TYPES:
-                        excitatory_indices.append(synapse_idx)
-                    synapse_idx += 1
-        return excitatory_indices
-
-    def get_inhibitory_synapse_indices(self) -> List[int]:
-        """Get indices of inhibitory synapses across all cell types.
-
-        Returns:
-            List of synapse indices (flattened across all cell types) that are inhibitory.
-        """
-        inhibitory_indices = []
-        synapse_idx = 0
-        for cell_type_name in self.cell_types.names:
-            if cell_type_name in self.synapses:
-                synapse_config = self.synapses[cell_type_name]
-                for syn_name in synapse_config.names:
-                    if syn_name in INHIBITORY_SYNAPSE_TYPES:
-                        inhibitory_indices.append(synapse_idx)
-                    synapse_idx += 1
-        return inhibitory_indices
-
-
-class FeedforwardLayerConfig(BaseModel):
-    """Feedforward layer configuration for conductance-based models."""
+class _SynapticLayerConfig(Config):
+    """What every layer has: cell types and the synapses they make."""
 
     cell_types: CellTypesConfig | SimpleCellTypesConfig
     synapses: Dict[str, SynapseConfig]
     topology: Optional[TopologyConfig] = None
     weights: Optional[WeightsConfig] = None
-    activity: Optional[Dict[str, ActivityConfig]] = None
 
-    def get_cell_params(self) -> List[Dict[str, int | str]]:
-        """Convert cell types to list of cell parameter dicts.
-
-        Returns:
-            List of dicts with keys: 'name', 'cell_id'.
-        """
+    def get_cell_params(self) -> List[Dict]:
+        """One dict per cell type, with at least 'name' and 'cell_id'."""
         return [
             {"name": name, "cell_id": i} for i, name in enumerate(self.cell_types.names)
         ]
 
     def get_synapse_params(self) -> List[Dict[str, float | int | str]]:
-        """Convert synapse config to list of synapse parameter dicts.
+        """One dict per synapse type, numbered across cell types in config order.
 
-        Returns:
-            List of dicts with keys: 'name', 'synapse_id', 'cell_id',
-            'tau_rise', 'tau_decay', 'E_syn', 'g_bar', and optionally 'g_clip'.
+        Keys: 'name', 'synapse_id', 'cell_id', 'tau_rise', 'tau_decay', 'E_syn',
+        'g_bar', and 'g_clip' if the cell type sets clipping.
         """
-        cell_params = self.get_cell_params()
+        cell_ids = {name: i for i, name in enumerate(self.cell_types.names)}
         synapse_params = []
-        for cell_type_name, synapse_config in self.synapses.items():
-            cell_id = next(
-                cp["cell_id"] for cp in cell_params if cp["name"] == cell_type_name
-            )
-            for i, synapse_name in enumerate(synapse_config.names):
-                d = {
+        for cell_type_name, synapse in self.synapses.items():
+            for i, synapse_name in enumerate(synapse.names):
+                params = {
                     "name": synapse_name,
                     "synapse_id": len(synapse_params),
-                    "cell_id": cell_id,
-                    "tau_rise": synapse_config.tau_rise[i],
-                    "tau_decay": synapse_config.tau_decay[i],
-                    "E_syn": synapse_config.E_syn[i],
-                    "g_bar": synapse_config.g_bar[i],
+                    "cell_id": cell_ids[cell_type_name],
+                    "tau_rise": synapse.tau_rise[i],
+                    "tau_decay": synapse.tau_decay[i],
+                    "E_syn": synapse.E_syn[i],
+                    "g_bar": synapse.g_bar[i],
                 }
-                if synapse_config.g_clip is not None:
-                    d["g_clip"] = synapse_config.g_clip[i]
-                synapse_params.append(d)
+                if synapse.g_clip is not None:
+                    params["g_clip"] = synapse.g_clip[i]
+                synapse_params.append(params)
         return synapse_params
 
-    def get_g_bar_by_type(self) -> Dict[str, float]:
-        """Get total maximal conductance for each cell type.
-
-        Returns:
-            Dict mapping cell type names to total g_bar values.
-        """
+    def get_synapse_names(self) -> Dict[str, List[str]]:
+        """Synapse names, by cell type."""
         return {
-            cell_type: float(sum(synapse_config.g_bar))
-            for cell_type, synapse_config in self.synapses.items()
+            cell_type: synapse.names for cell_type, synapse in self.synapses.items()
         }
+
+    def get_g_bar_by_type(self) -> Dict[str, float]:
+        """Total maximal conductance of each cell type's synapses."""
+        return {ct: float(sum(s.g_bar)) for ct, s in self.synapses.items()}
 
     def get_tau_rise_by_type(self) -> Dict[str, float]:
-        """Get rise time constant for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to tau_rise values.
-        """
-        return {
-            cell_type: float(synapse_config.tau_rise[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
+        """Rise time constant of each cell type's first synapse."""
+        return {ct: float(s.tau_rise[0]) for ct, s in self.synapses.items()}
 
     def get_tau_decay_by_type(self) -> Dict[str, float]:
-        """Get decay time constant for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to tau_decay values.
-        """
-        return {
-            cell_type: float(synapse_config.tau_decay[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
+        """Decay time constant of each cell type's first synapse."""
+        return {ct: float(s.tau_decay[0]) for ct, s in self.synapses.items()}
 
     def get_E_syn_by_type(self) -> Dict[str, float]:
-        """Get reversal potential for each cell type (first synapse).
-
-        Returns:
-            Dict mapping cell type names to E_syn values.
-        """
-        return {
-            cell_type: float(synapse_config.E_syn[0])
-            for cell_type, synapse_config in self.synapses.items()
-        }
-
-    def get_synapse_names(self) -> Dict[str, List[str]]:
-        """Get synapse names for each cell type.
-
-        Returns:
-            Dict mapping cell type names to lists of synapse names.
-        """
-        return {
-            cell_type_name: synapse_config.names
-            for cell_type_name, synapse_config in self.synapses.items()
-        }
+        """Reversal potential of each cell type's first synapse."""
+        return {ct: float(s.E_syn[0]) for ct, s in self.synapses.items()}
 
     def get_excitatory_synapse_indices(self) -> List[int]:
-        """Get indices of excitatory synapses across all cell types.
-
-        Returns:
-            List of synapse indices (flattened across all cell types) that are excitatory.
-        """
-        excitatory_indices = []
-        synapse_idx = 0
-        for cell_type_name in self.cell_types.names:
-            if cell_type_name in self.synapses:
-                synapse_config = self.synapses[cell_type_name]
-                for syn_name in synapse_config.names:
-                    if syn_name in EXCITATORY_SYNAPSE_TYPES:
-                        excitatory_indices.append(synapse_idx)
-                    synapse_idx += 1
-        return excitatory_indices
+        """Indices (numbered as in ``get_synapse_params``) of excitatory synapses."""
+        return self._synapse_indices(EXCITATORY_SYNAPSE_TYPES)
 
     def get_inhibitory_synapse_indices(self) -> List[int]:
-        """Get indices of inhibitory synapses across all cell types.
+        """Indices (numbered as in ``get_synapse_params``) of inhibitory synapses."""
+        return self._synapse_indices(INHIBITORY_SYNAPSE_TYPES)
 
-        Returns:
-            List of synapse indices (flattened across all cell types) that are inhibitory.
-        """
-        inhibitory_indices = []
-        synapse_idx = 0
-        for cell_type_name in self.cell_types.names:
-            if cell_type_name in self.synapses:
-                synapse_config = self.synapses[cell_type_name]
-                for syn_name in synapse_config.names:
-                    if syn_name in INHIBITORY_SYNAPSE_TYPES:
-                        inhibitory_indices.append(synapse_idx)
-                    synapse_idx += 1
-        return inhibitory_indices
+    def _synapse_indices(self, kinds: List[str]) -> List[int]:
+        """Synapses whose name is in ``kinds``, numbered by cell type in type order."""
+        names = [
+            name
+            for cell_type in self.cell_types.names
+            if cell_type in self.synapses
+            for name in self.synapses[cell_type].names
+        ]
+        return [i for i, name in enumerate(names) if name in kinds]
+
+
+class RecurrentLayerConfig(_SynapticLayerConfig):
+    """Recurrent layer configuration for conductance-based models."""
+
+    physiology: Dict[str, PhysiologyConfig]
+
+    def get_cell_params(self) -> List[Dict[str, float | int | str]]:
+        """One dict per cell type: 'name', 'cell_id', 'tau_mem', 'theta', 'U_reset',
+        'E_L', 'g_L'."""
+        return [
+            {"name": name, "cell_id": i, **self.physiology[name].model_dump()}
+            for i, name in enumerate(self.cell_types.names)
+        ]
+
+    def get_neuron_params_for_plotting(self) -> Dict[int, Dict[str, float | str]]:
+        """Per cell type index: 'threshold', 'rest', 'name' and 'sign' (+1 excitatory)."""
+        return {
+            idx: {
+                "threshold": self.physiology[cell_name].theta,
+                "rest": self.physiology[cell_name].U_reset,
+                "name": cell_name,
+                "sign": 1 if cell_type_sign(cell_name) == "excitatory" else -1,
+            }
+            for idx, cell_name in enumerate(self.cell_types.names)
+        }
+
+
+class FeedforwardLayerConfig(_SynapticLayerConfig):
+    """Feedforward layer configuration for conductance-based models."""
+
+    activity: Optional[Dict[str, ActivityConfig]] = None

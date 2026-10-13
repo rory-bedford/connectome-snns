@@ -48,6 +48,8 @@ class TwoLayerSNN(nn.Module):
         self.layer2 = layer2
         self.n_ff = n_ff
         self.return_hidden_spikes = return_hidden_spikes
+        # Of Layer 2's inputs, only the hidden spikes carry a gradient.
+        layer2.differentiable_inputs = slice(n_ff, n_ff + layer1.n_neurons)
 
     def forward(self, input_spikes):
         """Run both layers sequentially.

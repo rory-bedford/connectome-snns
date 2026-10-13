@@ -13,6 +13,8 @@ chunked generation of long time series.
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+from connectome_snns.utils.recurrences import ar1_trajectory
 from typing import Union, Tuple
 
 
@@ -26,7 +28,7 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
     from an ongoing trajectory.
 
     Each pattern undergoes its own OU dynamics (mean-reverting to zero):
-        da_i = -(a_i / tau) * dt + sigma_i * sqrt(dt) * dW_i
+        da_i = -(a_i / tau) * dt + sigma_i * sqrt(2 * dt / tau) * dW_i
 
     where a_i is the activation of pattern i. The final firing rate is computed
     by applying softmax normalization to the activations, then taking a weighted
@@ -62,9 +64,11 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         activations: Current state of pattern activations, shape (n_patterns,).
 
     Example:
-        >>> from src.dataloaders.odourants import generate_odour_firing_rates
-        >>> # Generate 20 odour patterns for 5000 neurons
-        >>> patterns = generate_odour_firing_rates(...)  # Shape: (20, 5000)
+        >>> from connectome_snns.dataloaders.input_patterns import (
+        ...     generate_assembly_firing_rates,
+        ... )
+        >>> # One pattern per assembly: 20 patterns for 5000 inputs
+        >>> patterns = generate_assembly_firing_rates(...)  # Shape: (20, 5000)
         >>>
         >>> # Continuous OU process in pattern space with softmax normalization
         >>> rate_process = OrnsteinUhlenbeckRateProcess(
@@ -128,14 +132,7 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         # Store return_rates flag for diagnostic outputs
         self.return_rates = return_rates
 
-        # Initialize activations with batch dimension: (batch_size, n_patterns)
-        if a_init is None:
-            self.activations = torch.ones(
-                (batch_size, self.n_patterns), dtype=torch.float32, device=self.device
-            )
-        else:
-            base = self._to_pattern_tensor(a_init, self.n_patterns).to(self.device)
-            self.activations = base.unsqueeze(0).expand(batch_size, -1).clone()
+        self.reset(a_init)  # activations, (batch_size, n_patterns)
 
         # Precompute OU parameters
         self.alpha = 1.0 - dt / tau  # AR(1) decay coefficient
@@ -174,11 +171,8 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
         """
         Generate next chunk of OU rate trajectory in pattern space.
 
-        Uses a vectorized closed-form solution for the AR(1) recurrence
-        instead of a Python loop. The recurrence is:
-            s[t+1] = alpha * s[t] + diffusion * dW[t]
-        with closed form:
-            s[t] = alpha^t * s[0] + sum_{k=0}^{t-1} alpha^{t-1-k} * noise[k]
+        The activations follow ``s[t+1] = alpha s[t] + diffusion dW[t]``, evaluated in
+        closed form (see ``ar1_trajectory``).
 
         Args:
             idx: Index (ignored, process continues from current state).
@@ -191,43 +185,11 @@ class OrnsteinUhlenbeckRateProcess(Dataset):
                 - rates: shape (batch_size, chunk_size, n_neurons) in Hz
                 - weights: shape (batch_size, chunk_size, n_patterns) - normalized mixing weights
         """
-        dev = self.device
         B, T, P = self.batch_size, self.chunk_size, self.n_patterns
-        alpha = self.alpha
-
-        # Generate all noise at once: (B, T, P)
-        noise = self.diffusion * torch.randn(B, T, P, device=dev)
-
-        # Power series: alpha^0, alpha^1, ..., alpha^T
-        t_idx = torch.arange(T + 1, device=dev, dtype=torch.float32)
-        all_powers = alpha**t_idx  # (T+1,)
-
-        a_prev = self.activations  # (B, P)
-
-        # Deterministic part: alpha^t * a_prev for t = 0..T-1
-        # powers_chunk: alpha^0 .. alpha^{T-1}, shape (1, T, 1) for broadcasting
-        powers_chunk = all_powers[:T].unsqueeze(0).unsqueeze(-1)
-        deterministic = powers_chunk * a_prev.unsqueeze(1)  # (B, T, P)
-
-        # Stochastic part via cumulative sum trick:
-        # noise_contrib[t] = sum_{k=0}^{t-1} alpha^{t-1-k} * noise[k]
-        #                   = alpha^{t-1} * cumsum(noise[k] / alpha^k)[t-1]
-        # For t=0 this is zero (no noise yet).
-        inv_powers = (1.0 / all_powers[:T]).unsqueeze(0).unsqueeze(-1)  # (1, T, 1)
-        scaled_noise = noise * inv_powers  # noise[k] / alpha^k
-        cumsum = torch.cumsum(scaled_noise, dim=1)  # (B, T, P)
-
-        # Assemble: shift cumsum so t=0 gets zero noise contribution
-        stochastic = torch.zeros(B, T, P, device=dev)
-        if T > 1:
-            # alpha^0 .. alpha^{T-2} for the shift
-            shift_powers = all_powers[: T - 1].unsqueeze(0).unsqueeze(-1)
-            stochastic[:, 1:, :] = shift_powers * cumsum[:, : T - 1, :]
-
-        activation_chunk = deterministic + stochastic  # (B, T, P)
-
-        # Update state to s[T] = alpha^T * a_prev + alpha^{T-1} * cumsum[T-1]
-        self.activations = all_powers[T] * a_prev + all_powers[T - 1] * cumsum[:, -1, :]
+        noise = self.diffusion * torch.randn(B, T, P, device=self.device)
+        activation_chunk, self.activations = ar1_trajectory(
+            self.activations, noise, self.alpha
+        )
 
         # Combine patterns using softmax normalization of activations
         normalized_activations = torch.softmax(

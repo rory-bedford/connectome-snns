@@ -1,4 +1,4 @@
-"""Loss and firing-rate training curve plots."""
+"""Training curves: loss and firing-rate trajectories from per-run metrics DataFrames."""
 
 from __future__ import annotations
 
@@ -103,6 +103,9 @@ def plot_loss_mean_std(
         ylabel: Y-axis label.
         reference_lines: Horizontal reference lines.
         ax: Optional pre-existing axes.
+
+    Returns:
+        The Figure, or *None* when *ax* was supplied.
     """
     fig = None
     if ax is None:
@@ -157,6 +160,9 @@ def plot_firing_rate_trajectories(
         figsize: Figure size. Defaults to ``(5*n_cols, 4)``.
         suptitle: Optional super-title.
         xlabel: X-axis label.
+
+    Returns:
+        The Figure (panels laid out three per row).
     """
     n = len(panels)
     ncols = min(n, 3)

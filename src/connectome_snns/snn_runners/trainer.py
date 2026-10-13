@@ -1,70 +1,113 @@
-"""
-Lightweight PyTorch trainer for training conductance-based SNN models.
+"""The training loop for chunked spiking-network training.
 
-This trainer handles the core training loop logic for SNN experiments,
-assuming all components (model, optimizer, dataloaders, loss functions,
-loggers, etc.) are already initialized.
+A long recording is cut into chunks of time steps. The trainer runs the model through
+the chunks in order (its state carries over), computes the losses of each chunk,
+backpropagates, and updates the parameters every ``chunks_per_update`` chunks. When
+the dataset is cycled, ``chunks_per_data_epoch`` marks where it starts again: model
+and loss states are reset there (as when the data was generated), the learning-rate
+scheduler steps, and the first ``burn_in_chunks`` chunks only rebuild state.
+
+Vocabulary: a *chunk* is one iteration of the loop; a *data epoch* is one pass over
+the dataset. (For compatibility, the constructor's ``num_epochs``, the checkpoints'
+``epoch`` and the metrics CSV's ``epoch`` column count chunks.)
+
+Checkpoints hold the model (and its simulation state), optimiser, scaler, scheduler,
+random number generators, the losses' carried filter state and the recent loss history.
+``resume`` restores all of it and moves the data to the checkpoint's chunk, so a resumed
+run continues exactly as the uninterrupted one would have, provided no gradients were
+pending at the checkpoint (``checkpoint_interval`` a multiple of ``chunks_per_update``;
+the trainer warns otherwise). The "best" checkpoint is the one with the lowest mean
+loss over the chunks since the previous checkpoint.
 """
 
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import MutableMapping
+from pathlib import Path
+from typing import Any, Callable
+
+import warnings
+
+import numpy as np
 import torch
 from torch.amp import autocast
-import numpy as np
-from pathlib import Path
-from typing import Dict, Optional, Any, Callable
-from collections import deque
-from matplotlib import pyplot as plt
 
-from connectome_snns.training_utils import save_checkpoint, AsyncPlotter, AsyncLogger
+from connectome_snns.snn_runners.chunks import (
+    Prefetcher,
+    load_loss_states,
+    loss_states,
+    model_outputs,
+    reset_losses,
+    warm_up_losses,
+    weighted_losses,
+)
+from connectome_snns.training_utils import AsyncLogger, AsyncPlotter, save_checkpoint
+from connectome_snns.training_utils.checkpointing import restore_checkpoint
+from connectome_snns.training_utils.logging import save_figures
+
+#: Recorded for logs and plots (trial 0 only), keyed by the name plots use.
+PLOT_KEYS = (
+    "spikes",
+    "voltages",
+    "currents",
+    "currents_FF",
+    "currents_leak",
+    "conductances",
+    "conductances_FF",
+    "input_spikes",
+    "target_spikes",
+    "target_calcium",
+    "target_rate",
+    "predicted_calcium",
+    "hidden_spikes",
+)
+#: Model output names of the tracked variables, by plot name.
+TRACKED_AS = {
+    "currents": ("currents", "currents_recurrent"),
+    "currents_FF": ("currents_feedforward",),
+    "conductances": ("conductances", "conductances_recurrent"),
+    "conductances_FF": ("conductances_feedforward",),
+}
+SPIKE_KEYS = ("spikes", "target_spikes", "hidden_spikes")
 
 
 class SNNTrainer:
-    """
-    General-purpose trainer for spiking neural network training loops.
-
-    All components (model, optimizer, dataloaders, loss functions, loggers)
-    should be initialized beforehand and passed to this trainer.
-
-    AsyncLogger for metrics CSV logging and wandb are automatically initialized
-    when output_dir and wandb_config are provided to the train() method.
+    """Trains a spiking network chunk by chunk (see the module docstring).
 
     Args:
-        model (torch.nn.Module): The initialized SNN model
-        optimizer (torch.optim.Optimizer): The initialized optimizer
-        scaler (torch.amp.GradScaler): The initialized gradient scaler
-        dataloader: Iterator providing input spike data (must return named tuples)
-        loss_functions (Dict[str, Callable]): Dict with individual loss functions
-        loss_weights (Dict[str, float]): Dict with weights for each loss function
-        device (str): Device string ('cpu' or 'cuda')
-        num_epochs (int): Total number of training iterations
-        chunks_per_update (int): Number of chunks to accumulate before updating weights
-        log_interval (int): Log metrics every N epochs
-        checkpoint_interval (int): Save checkpoint every N epochs
-        plot_size (Optional[int]): Number of chunks to accumulate for plotting (default: None)
-        mixed_precision (bool): Whether to use mixed precision training (default: True)
-        grad_norm_clip (Optional[float]): Maximum gradient norm for clipping (default: None)
-        grad_clip_fn (Optional[Callable]): Custom gradient clipping function called instead of
-            the default global clip_grad_norm_. Signature: ``fn(model) -> None``.
-            When provided, ``grad_norm_clip`` is ignored.
-        epoch_callbacks (Optional[list[Callable]]): Functions called at data epoch boundaries
-            (same point as scheduler step). Signature: ``fn(data_epoch: int) -> None``.
-        update_callbacks (Optional[list[Callable]]): Functions called after each optimizer
-            step. Signature: ``fn() -> None``.
-        checkpoint_callbacks (Optional[list[Callable]]): Functions called after each
-            checkpoint save. Signature: ``fn(epoch: int, output_dir: Path, model) -> None``.
-        wandb_config (Optional[Dict[str, Any]]): Wandb configuration dict (optional)
-        progress_bar (Optional[Any]): Initialized tqdm progress bar (optional)
-        plot_generator (Optional[Callable]): Optional function for generating plots
-        stats_computer (Optional[Callable[[Dict[str, np.ndarray]], Dict[str, float]]]):
-            Optional function for computing network stats. Receives a single dict
-            containing batch data (spikes, input_spikes, target_spikes) and model
-            parameters (scaling_factors, scaling_factors_FF, weights_FF).
-        connectome_mask (Optional[torch.Tensor]): Binary mask for recurrent connectivity constraints
-        feedforward_mask (Optional[torch.Tensor]): Binary mask for feedforward connectivity constraints
-        chunks_per_data_epoch (Optional[int]): Number of chunks in one full pass through the dataset.
-            When using a cyclic dataloader, this enables automatic state reset at data epoch boundaries.
-        burn_in_chunks (int): Number of chunks to skip loss computation after each state reset.
-            The model still runs forward (to build up internal state) but no loss or gradient
-            is computed. This avoids biasing gradients with artificially quiet burn-in activity.
+        model: The network. Compiled with ``torch.compile`` on CUDA.
+        optimizer, scaler, scheduler: Optimiser, ``GradScaler`` and an optional
+            learning-rate scheduler (stepped once per data epoch).
+        dataloader: Iterable of named tuples (``SpikeData``): ``input_spikes`` and
+            any of ``target_spikes``, ``target_calcium``, ``target_rate``.
+        loss_functions, loss_weights: Losses by name, and their weights. Each loss
+            declares its inputs in ``required_inputs`` (see ``chunks.loss_inputs``).
+        device: 'cpu' or 'cuda'.
+        num_epochs: Total number of chunks to train for.
+        chunks_per_update: Chunks of gradient accumulated per optimiser step.
+        log_interval: Log averaged losses, stats and gradient norms every this many
+            chunks (to the metrics CSV and wandb).
+        checkpoint_interval: Save a checkpoint (and plots) every this many chunks.
+        plot_size: How many chunks before each log/checkpoint are kept for stats and
+            plots (trial 0 only). Default 1.
+        mixed_precision: Run forward and losses under autocast (CUDA only).
+        grad_norm_clip: Clip the global gradient norm (ignored with ``grad_clip_fn``).
+        grad_clip_fn: Custom clipping, ``fn(model)``, called before each step.
+        wandb_config: Starts a wandb run in ``train`` if given (keys of
+            ``wandb.init``, plus ``config``).
+        progress_bar: A tqdm bar, advanced once per chunk.
+        plot_generator: ``fn(spikes=..., voltages=..., ...) -> {name: figure}``. Only
+            with one are voltages, currents and conductances tracked.
+        stats_computer: ``fn(snapshot) -> {name: value}`` at each log; ``snapshot``
+            holds the kept chunks (spikes, targets, ...) and the scaling factors and
+            feedforward weights.
+        connectome_mask, feedforward_mask: Masks for legacy weight-trained models.
+        chunks_per_data_epoch: Chunks in one pass over the dataset.
+        burn_in_chunks: Chunks after each data-epoch start that only rebuild state.
+        epoch_callbacks: ``fn(data_epoch)`` at each data-epoch start.
+        update_callbacks: ``fn()`` after each optimiser step.
+        checkpoint_callbacks: ``fn(chunk, output_dir, model)`` after each checkpoint.
     """
 
     def __init__(
@@ -73,31 +116,30 @@ class SNNTrainer:
         optimizer: torch.optim.Optimizer,
         scaler: torch.amp.GradScaler,
         dataloader,
-        loss_functions: Dict[str, Callable],
-        loss_weights: Dict[str, float],
+        loss_functions: dict[str, Callable],
+        loss_weights: dict[str, float],
         device: str,
         num_epochs: int,
         chunks_per_update: int,
         log_interval: int,
         checkpoint_interval: int,
-        plot_size: Optional[int] = None,
+        plot_size: int | None = None,
         mixed_precision: bool = True,
-        grad_norm_clip: Optional[float] = None,
-        wandb_config: Optional[Dict[str, Any]] = None,
-        progress_bar: Optional[Any] = None,
-        plot_generator: Optional[Callable] = None,
-        stats_computer: Optional[Callable] = None,
-        connectome_mask: Optional[torch.Tensor] = None,
-        feedforward_mask: Optional[torch.Tensor] = None,
-        chunks_per_data_epoch: Optional[int] = None,
+        grad_norm_clip: float | None = None,
+        wandb_config: dict[str, Any] | None = None,
+        progress_bar: Any | None = None,
+        plot_generator: Callable | None = None,
+        stats_computer: Callable | None = None,
+        connectome_mask: torch.Tensor | None = None,
+        feedforward_mask: torch.Tensor | None = None,
+        chunks_per_data_epoch: int | None = None,
         burn_in_chunks: int = 0,
-        scheduler: Optional[Any] = None,
-        grad_clip_fn: Optional[Callable] = None,
-        epoch_callbacks: Optional[list[Callable]] = None,
-        update_callbacks: Optional[list[Callable]] = None,
-        checkpoint_callbacks: Optional[list[Callable]] = None,
+        scheduler: Any | None = None,
+        grad_clip_fn: Callable | None = None,
+        epoch_callbacks: list[Callable] | None = None,
+        update_callbacks: list[Callable] | None = None,
+        checkpoint_callbacks: list[Callable] | None = None,
     ):
-        """Initialize the trainer with pre-configured components."""
         self.model = model
         self.optimizer = optimizer
         self.scaler = scaler
@@ -106,21 +148,14 @@ class SNNTrainer:
         self.loss_functions = loss_functions
         self.loss_weights = loss_weights
         self.device = device
-
-        # Training parameters
         self.num_epochs = num_epochs
         self.chunks_per_update = chunks_per_update
         self.log_interval = log_interval
         self.checkpoint_interval = checkpoint_interval
-        self.plot_size = plot_size
+        self.plot_size = 1 if plot_size is None else plot_size
         self.mixed_precision = mixed_precision
         self.grad_norm_clip = grad_norm_clip
         self.grad_clip_fn = grad_clip_fn
-        self.epoch_callbacks = epoch_callbacks or []
-        self.update_callbacks = update_callbacks or []
-        self.checkpoint_callbacks = checkpoint_callbacks or []
-
-        # Optional components
         self.wandb_config = wandb_config
         self.pbar = progress_bar
         self.plot_generator = plot_generator
@@ -129,76 +164,313 @@ class SNNTrainer:
         self.feedforward_mask = feedforward_mask
         self.chunks_per_data_epoch = chunks_per_data_epoch
         self.burn_in_chunks = burn_in_chunks
+        self.epoch_callbacks = epoch_callbacks or []
+        self.update_callbacks = update_callbacks or []
+        self.checkpoint_callbacks = checkpoint_callbacks or []
 
-        # Compile model for speed on GPU
-        if device == "cuda":
+        if str(device).startswith("cuda"):
             try:
                 self.model = torch.compile(model)
                 print("  ✓ Model compiled with torch.compile")
             except Exception as e:
                 print(f"  ⚠ torch.compile failed ({e}), running in eager mode")
 
-        # Loggers (initialized in train() method)
+        # Set by train() unless the caller set them first.
         self.metrics_logger = None
         self.wandb_logger = None
         self.async_plotter = None
-        self._defined_wandb_metrics = set()  # Track metrics defined for epoch x-axis
+        self._defined_wandb_metrics: set[str] = set()
 
-        # Training state
-        self.plot_accumulators = self._init_plot_accumulators()
-        self.loss_history = deque(maxlen=self.log_interval)
+        self.plot_accumulators = {
+            key: deque(maxlen=self.plot_size) for key in PLOT_KEYS
+        }
+        self.loss_history: deque[dict[str, torch.Tensor]] = deque(maxlen=log_interval)
+        self._since_checkpoint: list[dict[str, torch.Tensor]] = []
         self.accumulated_chunks = 0
-        self.current_epoch = 0
+        self.chunk = 0  # the next chunk to run
         self.best_loss = float("inf")
-        self._last_gradient_snapshot = {}
+        self._gradient_norms: dict[str, torch.Tensor] = {}
         self._optimizer_has_stepped = False
+        self._batches_to_skip = 0  # set on resuming: data already used
+        self._batches: Prefetcher | None = None  # the data on the device, from train()
 
-    def _init_plot_accumulators(self) -> Dict[str, deque]:
-        """Initialize plot data accumulators."""
-        keys = [
-            "spikes",
-            "voltages",
-            "currents",
-            "currents_FF",
-            "currents_leak",
-            "conductances",
-            "conductances_FF",
-            "input_spikes",
-            "target_spikes",
-            "target_calcium",
-            "target_rate",
-            "predicted_calcium",
-            "hidden_spikes",
-        ]
-        return {key: deque(maxlen=self.plot_size) for key in keys}
+        if checkpoint_interval % chunks_per_update:
+            warnings.warn(
+                f"checkpoint_interval ({checkpoint_interval}) is not a multiple of "
+                f"chunks_per_update ({chunks_per_update}): checkpoints fall between "
+                "updates, and resuming from one drops the gradients accumulated "
+                "since the last update",
+                stacklevel=2,
+            )
 
-    def train(
-        self,
-        output_dir: Optional[Path] = None,
-    ) -> float:
+    # ------------------------------------------------------------------
+    # The loop
+    # ------------------------------------------------------------------
+
+    def train(self, output_dir: Path | None = None) -> float:
+        """Train from the current chunk to ``num_epochs``; return the best loss.
+
+        With ``output_dir``, metrics, checkpoints and plots are written there.
         """
-        Run the main training loop.
+        self.optimizer.zero_grad(set_to_none=True)
+        self._start_logging(output_dir)
+        if self.chunk == 0 and output_dir:
+            self._save_initial_checkpoint(output_dir)
+        for _ in range(self._batches_to_skip):
+            next(self.spike_iter)
+        self._batches_to_skip = 0
+        if self._batches is None:
+            self._batches = Prefetcher(self.spike_iter, self.device)
 
-        The trainer will automatically determine start_epoch and best_loss from
-        its internal state, which can be set by calling set_checkpoint_state()
-        when resuming from a checkpoint.
+        for chunk in range(self.chunk, self.num_epochs):
+            self.chunk = chunk
+            if self._starts_data_epoch(chunk):
+                self._start_data_epoch(chunk)
+            if self.pbar:
+                self.pbar.update(1)
 
-        Args:
-            output_dir (Optional[Path]): Directory for saving checkpoints and plots
+            if self._is_burn_in(chunk):
+                self._burn_in()
+                continue
 
-        Returns:
-            float: Final best loss value
+            outputs, losses = self._train_on_chunk()
+            if self._is_due(chunk, self.chunks_per_update):
+                self._update_weights()
+            if self._is_due(chunk, self.log_interval):
+                self._log(chunk)
+            if output_dir and self._is_due(chunk, self.checkpoint_interval):
+                self._checkpoint(chunk, losses, output_dir)
+            if self.async_plotter and self._is_due(chunk, self.log_interval * 10):
+                if self.async_plotter.has_pending():  # safety net
+                    print(f"  ⚠ Flushing pending plots at chunk {chunk + 1}...")
+                    self.async_plotter.flush()
+
+        if self.pbar:
+            self.pbar.close()
+        # The metrics logger is left open: callers may share it across runs.
+        if self.async_plotter:
+            print("Shutting down async plotter...")
+            self.async_plotter.close()
+        return self.best_loss
+
+    def resume(self, checkpoint_path: Path | str) -> int:
+        """Continue from a checkpoint file (or an output directory's latest one).
+
+        Restores everything the checkpoint holds (see the module docstring) and returns
+        the chunk training continues at. The dataloader must start at the beginning of
+        the data, as a new one does: ``train`` skips the batches already used.
         """
+        model = getattr(self.model, "_orig_mod", self.model)
+        checkpoint = restore_checkpoint(
+            checkpoint_path,
+            model,
+            self.optimizer,
+            self.scaler,
+            self.device,
+            scheduler=self.scheduler,
+        )
+        self.set_checkpoint_state(
+            checkpoint["epoch"], checkpoint.get("best_loss", float("inf"))
+        )
+        state = checkpoint.get("training_state", {})
+        load_loss_states(self.loss_functions, state.get("loss_states", {}))
+        self.loss_history.extend(
+            {name: value.to(self.device) for name, value in losses.items()}
+            for losses in state.get("loss_history", [])
+        )
+        return self.chunk
 
-        # Initialize gradient accumulation
+    def set_checkpoint_state(self, epoch: int, best_loss: float) -> None:
+        """Resume at chunk ``epoch`` (as stored in a checkpoint) with ``best_loss``.
+
+        The model's simulation state is restored by ``load_checkpoint``; ``resume``
+        does both, and restores the losses' state too. The dataloader is taken to
+        start at the beginning of the data: ``train`` skips the batches already used.
+        """
+        self.chunk = epoch
+        self.best_loss = best_loss
+        # Each chunk, burn-in included, takes one batch; a cycled dataset starts again
+        # at each data epoch.
+        self._batches_to_skip = (
+            epoch % self.chunks_per_data_epoch if self.chunks_per_data_epoch else epoch
+        )
+        # A checkpoint after training started means the optimizer has stepped, so the
+        # scheduler must step at the next data-epoch boundary as it would have.
+        self._optimizer_has_stepped = epoch > 0
+
+    @property
+    def current_epoch(self) -> int:
+        """The current chunk (the name predates the chunk/data-epoch vocabulary)."""
+        return self.chunk
+
+    @current_epoch.setter
+    def current_epoch(self, value: int) -> None:
+        self.chunk = value
+
+    # ------------------------------------------------------------------
+    # Schedule
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_due(chunk: int, interval: int) -> bool:
+        """Whether chunk ``chunk`` completes an ``interval``."""
+        return (chunk + 1) % interval == 0
+
+    def _starts_data_epoch(self, chunk: int) -> bool:
+        return (
+            self.chunks_per_data_epoch is not None
+            and chunk % self.chunks_per_data_epoch == 0
+        )
+
+    def _is_burn_in(self, chunk: int) -> bool:
+        if self.chunks_per_data_epoch is None or self.burn_in_chunks == 0:
+            return False
+        return chunk % self.chunks_per_data_epoch < self.burn_in_chunks
+
+    def _keeps(self, chunk: int) -> bool:
+        """Whether this chunk is within ``plot_size`` of the next log or checkpoint."""
+        to_log = -(chunk + 1) % self.log_interval
+        to_checkpoint = -(chunk + 1) % self.checkpoint_interval
+        return min(to_log, to_checkpoint) < self.plot_size
+
+    def _start_data_epoch(self, chunk: int) -> None:
+        """Reset model and loss states (as the data was generated), step the scheduler."""
+        if hasattr(self.model, "reset_state"):
+            self.model.reset_state(batch_size=getattr(self.model, "batch_size", 1))
+        reset_losses(self.loss_functions)
+        if self.scheduler is not None and self._optimizer_has_stepped:
+            self.scheduler.step()
+        for callback in self.epoch_callbacks:
+            callback(chunk // self.chunks_per_data_epoch)
+
+    # ------------------------------------------------------------------
+    # One chunk
+    # ------------------------------------------------------------------
+
+    @property
+    def _masks(self) -> dict:
+        return {
+            "connectome_mask": self.connectome_mask,
+            "feedforward_mask": self.feedforward_mask,
+        }
+
+    def _autocast(self):
+        return autocast(
+            device_type="cuda", enabled=self.mixed_precision and self.device == "cuda"
+        )
+
+    def _train_on_chunk(self) -> tuple[dict, dict[str, torch.Tensor]]:
+        """Forward, losses and backward for the next chunk; keep it if a log is near."""
+        data = next(self._batches)
+        keep = self._keeps(self.chunk)
+        # Voltages, currents and conductances are only for plots, so only tracked with
+        # a plot generator; losses and stats need just the spikes.
+        track = keep and self.plot_generator is not None
+        self.model.track_variables = track
+        self.model.track_batch_idx = 0 if track else None
+
+        with self._autocast():  # exp() of log-weights autocasts to float32
+            chunk = {
+                **data,
+                **model_outputs(self.model.forward(input_spikes=data["input_spikes"])),
+            }
+            losses = weighted_losses(
+                self.loss_functions, self.loss_weights, chunk, self.model, self._masks
+            )
+        self.scaler.scale(losses["total"] / self.chunks_per_update).backward()
+
+        losses = {name: value.detach() for name, value in losses.items()}
+        losses["total"] = losses["total"] / self.chunks_per_update
+        self.loss_history.append(losses)
+        self._since_checkpoint.append(losses)
+        if keep:
+            self._keep(chunk)
+        return chunk, losses
+
+    def _burn_in(self) -> None:
+        """Run the next chunk forward only, to rebuild model and loss state."""
+        data = next(self._batches)
+        self.model.track_variables = False
+        self.model.track_batch_idx = None
+        with torch.no_grad():
+            chunk = {
+                **data,
+                **model_outputs(self.model.forward(input_spikes=data["input_spikes"])),
+            }
+            warm_up_losses(self.loss_functions, chunk, self.model, self._masks)
+
+    def _keep(self, chunk: dict) -> None:
+        """Store trial 0 of this chunk's data and outputs for stats and plots."""
+        for key in PLOT_KEYS:
+            value = next(
+                (
+                    chunk[name]
+                    for name in TRACKED_AS.get(key, (key,))
+                    if chunk.get(name) is not None
+                ),
+                None,
+            )
+            if value is None:
+                continue
+            value = value[0:1].detach()
+            if key in SPIKE_KEYS:
+                value = value.bool()
+            self.plot_accumulators[key].append(_to_host(value))
+        self.accumulated_chunks = min(self.accumulated_chunks + 1, self.plot_size)
+
+    def _update_weights(self) -> None:
+        """Mask legacy weight gradients, clip, step the optimiser and scheduler state."""
+        self.scaler.unscale_(self.optimizer)
+        with torch.no_grad():
+            if hasattr(self.model, "log_weights"):
+                pairs = (
+                    ("log_weights", self.connectome_mask),
+                    ("log_weights_FF", self.feedforward_mask),
+                )
+            else:
+                pairs = (
+                    ("weights", self.connectome_mask),
+                    ("weights_FF", self.feedforward_mask),
+                )
+            for name, mask in pairs:
+                parameter = (
+                    getattr(self.model, name, None) if mask is not None else None
+                )
+                if isinstance(parameter, torch.Tensor) and parameter.grad is not None:
+                    parameter.grad *= mask
+
+        if self.grad_clip_fn is not None:
+            self.grad_clip_fn(self.model)
+        elif self.grad_norm_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.grad_norm_clip
+            )
+
+        # Gradient norms for the next log, kept on the device until then.
+        model = getattr(self.model, "_orig_mod", self.model)
+        self._gradient_norms = {
+            f"gradients/{name}_norm": p.grad.detach().norm()
+            for name, p in model.named_parameters()
+            if p.grad is not None
+        }
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self._optimizer_has_stepped = True
+        for callback in self.update_callbacks:
+            callback()
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Initialize wandb if config provided and not already initialized
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+
+    def _start_logging(self, output_dir: Path | None) -> None:
+        """Create the wandb run, metrics logger and plotter unless already present."""
         if self.wandb_config and self.wandb_logger is None:
             import wandb
 
-            # Build wandb config from training parameters
-            trainer_config = {
+            config = {
+                **self.wandb_config.pop("config", {}),
                 "num_epochs": self.num_epochs,
                 "chunks_per_update": self.chunks_per_update,
                 "log_interval": self.log_interval,
@@ -208,41 +480,22 @@ class SNNTrainer:
                 "output_dir": str(output_dir) if output_dir else None,
                 "device": self.device,
             }
-
-            # Merge trainer config with user-provided config
-            # Extract 'config' from wandb_config if it exists, otherwise use empty dict
-            user_config = self.wandb_config.pop("config", {})
-            merged_config = {**user_config, **trainer_config}
-
-            # Build init kwargs with only non-None optional parameters
-            # Use name from config if provided and non-empty, otherwise use output_dir name
-            run_name = self.wandb_config.pop("name", None) or (
+            name = self.wandb_config.pop("name", None) or (
                 output_dir.name if output_dir else "snn_training"
             )
-            wandb_init_kwargs = {
-                "name": run_name,
-                "config": merged_config,
-                "dir": str(output_dir) if output_dir else None,
-                **self.wandb_config,  # project, entity, tags, etc.
-            }
-
             print("\n" + "=" * 60)
-            self.wandb_logger = wandb.init(**wandb_init_kwargs)
+            self.wandb_logger = wandb.init(
+                name=name,
+                config=config,
+                dir=str(output_dir) if output_dir else None,
+                **self.wandb_config,
+            )
             wandb.watch(self.model, log="parameters", log_freq=self.log_interval)
-
-            # Track which metrics have been defined for epoch x-axis
-            self._defined_wandb_metrics = set()
             wandb.define_metric("epoch")
             print("=" * 60 + "\n")
 
-        # Initialize async logger if output_dir provided and not already initialized
         if output_dir and self.metrics_logger is None:
-            self.metrics_logger = AsyncLogger(
-                log_dir=output_dir,
-                max_queue_size=10,
-            )
-
-        # Initialize async plotter if conditions are met
+            self.metrics_logger = AsyncLogger(log_dir=output_dir, max_queue_size=10)
         if self.plot_generator and output_dir and self.async_plotter is None:
             self.async_plotter = AsyncPlotter(
                 plot_generator=self.plot_generator,
@@ -253,971 +506,250 @@ class SNNTrainer:
                 chunks_per_data_epoch=self.chunks_per_data_epoch,
             )
 
-        # Save initial checkpoint at epoch 0 if starting from beginning
-        if self.current_epoch == 0 and output_dir:
-            self._save_initial_checkpoint(output_dir)
+    def _wandb_log(self, metrics: dict[str, float], chunk: int) -> None:
+        """Log to wandb against the (fractional) data epoch, if a run is active."""
+        if not self.wandb_logger:
+            return
+        import wandb
 
-        # Main training loop
-        for epoch in range(self.current_epoch, self.num_epochs):
-            self.current_epoch = epoch
-
-            # Reset states at data epoch boundaries (when cycling back to start of dataset)
-            # This ensures model and loss internal states match the conditions when data was generated
-            if (
-                self.chunks_per_data_epoch is not None
-                and epoch % self.chunks_per_data_epoch == 0
-            ):
-                self._reset_states_for_data_epoch()
-                data_epoch = epoch // self.chunks_per_data_epoch
-                # Step LR scheduler once per data epoch, but only after the
-                # optimizer has stepped at least once (avoids PyTorch warning)
-                if self.scheduler is not None and self._optimizer_has_stepped:
-                    self.scheduler.step()
-                # Call epoch callbacks
-                for cb in self.epoch_callbacks:
-                    cb(data_epoch)
-
-            # Update progress bar at start of iteration
-            if self.pbar:
-                self.pbar.update(1)
-
-            # Burn-in: run forward pass to build model state, but skip loss/backward
-            if self._is_burn_in(epoch):
-                self._burn_in_forward()
-                continue
-
-            # Forward pass
-            chunk_outputs = self._forward_pass()
-
-            # Compute losses and backward pass (do this BEFORE detaching anything)
-            losses = self._compute_losses(chunk_outputs)
-
-            # Accumulate detached data for plotting/stats — only in the
-            # window leading up to the next log or checkpoint to avoid a
-            # GPU→CPU sync on every single epoch.
-            if self._should_accumulate(epoch):
-                self._accumulate_data(chunk_outputs, epoch)
-
-            # Add detached losses to history for running averages
-            detached_losses = {name: value for name, value in losses.items()}
-            self.loss_history.append(detached_losses)
-
-            # Update weights if needed
-            if self._should_update_weights(epoch):
-                self._update_weights()
-
-            # Log metrics (using running average of losses and accumulated data)
-            if self._should_log(epoch):
-                avg_losses = self._compute_average_losses()
-                # Use concatenated plot data (spikes) for stats computation
-                plot_data = self._concatenate_plot_data()
-                self._log_metrics(avg_losses, plot_data, epoch)
-
-            # Checkpoint and plot
-            if self._should_checkpoint(epoch) and output_dir:
-                self.best_loss = self._checkpoint_and_plot(
-                    epoch, losses, self.best_loss, output_dir
-                )
-
-            # Periodic flush for async plotter (safety check every 10 log intervals)
-            if self.async_plotter and (epoch + 1) % (self.log_interval * 10) == 0:
-                if self.async_plotter.has_pending():
-                    print(f"  ⚠ Flushing pending plots at epoch {epoch + 1}...")
-                    self.async_plotter.flush()
-
-            # Update progress bar postfix with losses
-            self._update_progress_bar(losses)
-
-            # Memory cleanup
-            self._cleanup_chunk_data(chunk_outputs)
-
-        # Close progress bar
-        if self.pbar:
-            self.pbar.close()
-
-        # Note: We don't close the metrics_logger here since it may be shared
-        # across multiple training runs (e.g., EM iterations). The caller is
-        # responsible for closing the logger when done.
-
-        # Close async plotter to ensure all plots are completed
-        if self.async_plotter:
-            print("Shutting down async plotter...")
-            self.async_plotter.close()
-
-        return self.best_loss
-
-    def _forward_pass(self) -> Dict[str, torch.Tensor]:
-        """Run forward pass through the model."""
-        # Get next data from dataloader (named tuple)
-        batch_data = next(self.spike_iter)
-
-        # Extract input spikes and move to device (datasets return CPU tensors
-        # to allow num_workers > 0 and pin_memory in the DataLoader)
-        input_spikes = batch_data.input_spikes.to(self.device, non_blocking=True)
-
-        # Extract target spikes if present (supervised learning)
-        target_spikes = getattr(batch_data, "target_spikes", None)
-        if target_spikes is not None:
-            target_spikes = target_spikes.to(self.device, non_blocking=True)
-
-        # Extract calcium target if present (fit in observable dF/F space rather
-        # than spike space). Carried through to chunk_outputs like target_spikes.
-        target_calcium = getattr(batch_data, "target_calcium", None)
-        if target_calcium is not None:
-            target_calcium = target_calcium.to(self.device, non_blocking=True)
-
-        # Extract smooth-rate target if present (van-Rossum-style rate matching).
-        target_rate = getattr(batch_data, "target_rate", None)
-        if target_rate is not None:
-            target_rate = target_rate.to(self.device, non_blocking=True)
-
-        # Determine if we should track variables for logging/checkpointing
-        # Tracking is ONLY for visualization - always detached in simulator
-        # Losses only use spikes (+ model parameters accessed directly)
-        should_log_checkpoint = self._should_accumulate(self.current_epoch)
-        self.model.track_variables = should_log_checkpoint
-
-        # Always track only first batch element for memory efficiency
-        # (batch_size=1 tracked vs batch_size=N spikes)
-        self.model.track_batch_idx = 0 if should_log_checkpoint else None
-
-        # Run network simulation with mixed precision
-        with autocast(
-            device_type="cuda",
-            enabled=self.mixed_precision and self.device == "cuda",
-        ):
-            outputs = self.model.forward(input_spikes=input_spikes)
-
-        # Handle different return types based on tracking mode
-        if should_log_checkpoint:
-            # outputs is a dict with all variables (all detached except spikes)
-            result = {
-                "spikes": outputs["spikes"],
-                "input_spikes": input_spikes,
-                "target_spikes": target_spikes,
-            }
-            # Add tracked variables if they exist (for visualization only)
-            if "voltages" in outputs:
-                result["voltages"] = outputs["voltages"]
-            if "currents_recurrent" in outputs:
-                result["currents"] = outputs["currents_recurrent"]
-            if "currents_feedforward" in outputs:
-                result["currents_FF"] = outputs["currents_feedforward"]
-            if "currents_leak" in outputs:
-                result["currents_leak"] = outputs["currents_leak"]
-            if "conductances_recurrent" in outputs:
-                result["conductances"] = outputs["conductances_recurrent"]
-            if "conductances_feedforward" in outputs:
-                result["conductances_FF"] = outputs["conductances_feedforward"]
-            if "probabilities" in outputs:
-                result["probabilities"] = outputs["probabilities"]
-            if "hidden_spikes" in outputs:
-                result["hidden_spikes"] = outputs["hidden_spikes"]
-        elif isinstance(outputs, tuple):
-            # probability mode: (probabilities, sampled_spikes)
-            probabilities, spikes = outputs
-            result = {
-                "spikes": spikes,
-                "probabilities": probabilities,
-                "input_spikes": input_spikes,
-                "target_spikes": target_spikes,
-            }
-        elif isinstance(outputs, dict):
-            # Model returned a dict without full tracing (e.g. TwoLayerSNN
-            # with return_hidden_spikes=True). Preserve spikes and any
-            # auxiliary tensors needed by losses.
-            result = {
-                "spikes": outputs["spikes"],
-                "input_spikes": input_spikes,
-                "target_spikes": target_spikes,
-            }
-            if "hidden_spikes" in outputs:
-                result["hidden_spikes"] = outputs["hidden_spikes"]
-        else:
-            # outputs is just the spike tensor
-            result = {
-                "spikes": outputs,
-                "input_spikes": input_spikes,
-                "target_spikes": target_spikes,
-            }
-
-        # Calcium target (if any) rides alongside the spike target for losses
-        # that fit in dF/F space (e.g. CalciumMSELoss).
-        result["target_calcium"] = target_calcium
-        # Smooth-rate target (if any) for van-Rossum-style rate matching.
-        result["target_rate"] = target_rate
-
-        return result
-
-    def _accumulate_data(
-        self, chunk_outputs: Dict[str, torch.Tensor], epoch: int
-    ) -> None:
-        """Accumulate detached data for both plotting and stats computation."""
-        for key in self.plot_accumulators.keys():
-            # Skip keys that aren't present (e.g., voltages when not tracking)
-            if key == "input_spikes":
-                if "input_spikes" not in chunk_outputs:
-                    continue
-                tensor = chunk_outputs["input_spikes"]
-            elif key == "target_spikes":
-                if (
-                    "target_spikes" not in chunk_outputs
-                    or chunk_outputs["target_spikes"] is None
-                ):
-                    continue
-                tensor = chunk_outputs["target_spikes"]
-            elif key == "target_calcium":
-                if chunk_outputs.get("target_calcium") is None:
-                    continue
-                tensor = chunk_outputs["target_calcium"]  # float dF/F, not bool-cast
-            elif key == "target_rate":
-                if chunk_outputs.get("target_rate") is None:
-                    continue
-                tensor = chunk_outputs["target_rate"]  # float rate, not bool-cast
-            elif key == "predicted_calcium":
-                if chunk_outputs.get("predicted_calcium") is None:
-                    continue
-                tensor = chunk_outputs["predicted_calcium"]  # exact rendered dF/F
-            elif key not in chunk_outputs:
-                continue
-            else:
-                tensor = chunk_outputs[key]
-
-            # Slice to batch 0 BEFORE the CPU transfer so we only copy one
-            # trial instead of the entire batch across the PCIe bus.
-            tensor = tensor[0:1, ...]
-
-            # Convert spikes to bool for storage efficiency
-            if key in ("spikes", "target_spikes", "hidden_spikes"):
-                tensor = tensor.bool()
-
-            if self.device == "cuda":
-                numpy_array = tensor.detach().cpu().numpy()
-            else:
-                numpy_array = tensor.detach().numpy()
-
-            self.plot_accumulators[key].append(numpy_array)
-
-        # Update accumulated chunks counter (saturates at plot_size)
-        self.accumulated_chunks = min(self.accumulated_chunks + 1, self.plot_size)
-
-    def _compute_losses(
-        self, chunk_outputs: Dict[str, torch.Tensor]
-    ) -> Dict[str, float]:
-        """Compute losses and perform backward pass for a single chunk."""
-        spikes = chunk_outputs["spikes"]
-
-        # Check if any loss function needs weights
-        needs_weights = any(
-            hasattr(loss_fn, "required_inputs")
-            and (
-                "recurrent_weights" in loss_fn.required_inputs
-                or "feedforward_weights" in loss_fn.required_inputs
-            )
-            for loss_fn in self.loss_functions.values()
+        for name in metrics:
+            if name not in self._defined_wandb_metrics:
+                wandb.define_metric(name, step_metric="epoch")
+                self._defined_wandb_metrics.add(name)
+        epoch = (
+            chunk / self.chunks_per_data_epoch if self.chunks_per_data_epoch else chunk
         )
+        wandb.log({"epoch": epoch, **metrics})
 
-        # Get weights OUTSIDE autocast to avoid float16 overflow in exp()
-        # Use the @property which handles both log-space and linear-space weights
-        if needs_weights:
-            weights_for_loss = self.model.weights
-            weights_FF_for_loss = self.model.weights_FF
-        else:
-            weights_for_loss = None
-            weights_FF_for_loss = None
+    def _average_losses(self) -> dict[str, float]:
+        """Mean of each loss over the last ``log_interval`` trained chunks."""
+        return _mean_losses(self.loss_history)
 
-        # Compute losses with mixed precision
-        with autocast(
-            device_type="cuda",
-            enabled=self.mixed_precision and self.device == "cuda",
-        ):
-            # Compute individual losses
-            individual_losses = {}
-            for loss_name, loss_fn in self.loss_functions.items():
-                # Build inputs based on loss function's required_inputs metadata
-                inputs = {}
-                if hasattr(loss_fn, "required_inputs"):
-                    for req_input in loss_fn.required_inputs:
-                        if req_input == "output_spikes":
-                            inputs["output_spikes"] = spikes
-                        elif req_input == "voltages":
-                            inputs["voltages"] = chunk_outputs["voltages"]
-                        elif req_input == "dt":
-                            inputs["dt"] = self.model.dt
-                        elif req_input == "recurrent_weights":
-                            inputs["recurrent_weights"] = weights_for_loss
-                        elif req_input == "feedforward_weights":
-                            inputs["feedforward_weights"] = weights_FF_for_loss
-                        elif req_input == "cell_type_indices":
-                            inputs["cell_type_indices"] = self.model.cell_type_indices
-                        elif req_input == "connectome_mask":
-                            inputs["connectome_mask"] = self.connectome_mask
-                        elif req_input == "feedforward_mask":
-                            inputs["feedforward_mask"] = self.feedforward_mask
-                        elif req_input == "output_probabilities":
-                            inputs["output_probabilities"] = chunk_outputs[
-                                "probabilities"
-                            ]
-                        elif req_input == "target_calcium":
-                            if chunk_outputs.get("target_calcium") is None:
-                                raise ValueError(
-                                    f"Loss '{loss_name}' requires target_calcium, "
-                                    "but the dataloader provided none. Ensure your "
-                                    "dataset returns SpikeData(..., target_calcium=...)."
-                                )
-                            inputs["target_calcium"] = chunk_outputs["target_calcium"]
-                        elif req_input == "target_rate":
-                            if chunk_outputs.get("target_rate") is None:
-                                raise ValueError(
-                                    f"Loss '{loss_name}' requires target_rate, "
-                                    "but the dataloader provided none. Ensure your "
-                                    "dataset returns SpikeData(..., target_rate=...)."
-                                )
-                            inputs["target_rate"] = chunk_outputs["target_rate"]
-                        elif req_input == "scaling_factors":
-                            inputs["scaling_factors"] = self.model.scaling_factors
-                        elif req_input == "scaling_factors_FF":
-                            inputs["scaling_factors_FF"] = self.model.scaling_factors_FF
-                        elif req_input == "hidden_spikes":
-                            inputs["hidden_spikes"] = chunk_outputs.get("hidden_spikes")
-                else:
-                    # For losses without metadata, assume they take output_spikes
-                    inputs["output_spikes"] = spikes
-
-                # Add target spikes if the loss requires them
-                if hasattr(loss_fn, "requires_target") and loss_fn.requires_target:
-                    if chunk_outputs["target_spikes"] is not None:
-                        inputs["target_spikes"] = chunk_outputs["target_spikes"]
-                    else:
-                        raise ValueError(
-                            f"Loss function '{loss_name}' requires target spikes, "
-                            "but none were provided by the dataloader. "
-                            "Ensure your dataset returns (input_spikes, target_spikes)."
-                        )
-
-                # Compute loss
-                loss_value = loss_fn(**inputs)
-                individual_losses[loss_name] = loss_value
-
-                # Capture any exact prediction the loss renders internally (e.g.
-                # CalciumMSELoss's dF/F, with the correct carried state) so the
-                # plotter shows the real computed trace rather than re-rendering.
-                if getattr(loss_fn, "last_prediction", None) is not None:
-                    chunk_outputs["predicted_calcium"] = loss_fn.last_prediction
-
-            # Compute weighted total loss for optimization
-            total_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
-            for loss_name, loss_value in individual_losses.items():
-                weight = self.loss_weights.get(loss_name, 0.0)
-                total_loss += weight * loss_value
-
-            # Scale by number of loss computations per update
-            total_loss = total_loss / self.chunks_per_update
-
-        # Backward pass
-        self.scaler.scale(total_loss).backward()
-
-        # Convert to detached scalars for logging. Log the *weighted*
-        # contribution of each loss (raw_value * loss_weight) rather than
-        # the raw value — this makes the magnitudes directly comparable
-        # and additive to the total loss, which is what you usually want
-        # when tuning multi-component objectives.
-        losses = {"total": total_loss.detach().cpu().item()}
-        for loss_name, loss_value in individual_losses.items():
-            weight = self.loss_weights.get(loss_name, 0.0)
-            losses[loss_name] = (weight * loss_value).detach().cpu().item()
-
-        del total_loss
-        for loss_value in individual_losses.values():
-            del loss_value
-
-        return losses
-
-    def _update_weights(self) -> None:
-        """Update model weights with optional connectome-constrained optimization."""
-        self.scaler.unscale_(self.optimizer)
-
-        # Apply connectome masks to gradients before optimizer step
-        with torch.no_grad():
-            # Check if we're optimizing log weights
-            if hasattr(self.model, "log_weights"):
-                # Mask log-space recurrent weight gradients
-                if self.connectome_mask is not None:
-                    if self.model.log_weights.grad is not None:
-                        self.model.log_weights.grad *= self.connectome_mask
-
-                # Mask log-space feedforward weight gradients
-                if self.feedforward_mask is not None:
-                    if self.model.log_weights_FF.grad is not None:
-                        self.model.log_weights_FF.grad *= self.feedforward_mask
-            else:
-                # Legacy: Mask linear-space gradients (for non-weight optimization modes)
-                if self.connectome_mask is not None and hasattr(self.model, "weights"):
-                    if self.model.weights.grad is not None:
-                        self.model.weights.grad *= self.connectome_mask
-
-                if self.feedforward_mask is not None and hasattr(
-                    self.model, "weights_FF"
-                ):
-                    if self.model.weights_FF.grad is not None:
-                        self.model.weights_FF.grad *= self.feedforward_mask
-
-        # Clip gradients if configured
-        if self.grad_clip_fn is not None:
-            self.grad_clip_fn(self.model)
-        elif self.grad_norm_clip is not None:
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), max_norm=self.grad_norm_clip
-            )
-
-        # Store gradient snapshot before zero_grad clears them
-        self._last_gradient_snapshot = self._extract_current_gradients()
-
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self._optimizer_has_stepped = True
-
-        for cb in self.update_callbacks:
-            cb()
-
-        self.optimizer.zero_grad(set_to_none=True)
-
-    def _log_metrics(
-        self,
-        losses: Dict[str, float],
-        plot_data: Dict[str, np.ndarray],
-        epoch: int,
-    ) -> None:
-        """Log metrics to CSV and wandb.
-
-        Args:
-            losses: Dictionary of loss values
-            plot_data: Accumulated plot data dict (spikes, input_spikes,
-                target_spikes, etc.) as numpy arrays (already on CPU)
-            epoch: Current epoch number
-        """
-        # Compute stats if stats_computer is provided
+    def _log(self, chunk: int) -> None:
+        """Averaged losses, stats and gradient norms to the CSV, wandb and the bar."""
+        losses = self._average_losses()
         stats = {}
         if self.stats_computer:
-            # Build a single snapshot dict with batch data + model parameters
-            snapshot = dict(plot_data)  # spikes, input_spikes, target_spikes, etc.
-            snapshot["epoch"] = epoch
-
-            # Add model parameters (scaling factors, weights) as numpy on CPU
-            def _to_numpy(tensor):
-                t = tensor.detach()
-                return t.cpu().numpy() if self.device == "cuda" else t.numpy()
-
-            if hasattr(self.model, "scaling_factors"):
-                snapshot["scaling_factors"] = _to_numpy(self.model.scaling_factors)
-            if hasattr(self.model, "scaling_factors_FF"):
-                snapshot["scaling_factors_FF"] = _to_numpy(
-                    self.model.scaling_factors_FF
-                )
-            if hasattr(self.model, "weights_FF"):
-                snapshot["weights_FF"] = _to_numpy(self.model.weights_FF)
-
-            # Compute stats synchronously
+            snapshot = self._plot_data().copy()
+            snapshot["epoch"] = chunk
+            for name in ("scaling_factors", "scaling_factors_FF", "weights_FF"):
+                if hasattr(self.model, name):
+                    snapshot[name] = getattr(self.model, name).detach().cpu().numpy()
             stats = self.stats_computer(snapshot)
+        gradients = {name: float(norm) for name, norm in self._gradient_norms.items()}
 
-        # Extract current gradient values
-        gradient_stats = self._last_gradient_snapshot
-
-        # Prepare CSV data
-        csv_data = {
-            f"{loss_name}_loss": loss_value for loss_name, loss_value in losses.items()
-        }
-        csv_data.update(stats)
-        csv_data.update(gradient_stats)
-
-        # Log to CSV asynchronously
         if self.metrics_logger:
-            self.metrics_logger.log(epoch=epoch + 1, **csv_data)
+            row = {f"{name}_loss": value for name, value in losses.items()}
+            self.metrics_logger.log(epoch=chunk + 1, **row, **stats, **gradients)
+        self._wandb_log(
+            {**{f"loss/{name}": v for name, v in losses.items()}, **stats, **gradients},
+            chunk + 1,
+        )
+        if self.pbar:
+            self.pbar.set_postfix(_short_names(losses))
 
-        # Log to wandb directly (synchronous but fast)
-        if self.wandb_logger:
-            import wandb
+    def _plot_data(self) -> PlotData:
+        if str(self.device).startswith("cuda"):
+            torch.cuda.synchronize()  # the kept chunks' copies to the host
+        return PlotData(self.plot_accumulators)
 
-            # Create loss dict with wandb naming convention
-            wandb_losses = {
-                f"loss/{loss_name}": loss_value
-                for loss_name, loss_value in losses.items()
-            }
+    # Kept for callers of the previous name.
+    _concatenate_plot_data = _plot_data
 
-            # Compute fractional epoch (uses chunks_per_data_epoch if available)
-            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
-                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
-            else:
-                fractional_epoch = epoch + 1
-
-            # Define each metric individually to use epoch as x-axis
-            # (glob patterns don't work reliably in wandb)
-            all_metrics = {**wandb_losses, **stats, **gradient_stats}
-            for metric_name in all_metrics.keys():
-                if metric_name not in self._defined_wandb_metrics:
-                    wandb.define_metric(metric_name, step_metric="epoch")
-                    self._defined_wandb_metrics.add(metric_name)
-
-            wandb.log(
-                {
-                    "epoch": fractional_epoch,
-                    **all_metrics,
-                },
-            )
+    # ------------------------------------------------------------------
+    # Checkpoints and plots
+    # ------------------------------------------------------------------
 
     def _save_initial_checkpoint(self, output_dir: Path) -> None:
-        """Save initial checkpoint before training begins."""
-        # Create initial losses with infinity values for all configured loss functions
-        initial_losses = {name: float("inf") for name in self.loss_functions.keys()}
-        initial_losses["total"] = float("inf")
-
-        # Ensure we have at least the total loss if no loss functions are configured
-        if not initial_losses or len(initial_losses) == 1:
-            initial_losses = {"total": float("inf")}
-
-        # Save checkpoint with initial state
+        """The untrained state, as chunk 0 (losses infinite)."""
+        losses = {name: float("inf") for name in [*self.loss_functions, "total"]}
         save_checkpoint(
             output_dir=output_dir,
             epoch=0,
             model=self.model,
-            optimiser=self.optimizer,
+            optimizer=self.optimizer,
             scaler=self.scaler,
             best_loss=float("inf"),
             scheduler=self.scheduler,
-            **initial_losses,
-        )
-
-        # Log initial state to wandb if available
-        if self.wandb_logger:
-            import wandb
-
-            wandb_losses = {
-                f"loss/{name}": value for name, value in initial_losses.items()
-            }
-            # Define each metric individually to use epoch as x-axis
-            for metric_name in wandb_losses.keys():
-                if metric_name not in self._defined_wandb_metrics:
-                    wandb.define_metric(metric_name, step_metric="epoch")
-                    self._defined_wandb_metrics.add(metric_name)
-            wandb.log({"epoch": 0.0, **wandb_losses})
-
-        print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
-
-    def _checkpoint_and_plot(
-        self,
-        epoch: int,
-        losses: Dict[str, float],
-        best_loss: float,
-        output_dir: Path,
-    ) -> float:
-        """Save checkpoint and generate plots."""
-        if self.pbar:
-            self.pbar.clear()
-
-        print(f"\n{'=' * 60}")
-        print(f"Checkpoint at chunk {epoch + 1}/{self.num_epochs}")
-        print("=" * 60)
-
-        # Concatenate plot data
-        plot_data = self._concatenate_plot_data()
-
-        # Save checkpoint (model defines its own simulation state)
-        is_best = save_checkpoint(
-            output_dir=output_dir,
-            epoch=epoch + 1,
-            model=self.model,
-            optimiser=self.optimizer,
-            scaler=self.scaler,
-            best_loss=best_loss,
-            scheduler=self.scheduler,
             **losses,
         )
+        self._wandb_log({f"loss/{name}": value for name, value in losses.items()}, 0)
+        print(f"Initial checkpoint (epoch 0) saved to {output_dir / 'checkpoints'}")
 
-        if is_best:
-            best_loss = losses["total"]
+    def _checkpoint(
+        self, chunk: int, losses: dict[str, torch.Tensor], output_dir: Path
+    ) -> None:
+        """Save a checkpoint (best if its mean loss is the lowest) and plots.
 
-        for cb in self.checkpoint_callbacks:
-            cb(epoch + 1, output_dir, self.model)
+        The losses saved and compared are the means over the chunks trained since the
+        previous checkpoint (``losses``, this chunk's, if none are recorded).
+        """
+        if self.pbar:
+            self.pbar.clear()
+        print(
+            f"\n{'=' * 60}\nCheckpoint at chunk {chunk + 1}/{self.num_epochs}\n{'=' * 60}"
+        )
+        losses = _mean_losses(self._since_checkpoint or [losses])
+        self._since_checkpoint = []
+        if save_checkpoint(
+            output_dir=output_dir,
+            epoch=chunk + 1,
+            model=self.model,
+            optimizer=self.optimizer,
+            scaler=self.scaler,
+            best_loss=self.best_loss,
+            scheduler=self.scheduler,
+            training_state=self._training_state(),
+            **losses,
+        ):
+            self.best_loss = losses["total"]
+        for callback in self.checkpoint_callbacks:
+            callback(chunk + 1, output_dir, self.model)
+        if self.plot_generator:
+            self._plot(chunk, output_dir)
 
-        # Generate plots asynchronously if async plotter is available
-        if self.async_plotter and plot_data:
-
-            def copy_tensor_optimized(tensor: torch.Tensor) -> np.ndarray:
-                return tensor.detach().cpu().numpy()
-
-            # Take only first batch (index 0) to reduce data size, keeping batch dimension
-            # Only slice if array has data and is multi-dimensional
-            plot_data = {
-                key: arr[0:1, ...] if arr.size > 0 and arr.ndim > 1 else arr
-                for key, arr in plot_data.items()
-            }
-
-            # Get weights as separate parameters
-            # Handle both recurrent (weights + weights_FF) and feedforward-only (weights_FF) models
-            if hasattr(self.model, "weights"):
-                weights = copy_tensor_optimized(self.model.weights)
-            else:
-                weights = None
-            if hasattr(self.model, "weights_FF"):
-                weights_ff = copy_tensor_optimized(self.model.weights_FF)
-            else:
-                weights_ff = None
-
-            # Add weights and masks to plot_data
-            plot_data["weights"] = weights
-            plot_data["feedforward_weights"] = weights_ff
-            plot_data["connectome_mask"] = (
-                self.connectome_mask.detach().cpu().numpy()
-                if self.connectome_mask is not None
-                else None
-            )
-            plot_data["feedforward_mask"] = (
-                self.feedforward_mask.detach().cpu().numpy()
-                if self.feedforward_mask is not None
-                else None
-            )
-
-            # Submit plot with blocking to ensure it doesn't get skipped
-            print("  📊 Submitting plot (will wait if queue is full)...")
-            success = self.async_plotter.submit_plot(
-                plot_data=plot_data,
-                epoch=epoch,
-                block=True,
-                timeout=90.0,
-            )
-            if success:
-                print("  ✓ Plot job submitted")
-            else:
-                print("  ⚠ Plot submission timed out after 90s")
-        elif self.plot_generator:
-            # Fallback to synchronous plotting if no async plotter
-            self._generate_and_save_plots(plot_data, epoch, output_dir)
-
-        # Print checkpoint info
-        self._print_checkpoint_info(losses)
-
-        # Refresh progress bar
+        for name, value in losses.items():
+            label = "Total" if name == "total" else name.replace("_", " ").title()
+            print(f"  {label} Loss: {value:.6f}")
+        print("=" * 60)
         if self.pbar:
             self.pbar.refresh()
 
-        return best_loss
+    def _training_state(self) -> dict:
+        """What ``resume`` needs beyond model, optimiser and RNGs (on the CPU)."""
 
-    def _generate_and_save_plots(
-        self, plot_data: Dict, epoch: int, output_dir: Path
-    ) -> None:
-        """Generate and save plots."""
-        print("  Generating plots...")
+        def cpu(value):
+            return value.detach().cpu() if isinstance(value, torch.Tensor) else value
 
-        figures_dir = output_dir / "figures" / f"chunk_{epoch + 1:06d}"
-        figures_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate plots using provided function
-        figures = self.plot_generator(
-            spikes=plot_data["spikes"],
-            voltages=plot_data["voltages"],
-            conductances=plot_data["conductances"],
-            conductances_FF=plot_data["conductances_FF"],
-            currents=plot_data["currents"],
-            currents_FF=plot_data["currents_FF"],
-            currents_leak=plot_data["currents_leak"],
-            input_spikes=plot_data["input_spikes"],
-            target_spikes=plot_data.get("target_spikes"),
-            target_calcium=plot_data.get("target_calcium"),
-            predicted_calcium=plot_data.get("predicted_calcium"),
-            epoch=epoch,
-            weights=self.model.weights.detach().cpu().numpy()
-            if hasattr(self.model, "weights")
-            else None,
-            feedforward_weights=self.model.weights_FF.detach().cpu().numpy()
-            if hasattr(self.model, "weights_FF")
-            else None,
-            connectome_mask=self.connectome_mask.detach().cpu().numpy()
-            if self.connectome_mask is not None
-            else None,
-            feedforward_mask=self.feedforward_mask.detach().cpu().numpy()
-            if self.feedforward_mask is not None
-            else None,
-            hidden_spikes=plot_data.get("hidden_spikes"),
-        )
-
-        # Log to wandb if logger provided
-        if self.wandb_logger:
-            import wandb
-
-            wandb_plots = {
-                f"plots/{name}": wandb.Image(fig) for name, fig in figures.items()
-            }
-            # Define each metric individually to use epoch as x-axis
-            for metric_name in wandb_plots.keys():
-                if metric_name not in self._defined_wandb_metrics:
-                    wandb.define_metric(metric_name, step_metric="epoch")
-                    self._defined_wandb_metrics.add(metric_name)
-            # Compute fractional epoch for x-axis consistency
-            if self.chunks_per_data_epoch and self.chunks_per_data_epoch > 0:
-                fractional_epoch = (epoch + 1) / self.chunks_per_data_epoch
-            else:
-                fractional_epoch = epoch + 1
-            wandb.log({"epoch": fractional_epoch, **wandb_plots})
-
-        # Save to disk
-        for plot_name, fig in figures.items():
-            fig_path = figures_dir / f"{plot_name}.png"
-            fig.savefig(fig_path, dpi=300, bbox_inches="tight")
-            plt.close(fig)
-
-        print(f"  ✓ Saved plots to {figures_dir}")
-
-    def _concatenate_plot_data(self) -> Dict[str, np.ndarray]:
-        """Concatenate accumulated plot data."""
         return {
-            key: np.concatenate(arrays, axis=1) if arrays else np.array([])
-            for key, arrays in self.plot_accumulators.items()
+            "loss_states": {
+                key: cpu(value)
+                for key, value in loss_states(self.loss_functions).items()
+            },
+            "loss_history": [
+                {name: cpu(value) for name, value in losses.items()}
+                for losses in self.loss_history
+            ],
         }
 
-    def _clear_plot_data(self) -> None:
-        """Clear plot data and force garbage collection."""
-        for key in self.plot_accumulators:
-            self.plot_accumulators[key].clear()
+    def _plot(self, chunk: int, output_dir: Path) -> None:
+        """Hand the kept chunks, weights and masks to the plot generator."""
+        plot_data = dict(self._plot_data())
 
-        # Don't reset accumulated_chunks - it tracks total progress, not queue size
-        # The plot_accumulators use deque(maxlen=plot_size) for automatic rolling window
+        def numpy(value):
+            return None if value is None else value.detach().cpu().numpy()
 
-        import gc
+        extras = {
+            "weights": numpy(getattr(self.model, "weights", None)),
+            "feedforward_weights": numpy(getattr(self.model, "weights_FF", None)),
+            "connectome_mask": numpy(self.connectome_mask),
+            "feedforward_mask": numpy(self.feedforward_mask),
+        }
+        if self.async_plotter:
+            print("  📊 Submitting plot (will wait if queue is full)...")
+            submitted = self.async_plotter.submit_plot(
+                plot_data={**plot_data, **extras}, epoch=chunk, block=True, timeout=90.0
+            )
+            print(
+                "  ✓ Plot job submitted"
+                if submitted
+                else "  ⚠ Plot submission timed out after 90s"
+            )
+        else:
+            self._plot_now(plot_data, extras, chunk, output_dir)
 
-        gc.collect()
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
-
-    def _cleanup_chunk_data(self, chunk_outputs: Dict[str, torch.Tensor]) -> None:
-        """Clean up chunk data to free memory."""
-        # Delete non-essential chunk tensors
-        for key in [
-            "voltages",
-            "currents",
-            "currents_FF",
-            "currents_leak",
-            "conductances",
-            "conductances_FF",
-        ]:
-            if key in chunk_outputs:
-                del chunk_outputs[key]
-
-    def _extract_current_gradients(self) -> Dict[str, float]:
-        """Extract current gradient norms for logging."""
-        grad_stats = {}
-
-        # Unwrap torch.compile if needed
-        model = getattr(self.model, "_orig_mod", self.model)
-
-        # Log gradient norms for all leaf parameters that have gradients
-        for name, param in model.named_parameters():
-            if param.grad is not None:
-                grad_stats[f"gradients/{name}_norm"] = param.grad.norm().item()
-
-        return grad_stats
-
-    def _update_progress_bar(self, losses: Dict[str, float]) -> None:
-        """Update progress bar with current losses."""
-        if self.pbar:
-            # Create dynamic postfix with all losses, prioritizing total loss
-            postfix = {}
-
-            # Add total loss first
-            if "total" in losses:
-                postfix["Total"] = f"{losses['total']:.4f}"
-
-            # Add individual losses (excluding 'total')
-            for loss_name, loss_value in losses.items():
-                if loss_name != "total":
-                    # Split on underscore and take first letter of each word
-                    words = loss_name.split("_")
-                    if len(words) > 1:
-                        display_name = "".join(word[0].upper() for word in words)
-                    else:
-                        display_name = loss_name.upper()[:3]
-
-                    postfix[display_name] = f"{loss_value:.4f}"
-
-            # Add weight update indicator
-            chunks_since_update = (self.current_epoch + 1) % self.chunks_per_update
-            if chunks_since_update == 0:
-                postfix["Status"] = "Updated"
-            else:
-                postfix["Status"] = f"{chunks_since_update}/{self.chunks_per_update}"
-
-            self.pbar.set_postfix(postfix)
-
-    def _should_update_weights(self, epoch: int) -> bool:
-        """Check if weights should be updated."""
-        return (epoch + 1) % self.chunks_per_update == 0
-
-    def _should_log(self, epoch: int) -> bool:
-        """Check if metrics should be logged."""
-        return (epoch + 1) % self.log_interval == 0
-
-    def _should_checkpoint(self, epoch: int) -> bool:
-        """Check if checkpoint should be saved."""
-        return (epoch + 1) % self.checkpoint_interval == 0
-
-    def _should_accumulate(self, epoch: int) -> bool:
-        """Check if data should be accumulated for the next log/checkpoint.
-
-        Returns True when the current epoch falls within ``plot_size`` epochs
-        before (and including) the next log or checkpoint boundary, so we have
-        exactly enough data ready when it's needed — without forcing a GPU→CPU
-        sync every epoch.
-        """
-        # How many epochs until next log and checkpoint (0 = this epoch)
-        rem_log = (epoch + 1) % self.log_interval
-        epochs_to_log = (self.log_interval - rem_log) % self.log_interval
-        rem_ckpt = (epoch + 1) % self.checkpoint_interval
-        epochs_to_ckpt = (
-            self.checkpoint_interval - rem_ckpt
-        ) % self.checkpoint_interval
-        epochs_to_next = min(epochs_to_log, epochs_to_ckpt)
-        return epochs_to_next < self.plot_size
-
-    def _should_store_for_plot(self, epoch: int) -> bool:
-        """Check if data should be stored for plotting."""
-        # Only store if plot generator exists and plot_size is configured
-        if not self.plot_generator or self.plot_size is None:
-            return False
-
-        epochs_until_checkpoint = self.checkpoint_interval - (
-            (epoch + 1) % self.checkpoint_interval
+    def _plot_now(
+        self, plot_data: dict, extras: dict, chunk: int, output_dir: Path
+    ) -> None:
+        """Make and save the plots in this thread (no async plotter)."""
+        print("  Generating plots...")
+        figures_dir = save_figures(
+            self.plot_generator,
+            {**plot_data, "epoch": chunk, **extras},
+            chunk,
+            output_dir,
+            log_images=self._wandb_images if self.wandb_logger else None,
         )
-        if epochs_until_checkpoint == self.checkpoint_interval:
-            epochs_until_checkpoint = 0
-        return epochs_until_checkpoint < self.plot_size
+        print(f"  ✓ Saved plots to {figures_dir}")
 
-    def _compute_average_losses(self) -> Dict[str, float]:
-        """Compute running average of losses over the last log_interval epochs."""
-        if not self.loss_history:
-            return {}
+    def _wandb_images(self, images: dict, chunk: int) -> None:
+        self._wandb_log(images, chunk + 1)
 
-        # Get all loss names from the history
-        all_loss_names = set()
-        for loss_dict in self.loss_history:
-            all_loss_names.update(loss_dict.keys())
 
-        # Compute average for each loss
-        avg_losses = {}
-        for loss_name in all_loss_names:
-            values = [loss_dict.get(loss_name, 0.0) for loss_dict in self.loss_history]
-            avg_losses[loss_name] = sum(values) / len(values)
+def _to_host(tensor: torch.Tensor) -> torch.Tensor:
+    """A host copy of ``tensor``; from CUDA without waiting for it (sync before reading)."""
+    if tensor.device.type != "cuda":
+        return tensor.cpu()
+    host = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+    return host.copy_(tensor, non_blocking=True)
 
-        return avg_losses
 
-    def _print_checkpoint_info(self, losses: Dict[str, float]) -> None:
-        """Print checkpoint information."""
-        # Print all losses dynamically
-        for loss_name, loss_value in losses.items():
-            if loss_name == "total":
-                print(f"  Total Loss: {loss_value:.6f}")
-            else:
-                # Format loss name for display
-                display_name = loss_name.replace("_", " ").title()
-                print(f"  {display_name} Loss: {loss_value:.6f}")
-        print("=" * 60)
+def _mean_losses(history) -> dict[str, float]:
+    """Mean of each loss over a sequence of per-chunk loss dicts."""
+    names = {name for losses in history for name in losses}
+    return {
+        name: float(
+            torch.stack(
+                [losses.get(name, torch.zeros(())) for losses in history]
+            ).mean()
+        )
+        for name in names
+    }
 
-    def set_checkpoint_state(self, epoch: int, best_loss: float) -> None:
-        """
-        Set checkpoint state for resuming training.
 
-        Note: Model state (v, g, g_FF) is managed internally by the model via reset_state().
-        This method only sets the training loop state (epoch counter and best loss).
+def _short_names(losses: dict[str, float]) -> dict[str, str]:
+    """Progress-bar labels: 'Total', then initials of the other losses."""
+    out = {"Total": f"{losses['total']:.4f}"} if "total" in losses else {}
+    for name, value in losses.items():
+        if name != "total":
+            words = name.split("_")
+            label = (
+                "".join(w[0].upper() for w in words)
+                if len(words) > 1
+                else name.upper()[:3]
+            )
+            out[label] = f"{value:.4f}"
+    return out
 
-        Args:
-            epoch (int): The epoch to resume from
-            best_loss (float): The best loss achieved so far
-        """
-        self.current_epoch = epoch
-        self.best_loss = best_loss
 
-    def _is_burn_in(self, epoch: int) -> bool:
-        """Check if the current epoch is in the burn-in period after a state reset."""
-        if self.chunks_per_data_epoch is None or self.burn_in_chunks == 0:
-            return False
-        return epoch % self.chunks_per_data_epoch < self.burn_in_chunks
+class PlotData(MutableMapping):
+    """Accumulated per-chunk arrays (or host tensors), concatenated along time into one
+    array only when a key is read.
 
-    def _burn_in_forward(self) -> None:
-        """Run a forward pass without computing loss or gradients (to build model state).
+    Stats usually read only the spike trains, so the (much larger) tracked voltages,
+    currents and conductances are never concatenated unless a plot needs them. Keys
+    set on the mapping (``snapshot["epoch"] = ...``) are stored alongside.
+    """
 
-        Also passes spikes through loss functions to warm up their internal
-        state (e.g. Van Rossum filter history), without using the result.
-        """
-        batch_data = next(self.spike_iter)
-        input_spikes = batch_data.input_spikes.to(self.device, non_blocking=True)
-        target_spikes = getattr(batch_data, "target_spikes", None)
-        if target_spikes is not None:
-            target_spikes = target_spikes.to(self.device, non_blocking=True)
-        target_calcium = getattr(batch_data, "target_calcium", None)
-        if target_calcium is not None:
-            target_calcium = target_calcium.to(self.device, non_blocking=True)
-        target_rate = getattr(batch_data, "target_rate", None)
-        if target_rate is not None:
-            target_rate = target_rate.to(self.device, non_blocking=True)
-        self.model.track_variables = False
-        self.model.track_batch_idx = None
-        with torch.no_grad():
-            outputs = self.model.forward(input_spikes=input_spikes)
-            probabilities = None
-            if isinstance(outputs, dict):
-                spikes = outputs["spikes"]
-                probabilities = outputs.get("probabilities")
-            elif isinstance(outputs, tuple):
-                probabilities, spikes = outputs  # (probabilities, sampled_spikes)
-            else:
-                spikes = outputs
+    def __init__(self, accumulators: dict[str, deque], extra=None, cache=None):
+        self._accumulators = accumulators
+        self._extra = dict(extra or {})
+        self._cache = {} if cache is None else cache
 
-            # Warm up loss function internal state (e.g. Van Rossum filter history
-            # or the calcium model's latent dF/F) without using the result.
-            for loss_fn in self.loss_functions.values():
-                inputs = {}
-                if hasattr(loss_fn, "required_inputs"):
-                    if "output_spikes" in loss_fn.required_inputs:
-                        inputs["output_spikes"] = spikes
-                    if (
-                        "output_probabilities" in loss_fn.required_inputs
-                        and probabilities is not None
-                    ):
-                        inputs["output_probabilities"] = probabilities
-                    if (
-                        "target_calcium" in loss_fn.required_inputs
-                        and target_calcium is not None
-                    ):
-                        inputs["target_calcium"] = target_calcium
-                    if (
-                        "target_rate" in loss_fn.required_inputs
-                        and target_rate is not None
-                    ):
-                        inputs["target_rate"] = target_rate
-                else:
-                    inputs["output_spikes"] = spikes
-                if (
-                    hasattr(loss_fn, "requires_target")
-                    and loss_fn.requires_target
-                    and target_spikes is not None
-                ):
-                    inputs["target_spikes"] = target_spikes
-                if inputs:
-                    loss_fn(**inputs)
+    def __getitem__(self, key):
+        if key in self._extra:
+            return self._extra[key]
+        if key not in self._cache:
+            arrays = self._accumulators[key]
+            self._cache[key] = (
+                np.concatenate([np.asarray(a) for a in arrays], axis=1)
+                if arrays
+                else np.array([])
+            )
+        return self._cache[key]
 
-    def _reset_states_for_data_epoch(self) -> None:
-        """
-        Reset model and loss function states at data epoch boundaries.
+    def __setitem__(self, key, value):
+        self._extra[key] = value
 
-        When using a cyclic dataloader, the original data was generated with the model
-        starting from zero internal state at chunk 0. To maintain consistency during
-        training, we reset states when cycling back to the start of the dataset.
-        """
-        # Reset model internal state (voltages, conductances)
-        if hasattr(self.model, "reset_state"):
-            # Get batch size from model if available
-            batch_size = getattr(self.model, "batch_size", 1)
-            self.model.reset_state(batch_size=batch_size)
+    def __delitem__(self, key):
+        del self._extra[key]
 
-        # Reset loss function internal states
-        for loss_fn in self.loss_functions.values():
-            if hasattr(loss_fn, "reset_state"):
-                loss_fn.reset_state()
+    def __iter__(self):
+        yield from self._accumulators
+        yield from (k for k in self._extra if k not in self._accumulators)
+
+    def __len__(self):
+        return len(set(self._accumulators) | set(self._extra))
+
+    def copy(self) -> PlotData:
+        return PlotData(self._accumulators, self._extra, self._cache)

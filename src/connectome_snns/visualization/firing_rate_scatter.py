@@ -1,10 +1,12 @@
-"""Firing-rate scatter and R² comparison plots."""
+"""Teacher-vs-student comparisons: per-neuron firing-rate scatters and R² summaries."""
 
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
+
+from connectome_snns.analysis.metrics import r_squared
 
 from .colors import EXCITATORY_COLOR, INHIBITORY_COLOR
 
@@ -48,7 +50,8 @@ def plot_firing_rate_scatter(
         cell_type_colors: Colors for each group.  Defaults to canonical
             excitatory/inhibitory colors for ≤2 groups, or ``C0, C1, ...``
             otherwise.
-        split_panels: If *True*, plot each group in its own subplot.
+        split_panels: If *True*, plot each group in its own subplot, titled
+            with that group's R².
         max_rate: Axis limit. Defaults to 105% of the data max.
         figsize: Figure size.
         title: Plot title.
@@ -107,9 +110,6 @@ def plot_firing_rate_scatter(
                 xlabel=xlabel,
                 ylabel=ylabel,
             )
-            # Per-panel R²
-            from connectome_snns.analysis.metrics import r_squared
-
             ct_r2 = r_squared(teacher_rates[mask], student_rates[mask])
             _ax.set_title(
                 f"{cell_type_names[ct]} (R\u00b2 = {ct_r2:.3f})", fontweight="bold"
@@ -167,6 +167,7 @@ def _scatter_one(
     xlabel,
     ylabel,
 ):
+    """One group's scatter on a square ``[0, max_rate]`` axes with the identity line."""
     ax.scatter(
         teacher, student, s=marker_size, alpha=alpha, color=color, rasterized=rasterized
     )

@@ -25,11 +25,11 @@ from connectome_snns.configs.conductance_based import (
     FeedforwardLayerConfig,
     RecurrentLayerConfig,
 )
-from connectome_snns.configs.odours import OdourInputConfig
-from connectome_snns.dataloaders.odourants import generate_odour_firing_rates
+from connectome_snns.configs.input_patterns import load_input_patterns
+from connectome_snns.dataloaders.input_patterns import generate_assembly_firing_rates
 from connectome_snns.dataloaders.rate_processes import OrnsteinUhlenbeckRateProcess
 from connectome_snns.dataloaders.unsupervised import InhomogeneousPoissonSpikeDataLoader
-from connectome_snns.network_simulators.conductance_based.simulator import (
+from connectome_snns.network_simulators.conductance.recurrent import (
     ConductanceLIFNetwork,
 )
 from connectome_snns.network_simulators.projections import make_frozen_projections
@@ -118,11 +118,7 @@ def _generate(
     rec_cfg = RecurrentLayerConfig(**teacher_params["recurrent"])
     ff_cfg = FeedforwardLayerConfig(**teacher_params["feedforward"])
 
-    odours_data = {**teacher_params["odours"]}
-    tau = odours_data.pop("tau")
-    temperature = odours_data.pop("temperature")
-    sigma = odours_data.pop("sigma")
-    odours = {name: OdourInputConfig(**c) for name, c in odours_data.items()}
+    ou_params, pattern_configs = load_input_patterns(teacher_params)
 
     # Saved teacher network — do NOT regenerate.
     ns = np.load(teacher_dir / "results" / "network_structure.npz")
@@ -132,15 +128,15 @@ def _generate(
     weights = ns["recurrent_weights"]
     assembly_ids = ns["assembly_ids"]
 
-    # Odour-modulated mitral firing-rate patterns (derived from the saved weights).
-    input_firing_rates_odour = generate_odour_firing_rates(
+    # One input rate pattern per assembly (derived from the saved weights).
+    input_patterns = generate_assembly_firing_rates(
         feedforward_weights=feedforward_weights,
         input_source_indices=input_source_indices,
         cell_type_indices=cell_type_indices,
         assembly_ids=assembly_ids,
         target_cell_type_idx=0,
         cell_type_names=ff_cfg.cell_types.names,
-        odour_configs={name: cfg.to_dict() for name, cfg in odours.items()},
+        input_configs={name: cfg.to_dict() for name, cfg in pattern_configs.items()},
     )
 
     batch_size = 1  # single test trial
@@ -149,12 +145,10 @@ def _generate(
     dt = sim.dt
 
     rate_process = OrnsteinUhlenbeckRateProcess(
-        patterns=input_firing_rates_odour,
+        patterns=input_patterns,
         chunk_size=int(chunk_size),
         dt=dt,
-        tau=tau,
-        temperature=temperature,
-        sigma=sigma,
+        **ou_params,
         a_init=None,
         return_rates=True,
         batch_size=batch_size,

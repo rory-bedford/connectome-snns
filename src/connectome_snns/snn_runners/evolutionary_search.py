@@ -14,8 +14,14 @@ from typing import Callable
 
 import numpy as np
 import torch
-import cma
 from tqdm import tqdm
+
+from connectome_snns.snn_runners.chunks import (
+    reset_losses,
+    to_device,
+    warm_up_losses,
+    weighted_losses,
+)
 
 
 class EvolutionarySearch:
@@ -79,7 +85,7 @@ class EvolutionarySearch:
         self._initial_params = initial_params
 
         # Compile model for speed on GPU
-        if device == "cuda":
+        if str(device).startswith("cuda"):
             try:
                 self.model = torch.compile(model)
                 print("  ✓ Model compiled with torch.compile")
@@ -90,154 +96,44 @@ class EvolutionarySearch:
         # costly CPU↔GPU round-trips during the evaluation loop. Batch slicing
         # is applied first to limit memory usage.
         self._chunks = []
-        spike_iter = iter(dataloader)
-        for _ in range(n_chunks):
-            batch_data = next(spike_iter)
-            input_spikes = batch_data.input_spikes.to(device)
-            target_spikes = getattr(batch_data, "target_spikes", None)
-            if target_spikes is not None:
-                target_spikes = target_spikes.to(device)
-            if batch_size is not None:
-                input_spikes = input_spikes[:batch_size]
-                if target_spikes is not None:
-                    target_spikes = target_spikes[:batch_size]
-            self._chunks.append((input_spikes, target_spikes))
+        for _, batch in zip(range(n_chunks), dataloader):
+            if batch_size is not None:  # slice before moving, to move less
+                batch = batch._replace(
+                    **{
+                        k: v[:batch_size]
+                        for k, v in batch._asdict().items()
+                        if isinstance(v, torch.Tensor)
+                    }
+                )
+            self._chunks.append(to_device(batch, device))
 
         self._n_chunks = len(self._chunks)
-        self._eval_batch_size = self._chunks[0][0].shape[0]
+        self._eval_batch_size = self._chunks[0]["input_spikes"].shape[0]
 
     def _evaluate(self, flat_params: np.ndarray) -> dict[str, float]:
-        """Evaluate a candidate parameter vector. Returns dict of losses."""
+        """Mean weighted losses of a candidate over the chunks after burn-in."""
         self.update_fn(flat_params)
-
-        # Reset model state
         if hasattr(self.model, "reset_state"):
             self.model.reset_state(batch_size=self._eval_batch_size)
-
-        # Reset loss function states
-        for loss_fn in self.loss_functions.values():
-            if hasattr(loss_fn, "reset_state"):
-                loss_fn.reset_state()
-
-        # Disable variable tracking for speed
+        reset_losses(self.loss_functions)
         self.model.track_variables = False
         self.model.track_batch_idx = None
 
-        accumulated = None
-
+        totals = {}
         with torch.inference_mode():
-            for i, (input_spikes, target_spikes) in enumerate(self._chunks):
-                # Forward pass (always runs to build model state)
-                spikes = self.model.forward(input_spikes=input_spikes)
-
-                # During burn-in: warm up loss state but skip accumulation
+            for i, data in enumerate(self._chunks):
+                spikes = self.model.forward(input_spikes=data["input_spikes"])
+                chunk = {**data, "spikes": spikes}
                 if i < self.burn_in_chunks:
-                    for loss_fn in self.loss_functions.values():
-                        inputs = {}
-                        if hasattr(loss_fn, "required_inputs"):
-                            if "output_spikes" in loss_fn.required_inputs:
-                                inputs["output_spikes"] = spikes
-                        else:
-                            inputs["output_spikes"] = spikes
-                        if (
-                            hasattr(loss_fn, "requires_target")
-                            and loss_fn.requires_target
-                        ):
-                            inputs["target_spikes"] = target_spikes
-                        if inputs:
-                            loss_fn(**inputs)
+                    warm_up_losses(self.loss_functions, chunk, self.model)
                     continue
-
-                # Build chunk_outputs for loss dispatch
-                chunk_outputs = {
-                    "spikes": spikes,
-                    "target_spikes": target_spikes,
-                }
-
-                # Compute losses (same dispatch as SNNTrainer._compute_losses)
-                chunk_losses = self._compute_losses(chunk_outputs)
-                if accumulated is None:
-                    accumulated = {k: 0.0 for k in chunk_losses}
-                for k, v in chunk_losses.items():
-                    accumulated[k] += v
-
+                losses = weighted_losses(
+                    self.loss_functions, self.loss_weights, chunk, self.model
+                )
+                for name, value in losses.items():
+                    totals[name] = totals.get(name, 0.0) + value
         n = self._n_chunks - self.burn_in_chunks
-        return {k: v / n for k, v in accumulated.items()}
-
-    def _compute_losses(self, chunk_outputs: dict) -> dict[str, float]:
-        """Compute losses for a single chunk. Returns dict with per-loss and total."""
-        spikes = chunk_outputs["spikes"]
-
-        # Check if any loss function needs weights
-        needs_weights = any(
-            hasattr(loss_fn, "required_inputs")
-            and (
-                "recurrent_weights" in loss_fn.required_inputs
-                or "feedforward_weights" in loss_fn.required_inputs
-            )
-            for loss_fn in self.loss_functions.values()
-        )
-
-        if needs_weights:
-            weights_for_loss = self.model.weights
-            weights_FF_for_loss = self.model.weights_FF
-        else:
-            weights_for_loss = None
-            weights_FF_for_loss = None
-
-        losses = {}
-        total_loss = 0.0
-
-        for loss_name, loss_fn in self.loss_functions.items():
-            # Build inputs based on loss function's required_inputs metadata
-            inputs = {}
-            if hasattr(loss_fn, "required_inputs"):
-                for req_input in loss_fn.required_inputs:
-                    if req_input == "output_spikes":
-                        inputs["output_spikes"] = spikes
-                    elif req_input == "voltages":
-                        inputs["voltages"] = chunk_outputs.get("voltages")
-                    elif req_input == "dt":
-                        inputs["dt"] = self.model.dt
-                    elif req_input == "recurrent_weights":
-                        inputs["recurrent_weights"] = weights_for_loss
-                    elif req_input == "feedforward_weights":
-                        inputs["feedforward_weights"] = weights_FF_for_loss
-                    elif req_input == "cell_type_indices":
-                        inputs["cell_type_indices"] = self.model.cell_type_indices
-                    elif req_input == "connectome_mask":
-                        inputs["connectome_mask"] = getattr(
-                            self.model, "connectome_mask", None
-                        )
-                    elif req_input == "feedforward_mask":
-                        inputs["feedforward_mask"] = getattr(
-                            self.model, "feedforward_mask", None
-                        )
-                    elif req_input == "scaling_factors":
-                        inputs["scaling_factors"] = self.model.scaling_factors
-                    elif req_input == "scaling_factors_FF":
-                        inputs["scaling_factors_FF"] = self.model.scaling_factors_FF
-            else:
-                inputs["output_spikes"] = spikes
-
-            # Add target spikes if the loss requires them
-            if hasattr(loss_fn, "requires_target") and loss_fn.requires_target:
-                if chunk_outputs["target_spikes"] is not None:
-                    inputs["target_spikes"] = chunk_outputs["target_spikes"]
-                else:
-                    raise ValueError(
-                        f"Loss function '{loss_name}' requires target spikes, "
-                        "but none were provided by the dataloader."
-                    )
-
-            loss_value = loss_fn(**inputs)
-            weight = self.loss_weights.get(loss_name, 0.0)
-            weighted = weight * loss_value.item()
-            losses[loss_name] = weighted
-            total_loss += weighted
-
-        losses["total"] = total_loss
-        return losses
+        return {name: float(value) / n for name, value in totals.items()}
 
     def search(self) -> float:
         """
@@ -259,6 +155,8 @@ class EvolutionarySearch:
             opts["popsize"] = self.popsize
         if self.seed is not None:
             opts["seed"] = self.seed
+
+        import cma  # only needed here, so not a dependency of importing the runners
 
         es = cma.CMAEvolutionStrategy(x0.tolist(), self.initial_sigma, opts)
 
@@ -298,8 +196,8 @@ class EvolutionarySearch:
                 self.model.track_variables = False
                 spike_chunks = []
                 with torch.inference_mode():
-                    for input_spikes, _ in self._chunks:
-                        spikes = self.model.forward(input_spikes=input_spikes)
+                    for data in self._chunks:
+                        spikes = self.model.forward(input_spikes=data["input_spikes"])
                         spike_chunks.append(spikes.cpu())
                 output_spikes = torch.cat(spike_chunks, dim=1)
 

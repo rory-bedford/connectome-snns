@@ -3,9 +3,14 @@ Checkpoint management utilities for saving and loading model training state.
 
 Models define their own simulation state via get_checkpoint_state() /
 load_checkpoint_state(). The checkpoint file stores model parameters,
-optimizer state, and the model's simulation state dict.
+optimizer state, the model's simulation state dict, the random number generators and,
+from a trainer, its own ``training_state`` (the losses' carried state and the recent
+loss history). (The file keeps the key ``optimiser_state_dict``; both functions still
+accept ``optimiser=`` as a keyword.)
 """
 
+import functools
+import os
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -14,14 +19,40 @@ import torch
 from torch.amp import GradScaler
 
 
+def _optimiser_keyword(fn):
+    """Accept the old ``optimiser=`` keyword for ``optimizer``."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "optimiser" in kwargs:
+            kwargs["optimizer"] = kwargs.pop("optimiser")
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _save_atomically(obj, path):
+    """Write ``obj`` beside ``path``, then rename it into place.
+
+    A job killed mid-save leaves the previous checkpoint intact instead of a
+    truncated file: on one filesystem the rename either happens or it doesn't.
+    """
+    path = Path(path)
+    partial = path.with_name(path.name + ".partial")
+    torch.save(obj, partial)
+    os.replace(partial, path)
+
+
+@_optimiser_keyword
 def save_checkpoint(
     output_dir: Path,
     epoch: int,
     model: torch.nn.Module,
-    optimiser: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     best_loss: float,
     scheduler: Optional[Any] = None,
+    training_state: Optional[dict] = None,
     **losses: float,
 ) -> bool:
     """Save model checkpoint to disk.
@@ -30,11 +61,12 @@ def save_checkpoint(
         output_dir: Directory where checkpoint will be saved.
         epoch: Current epoch number.
         model: Model to checkpoint. Must implement get_checkpoint_state().
-        optimiser: Optimizer state to save.
+        optimizer: Optimizer state to save.
         scaler: Mixed precision scaler state to save.
         best_loss: Best loss seen so far.
         scheduler: Optional LR scheduler whose state is saved alongside the rest. Without
             it a resumed run restarts its learning-rate schedule from the beginning.
+        training_state: Optional trainer state, restored by ``SNNTrainer.resume``.
         **losses: Arbitrary loss values (must include 'total' for comparison).
 
     Returns:
@@ -46,7 +78,7 @@ def save_checkpoint(
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
-        "optimiser_state_dict": optimiser.state_dict(),
+        "optimiser_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
         "simulation_state": model.get_checkpoint_state(),
         "best_loss": best_loss,
@@ -54,12 +86,16 @@ def save_checkpoint(
         "numpy_rng_state": np.random.get_state(),
         **losses,
     }
+    if torch.cuda.is_available():
+        checkpoint["cuda_rng_state"] = torch.cuda.get_rng_state_all()
     if scheduler is not None:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+    if training_state is not None:
+        checkpoint["training_state"] = training_state
 
     # Save as latest checkpoint (for resumption)
     latest_path = checkpoint_dir / "checkpoint_latest.pt"
-    torch.save(checkpoint, latest_path)
+    _save_atomically(checkpoint, latest_path)
 
     # Save as best if this is the best model (requires 'total' loss)
     total_loss = losses.get("total")
@@ -71,16 +107,17 @@ def save_checkpoint(
     is_best = total_loss <= best_loss
     if is_best:
         best_path = checkpoint_dir / "checkpoint_best.pt"
-        torch.save(checkpoint, best_path)
+        _save_atomically(checkpoint, best_path)
         print(f"  ✓ New best model saved (loss: {total_loss:.6f})")
 
     return is_best
 
 
+@_optimiser_keyword
 def load_checkpoint(
     checkpoint_path: Path,
     model: torch.nn.Module,
-    optimiser: torch.optim.Optimizer,
+    optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     device: str,
     scheduler: Optional[Any] = None,
@@ -91,10 +128,10 @@ def load_checkpoint(
     and simulation state (v, g, etc.) via model.load_checkpoint_state().
 
     Args:
-        checkpoint_path: Path to checkpoint file, or to an output directory
-            containing a ``checkpoints/`` subfolder.
+        checkpoint_path: Path to checkpoint file, or to an output directory, whose
+            ``checkpoints/checkpoint_latest.pt`` is loaded.
         model: Model to load state into. Must implement load_checkpoint_state().
-        optimiser: Optimizer to load state into.
+        optimizer: Optimizer to load state into.
         scaler: Mixed precision scaler to load state into.
         device: Device to load tensors onto.
         scheduler: Optional LR scheduler to restore, so the learning rate continues from
@@ -105,13 +142,29 @@ def load_checkpoint(
     Returns:
         (epoch, best_loss)
     """
+    checkpoint = restore_checkpoint(
+        checkpoint_path, model, optimizer, scaler, device, scheduler
+    )
+    return checkpoint["epoch"], checkpoint.get("best_loss", float("inf"))
+
+
+@_optimiser_keyword
+def restore_checkpoint(
+    checkpoint_path: Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: GradScaler,
+    device: str,
+    scheduler: Optional[Any] = None,
+) -> dict:
+    """``load_checkpoint``, returning the whole checkpoint dictionary."""
     checkpoint_path = Path(checkpoint_path)
-    if checkpoint_path.is_dir():
-        ckpt_dir = checkpoint_path / "checkpoints"
-        pts = sorted(ckpt_dir.glob("*.pt"))
-        if not pts:
-            raise FileNotFoundError(f"No .pt checkpoint files in {ckpt_dir}")
-        checkpoint_path = pts[-1]
+    if checkpoint_path.is_dir():  # an output directory: resume from its latest
+        checkpoint_path = checkpoint_path / "checkpoints" / "checkpoint_latest.pt"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"No checkpoint_latest.pt in {checkpoint_path.parent}"
+            )
     print(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -121,7 +174,7 @@ def load_checkpoint(
     if any(k.startswith(prefix) for k in state_dict):
         state_dict = {k.removeprefix(prefix): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)
-    optimiser.load_state_dict(checkpoint["optimiser_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimiser_state_dict"])
 
     if "scaler_state_dict" in checkpoint:
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
@@ -149,6 +202,9 @@ def load_checkpoint(
         rng_state = rng_state.cpu()
     torch.set_rng_state(rng_state)
     np.random.set_state(checkpoint["numpy_rng_state"])
+    cuda_states = checkpoint.get("cuda_rng_state")
+    if cuda_states is not None and torch.cuda.device_count() == len(cuda_states):
+        torch.cuda.set_rng_state_all([state.cpu() for state in cuda_states])
 
     print(f"  ✓ Resumed from epoch {epoch}, best loss: {best_loss:.6f}")
-    return epoch, best_loss
+    return checkpoint

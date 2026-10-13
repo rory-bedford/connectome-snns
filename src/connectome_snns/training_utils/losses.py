@@ -1,26 +1,55 @@
-"""
-Loss functions for spiking neural network training.
+"""Loss functions for training spiking networks.
 
-Currently includes Van Rossum distance for spike train comparison and firing rate loss.
+Each loss declares the inputs it needs in ``required_inputs`` (and ``requires_target``
+for the target spikes); the trainer supplies exactly those
+(``snn_runners.chunks.loss_inputs``). Stateful losses — the van Rossum family, which
+filters across chunks — implement ``reset_state`` and name the attributes they carry
+in ``CARRIED_STATE`` (saved in checkpoints).
 
-Example:
-    loss_fn = VanRossumLoss(tau_rise=10.0, tau_decay=100.0, dt=1.0, window_size=50)
-    loss = loss_fn(output_spikes, target_spikes)
-
-    fr_loss_fn = FiringRateLoss(target_rate=torch.ones(n_neurons) * 10.0, dt=1.0)
-    loss = fr_loss_fn(output_spikes)
+* Spike-train distances: ``VanRossumLoss``, ``VanRossumRateLoss``, ``PoissonKLLoss``,
+  ``BernoulliNLLLoss``.
+* Rate and activity penalties: ``FiringRateLoss``, ``SilentNeuronLoss``,
+  ``AsymmetricSilencePenalty``, ``MomentMatchLoss``.
+* Parameter penalties: ``ScalingFactorBalanceLoss``.
+* Observation-space losses: ``CalciumMSELoss``.
 """
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from connectome_snns.observation_models import CalciumObservationModel
+from connectome_snns.training_utils.filtering import double_exponential
+
+
+def _per_neuron(x: torch.Tensor) -> torch.Tensor:
+    """``(batch, time, n)`` -> ``(batch * n, 1, time)``, the layout debug output uses."""
+    return x.permute(0, 2, 1).reshape(-1, 1, x.shape[1])
 
 
 class VanRossumLoss(nn.Module):
+    """Van Rossum distance between spike trains, with a double-exponential filter.
+
+    Both trains are filtered first with the rise and then with the decay exponential,
+    and the loss is the mean squared difference of the results. The filter is causal
+    and carries its state across chunks: the last filtered value of each chunk enters
+    the next chunk decayed by ``exp(-t dt / tau)``, ``t = 0, 1, ...`` (undecayed at its
+    first step).
+
+    The filtering itself is ``filtering.double_exponential``: a triangular matrix
+    product per stage on the CPU, a fused linear-time recursion on CUDA.
+
+    Expects ``(batch, time, n_neurons)`` or ``(batch, patterns, time, n_neurons)``.
+    """
+
     required_inputs = ["output_spikes", "target_spikes"]
     requires_target = True
+    #: The filter state carried from chunk to chunk.
+    CARRIED_STATE = (
+        "prev_output_rise",
+        "prev_target_rise",
+        "prev_output_smooth",
+        "prev_target_smooth",
+    )
 
     def __init__(
         self,
@@ -32,163 +61,74 @@ class VanRossumLoss(nn.Module):
         debug: bool = False,
     ):
         """
-        Van Rossum distance for spike trains with double exponential filter.
-
-        Expects input shape: (batch, time, n_neurons).
-
-        Uses a double exponential filter: first filters with rise time constant,
-        then filters the result with decay time constant. This creates a more
-        realistic synaptic kernel shape with both rise and decay phases.
-
-        Maintains internal state to handle temporal continuity across chunks.
-        Tracks both the intermediate (rise-filtered) and final (doubly-filtered)
-        signals.
-
-        Uses causal convolution (only looks backward in time) with kernel size equal to
-        the window size.
-
         Args:
-            tau_rise (float): Rise time constant for first exponential filter (ms).
-            tau_decay (float): Decay time constant for second exponential filter (ms).
+            tau_rise (float): Rise time constant of the first filter (ms).
+            tau_decay (float): Decay time constant of the second filter (ms).
             dt (float): Simulation time step (ms).
-            window_size (int): Number of timesteps in each chunk. Used as kernel size.
-            device (str, optional): Device to place kernel on. Defaults to "cpu".
-            debug (bool, optional): If True, return (loss, output_smooth, target_smooth).
-                If False, return only loss. Defaults to False.
+            window_size (int): Steps per chunk (the longest chunk accepted).
+            device (str, optional): Device of the filter matrices. Defaults to "cpu".
+            debug (bool, optional): If True, return ``(loss, output_smooth,
+                target_smooth)``, the filtered trains shaped
+                ``(batch * n_neurons, 1, time)``. Defaults to False.
         """
-        super(VanRossumLoss, self).__init__()
+        super().__init__()
         self.tau_rise = tau_rise
         self.tau_decay = tau_decay
         self.dt = dt
         self.kernel_size = window_size
         self.debug = debug
 
-        # Pre-compute exponential kernels for rise and decay
+        # kernel[k]: the weight of the input k steps ago.
         t = torch.arange(window_size, dtype=torch.float32, device=device) * dt
-        kernel_rise = torch.exp(-t / tau_rise)
-        kernel_decay = torch.exp(-t / tau_decay)
+        self.register_buffer("kernel_rise", torch.exp(-t / tau_rise))
+        self.register_buffer("kernel_decay", torch.exp(-t / tau_decay))
 
-        # Flip kernels for causal convolution: recent spikes get highest weight
-        kernel_rise = torch.flip(kernel_rise, dims=[0])
-        kernel_decay = torch.flip(kernel_decay, dims=[0])
-
-        self.register_buffer("kernel_rise", kernel_rise.view(1, 1, -1))
-        self.register_buffer("kernel_decay", kernel_decay.view(1, 1, -1))
-
-        # Internal state: smoothed values from previous chunk
-        # Track both intermediate (rise-filtered) and final (doubly-filtered) states
-        # Will be initialized on first forward pass
+        # Filter state carried from the previous chunk, (batch, 1, n_neurons).
         self.prev_output_rise = None
         self.prev_target_rise = None
         self.prev_output_smooth = None
         self.prev_target_smooth = None
 
+    def smooth(
+        self, output_spikes: torch.Tensor, target_spikes: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Filter both trains, continuing from (and updating) the carried state.
+
+        Returns the filtered trains, ``(batch, time, n_neurons)``.
+        """
+        output_spikes = output_spikes.float()
+        target_spikes = target_spikes.float()
+        if output_spikes.ndim == 4:  # (batch, patterns, ...) -> (batch * patterns, ...)
+            output_spikes = output_spikes.flatten(0, 1)
+            target_spikes = target_spikes.flatten(0, 1)
+
+        kernels = self.kernel_rise, self.kernel_decay
+        output_rise, output_smooth = double_exponential(
+            output_spikes, *kernels, self.prev_output_rise, self.prev_output_smooth
+        )
+        target_rise, target_smooth = double_exponential(
+            target_spikes, *kernels, self.prev_target_rise, self.prev_target_smooth
+        )
+
+        # Carry the last step to the next chunk (detached: no gradient across chunks).
+        self.prev_output_rise = output_rise[:, -1:].detach()
+        self.prev_target_rise = target_rise[:, -1:].detach()
+        self.prev_output_smooth = output_smooth[:, -1:].detach()
+        self.prev_target_smooth = target_smooth[:, -1:].detach()
+        return output_smooth, target_smooth
+
     def forward(
         self, output_spikes: torch.Tensor, target_spikes: torch.Tensor
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Compute Van Rossum distance between spike trains.
-
-        Args:
-            output_spikes (torch.Tensor): Output spike trains.
-                Shape: (batch, time, n_neurons) or (batch, patterns, time, n_neurons).
-                Can be bool or float.
-            target_spikes (torch.Tensor): Target spike trains (same shape as output_spikes).
-                Can be bool or float.
-
-        Returns:
-            torch.Tensor: Mean Van Rossum loss across all dimensions (if debug=False).
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (loss, output_smooth, target_smooth) if debug=True.
-        """
-        # Convert to float if needed (for convolution operations)
-        output_spikes = output_spikes.float()
-        target_spikes = target_spikes.float()
-
-        # Handle both 3D (batch, time, neurons) and 4D (batch, patterns, time, neurons)
-        if output_spikes.ndim == 4:
-            # Flatten batch and patterns: (batch, patterns, time, neurons) -> (batch*patterns, time, neurons)
-            batch, patterns, time, n_neurons = output_spikes.shape
-            output_spikes = output_spikes.reshape(batch * patterns, time, n_neurons)
-            target_spikes = target_spikes.reshape(batch * patterns, time, n_neurons)
-            batch = batch * patterns
-        else:
-            batch, time, n_neurons = output_spikes.shape
-
-        # Reshape for conv1d: (batch * n_neurons, 1, time)
-        output_conv = output_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
-        target_conv = target_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
-
-        # Causal convolution: pad only on the left (look backward in time)
-        # Padding of (kernel_size - 1) ensures output has same length as input
-        padding = self.kernel_size - 1
-
-        # First filter: rise time constant
-        output_rise = F.conv1d(output_conv, self.kernel_rise, padding=padding)
-        target_rise = F.conv1d(target_conv, self.kernel_rise, padding=padding)
-
-        # Remove extra timesteps from right side (causal padding adds to left only)
-        output_rise = output_rise[:, :, :time]
-        target_rise = target_rise[:, :, :time]
-
-        # Precompute time vector for chunk carryover decay (used by both rise and smooth states)
-        if self.prev_output_rise is not None or self.prev_output_smooth is not None:
-            t = (
-                torch.arange(time, device=output_spikes.device, dtype=output_rise.dtype)
-                * self.dt
-            )
-
-        # Add decayed previous rise state if it exists
-        if self.prev_output_rise is not None:
-            decay_rise = torch.exp(-t / self.tau_rise)
-
-            output_rise = output_rise + self.prev_output_rise * decay_rise.view(
-                1, 1, -1
-            )
-            target_rise = target_rise + self.prev_target_rise * decay_rise.view(
-                1, 1, -1
-            )
-
-        # Second filter: decay time constant (applied to rise-filtered signal)
-        output_smooth = F.conv1d(output_rise, self.kernel_decay, padding=padding)
-        target_smooth = F.conv1d(target_rise, self.kernel_decay, padding=padding)
-
-        # Remove extra timesteps from right side
-        output_smooth = output_smooth[:, :, :time]
-        target_smooth = target_smooth[:, :, :time]
-
-        # Add decayed previous smooth state if it exists
-        if self.prev_output_smooth is not None:
-            decay_decay = torch.exp(-t / self.tau_decay)
-
-            output_smooth = output_smooth + self.prev_output_smooth * decay_decay.view(
-                1, 1, -1
-            )
-            target_smooth = target_smooth + self.prev_target_smooth * decay_decay.view(
-                1, 1, -1
-            )
-
-        # Compute squared difference
-        diff = (output_smooth - target_smooth) ** 2
-
-        # Save states for next chunk (detached to prevent gradient flow)
-        self.prev_output_rise = output_rise[:, :, -1:].detach()
-        self.prev_target_rise = target_rise[:, :, -1:].detach()
-        self.prev_output_smooth = output_smooth[:, :, -1:].detach()
-        self.prev_target_smooth = target_smooth[:, :, -1:].detach()
-
-        # Return based on debug flag
+        """Mean squared difference of the filtered output and target trains."""
+        output_smooth, target_smooth = self.smooth(output_spikes, target_spikes)
+        loss = ((output_smooth - target_smooth) ** 2).mean()
         if self.debug:
-            return diff.mean(), output_smooth, target_smooth
-        else:
-            return diff.mean()
+            return loss, _per_neuron(output_smooth), _per_neuron(target_smooth)
+        return loss
 
     def reset_state(self):
-        """
-        Reset internal state to zero.
-
-        Call this at the start of a new sequence or epoch to clear memory
-        from previous chunks.
-        """
+        """Forget the carried filter state (call at the start of a new sequence)."""
         self.prev_output_rise = None
         self.prev_target_rise = None
         self.prev_output_smooth = None
@@ -288,7 +228,7 @@ class FiringRateLoss(nn.Module):
                 numerical instability. Default 1.0 Hz provides reasonable normalization even for
                 near-zero target rates.
         """
-        super(FiringRateLoss, self).__init__()
+        super().__init__()
         self.dt = dt
         self.epsilon = epsilon
 
@@ -401,7 +341,7 @@ class SilentNeuronLoss(nn.Module):
                           penalties for silent neurons. Can be scalar or tensor of shape (n_neurons,). Default: 1.0.
             dt (float): Simulation time step (ms). Default: 1.0.
         """
-        super(SilentNeuronLoss, self).__init__()
+        super().__init__()
         if isinstance(alpha, torch.Tensor):
             self.register_buffer("alpha", alpha)
         else:
@@ -534,7 +474,7 @@ class BernoulliNLLLoss(nn.Module):
         return nll.mean()
 
 
-class PoissonKLLoss(nn.Module):
+class PoissonKLLoss(VanRossumLoss):
     """Poisson KL divergence loss with double-exponential temporal filtering.
 
     Drop-in replacement for :class:`VanRossumLoss`.  Both losses smooth spike
@@ -553,9 +493,6 @@ class PoissonKLLoss(nn.Module):
     probabilities without temporal filtering.
     """
 
-    required_inputs = ["output_spikes", "target_spikes"]
-    requires_target = True
-
     def __init__(
         self,
         tau_rise: float,
@@ -566,127 +503,26 @@ class PoissonKLLoss(nn.Module):
         debug: bool = False,
         eps: float = 1e-7,
     ):
-        super(PoissonKLLoss, self).__init__()
-        self.tau_rise = tau_rise
-        self.tau_decay = tau_decay
-        self.dt = dt
-        self.kernel_size = window_size
-        self.debug = debug
+        super().__init__(tau_rise, tau_decay, dt, window_size, device, debug)
         self.eps = eps
-
-        # Pre-compute exponential kernels for rise and decay
-        t = torch.arange(window_size, dtype=torch.float32, device=device) * dt
-        kernel_rise = torch.exp(-t / tau_rise)
-        kernel_decay = torch.exp(-t / tau_decay)
-
-        # Flip kernels for causal convolution: recent spikes get highest weight
-        kernel_rise = torch.flip(kernel_rise, dims=[0])
-        kernel_decay = torch.flip(kernel_decay, dims=[0])
-
-        self.register_buffer("kernel_rise", kernel_rise.view(1, 1, -1))
-        self.register_buffer("kernel_decay", kernel_decay.view(1, 1, -1))
-
-        # Internal state for chunk continuity
-        self.prev_output_rise = None
-        self.prev_target_rise = None
-        self.prev_output_smooth = None
-        self.prev_target_smooth = None
 
     def forward(
         self, output_spikes: torch.Tensor, target_spikes: torch.Tensor
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Convert to float if needed
-        output_spikes = output_spikes.float()
-        target_spikes = target_spikes.float()
-
-        # Handle both 3D (batch, time, neurons) and 4D (batch, patterns, time, neurons)
-        if output_spikes.ndim == 4:
-            batch, patterns, time, n_neurons = output_spikes.shape
-            output_spikes = output_spikes.reshape(batch * patterns, time, n_neurons)
-            target_spikes = target_spikes.reshape(batch * patterns, time, n_neurons)
-            batch = batch * patterns
-        else:
-            batch, time, n_neurons = output_spikes.shape
-
-        # Reshape for conv1d: (batch * n_neurons, 1, time)
-        output_conv = output_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
-        target_conv = target_spikes.permute(0, 2, 1).reshape(batch * n_neurons, 1, time)
-
-        padding = self.kernel_size - 1
-
-        # First filter: rise time constant
-        output_rise = F.conv1d(output_conv, self.kernel_rise, padding=padding)[
-            :, :, :time
-        ]
-        target_rise = F.conv1d(target_conv, self.kernel_rise, padding=padding)[
-            :, :, :time
-        ]
-
-        # Precompute time vector for chunk carryover decay (used by both rise and smooth states)
-        if self.prev_output_rise is not None or self.prev_output_smooth is not None:
-            t = (
-                torch.arange(time, device=output_spikes.device, dtype=output_rise.dtype)
-                * self.dt
-            )
-
-        # Add decayed previous rise state
-        if self.prev_output_rise is not None:
-            decay_rise = torch.exp(-t / self.tau_rise)
-
-            output_rise = output_rise + self.prev_output_rise * decay_rise.view(
-                1, 1, -1
-            )
-            target_rise = target_rise + self.prev_target_rise * decay_rise.view(
-                1, 1, -1
-            )
-
-        # Second filter: decay time constant
-        output_smooth = F.conv1d(output_rise, self.kernel_decay, padding=padding)[
-            :, :, :time
-        ]
-        target_smooth = F.conv1d(target_rise, self.kernel_decay, padding=padding)[
-            :, :, :time
-        ]
-
-        # Add decayed previous smooth state
-        if self.prev_output_smooth is not None:
-            decay_decay = torch.exp(-t / self.tau_decay)
-
-            output_smooth = output_smooth + self.prev_output_smooth * decay_decay.view(
-                1, 1, -1
-            )
-            target_smooth = target_smooth + self.prev_target_smooth * decay_decay.view(
-                1, 1, -1
-            )
-
+        """Poisson KL divergence of the filtered output from the filtered target."""
+        output_smooth, target_smooth = self.smooth(output_spikes, target_spikes)
         # Poisson KL divergence: λ_T * log(λ_T / (λ_S + ε)) - λ_T + λ_S
-        eps = self.eps
         lambda_T = target_smooth.detach()
         lambda_S = output_smooth
         kl = (
-            lambda_T * torch.log(lambda_T / (lambda_S + eps) + eps)
+            lambda_T * torch.log(lambda_T / (lambda_S + self.eps) + self.eps)
             - lambda_T
             + lambda_S
         )
-
-        # Save states for next chunk (detached)
-        self.prev_output_rise = output_rise[:, :, -1:].detach()
-        self.prev_target_rise = target_rise[:, :, -1:].detach()
-        self.prev_output_smooth = output_smooth[:, :, -1:].detach()
-        self.prev_target_smooth = target_smooth[:, :, -1:].detach()
-
         loss = kl.mean() * self.dt
-
         if self.debug:
-            return loss, output_smooth, target_smooth
-        else:
-            return loss
-
-    def reset_state(self):
-        self.prev_output_rise = None
-        self.prev_target_rise = None
-        self.prev_output_smooth = None
-        self.prev_target_smooth = None
+            return loss, _per_neuron(output_smooth), _per_neuron(target_smooth)
+        return loss
 
 
 class ScalingFactorBalanceLoss(nn.Module):
@@ -695,7 +531,7 @@ class ScalingFactorBalanceLoss(nn.Module):
 
     Computes the ratio of recurrent excitatory scaling factors to feedforward scaling factors
     and penalizes deviations from a target ratio. This is the scaling factor equivalent of
-    RecurrentFeedforwardBalanceLoss.
+    a recurrent/feedforward weight-balance loss.
 
     Args:
         target_ratio (float): Target ratio of recurrent/feedforward scaling factors.
@@ -714,7 +550,7 @@ class ScalingFactorBalanceLoss(nn.Module):
             target_ratio (float): Target ratio of mean(recurrent_scaling_factors) / mean(feedforward_scaling_factors).
             excitatory_cell_type (int): Cell type index for excitatory neurons (default: 0).
         """
-        super(ScalingFactorBalanceLoss, self).__init__()
+        super().__init__()
         self.target_ratio = target_ratio
         self.excitatory_cell_type = excitatory_cell_type
 

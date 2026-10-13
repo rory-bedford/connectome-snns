@@ -1,4 +1,10 @@
-"""Visualization functions for firing statistics and spike train analysis."""
+"""Spiking statistics: firing-rate, CV, ISI and Fano-factor distributions, PSTHs.
+
+Most functions here draw one panel per recurrent cell type (coloured with the shared
+cell-type palette) and accept either ``ax=None`` (new figure, returned) or a list of
+axes, one per cell type. Population-activity plots (PSTH, assembly activity, OU mixing
+weights) draw on a single axes.
+"""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +15,123 @@ from connectome_snns.analysis.firing_statistics import (
     compute_spike_train_cv,
     compute_spike_train_fano_factor,
 )
+
+from ._common import (
+    cell_type_palette,
+    centered_message,
+    figure_and_axes,
+    figure_and_axes_grid,
+    finish_figure,
+    set_time_xlim,
+)
+from .colors import FEEDFORWARD_COLOR
+
+
+def _cell_type_row(ax, n_cell_types: int):
+    """Resolve ``ax`` into one 6x5-inch panel per cell type, in a row (sharey)."""
+    return figure_and_axes_grid(
+        ax, n_cell_types, vertical=False, figsize=(6 * n_cell_types, 5)
+    )
+
+
+def _population_rate(
+    spike_counts: NDArray, window_size: float, dt: float, n_neurons: int, batch: int
+) -> NDArray:
+    """Sliding-window population rate (Hz) from summed spike counts per time step.
+
+    A boxcar of ``window_size`` ms is summed (not averaged) over the counts, then
+    normalised by window duration, number of neurons and batch size.
+    """
+    window_steps = int(np.round(window_size / dt))
+    convolved = np.convolve(spike_counts, np.ones(window_steps), mode="same")
+    return convolved / (window_size * 1e-3) / n_neurons / batch
+
+
+def _plot_count_histogram(
+    ax: plt.Axes,
+    values: NDArray,
+    bin_edges,
+    color,
+    *,
+    title: str,
+    xlabel: str,
+    mean_fmt: str,
+    xlim: tuple[float, float] | None,
+) -> None:
+    """Histogram of ``values`` with a dashed mean line and an ``n=`` legend."""
+    ax.hist(
+        values,
+        bins=bin_edges,
+        alpha=0.6,
+        edgecolor="black",
+        linewidth=1.2,
+        color=color,
+        label=f"n={len(values)}",
+    )
+    ax.axvline(
+        values.mean(),
+        color="gray",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.6,
+        label=mean_fmt.format(values.mean()),
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Count")
+    ax.set_title(title)
+    ax.tick_params()
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+
+
+# ── Fano factor ──────────────────────────────────────────────────────────────
+
+
+def _mean_std_fano(fano_per_window: list[NDArray], mask: NDArray) -> tuple:
+    """Mean and std (over neurons in ``mask``) of the Fano factor for each window."""
+    means, stds = [], []
+    for fano_factors in fano_per_window:
+        fano_cell_type = fano_factors[:, mask].flatten()
+        fano_valid = fano_cell_type[~np.isnan(fano_cell_type)]
+        if len(fano_valid) > 0:
+            means.append(float(fano_valid.mean()))
+            stds.append(float(fano_valid.std()))
+        else:
+            means.append(np.nan)
+            stds.append(np.nan)
+    return np.array(means), np.array(stds)
+
+
+def _plot_fano_panel(ax, window_sizes_s, mean, std, color) -> None:
+    """Dashed coloured mean line, black error bars and a +/- std band."""
+    ax.plot(
+        window_sizes_s,
+        mean,
+        linestyle="--",
+        linewidth=2,
+        color=color,
+        alpha=0.8,
+        zorder=2,
+    )
+    ax.errorbar(
+        window_sizes_s,
+        mean,
+        yerr=std,
+        fmt="o",
+        capsize=5,
+        markersize=8,
+        color="black",
+        ecolor="black",
+        capthick=1.5,
+        elinewidth=1.5,
+        alpha=0.6,
+        zorder=3,
+    )
+    ax.fill_between(
+        window_sizes_s, mean - std, mean + std, color=color, alpha=0.2, zorder=1
+    )
 
 
 def plot_fano_factor_vs_window_size(
@@ -29,156 +152,62 @@ def plot_fano_factor_vs_window_size(
         cell_type_names (list[str]): Names of cell types.
         dt (float): Time step duration in milliseconds for converting steps to time.
             Defaults to 1.0.
-        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        ax (plt.Axes | list[plt.Axes] | None): Matplotlib axes to plot on: None to
+            create a new figure, or a list of axes (one per cell type).
 
     Returns:
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    # Convert window sizes from steps to seconds
-    window_sizes_s = np.array(window_sizes) * dt * 1e-3  # Convert ms to s
-
+    window_sizes_s = np.array(window_sizes) * dt * 1e-3  # ms -> s
     n_cell_types = len(cell_type_names)
+    colors = cell_type_palette(n_cell_types)
+    fig, axes, owns_figure = _cell_type_row(ax, n_cell_types)
 
-    # Define colors: red, blue, then tab10 colormap for additional types
-    from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
+    fano_per_window = [
+        compute_spike_train_fano_factor(spike_trains, window_size)
+        for window_size in window_sizes
+    ]
 
-    base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-    if n_cell_types <= 2:
-        colors_map = base_colors[:n_cell_types]
-    else:
-        cmap = plt.cm.get_cmap("tab10")
-        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-        colors_map = base_colors + additional_colors
-
-    # Handle axes parameter
-    if ax is None:
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = True
-        if n_cell_types == 1:
-            axes = [axes]
-    elif isinstance(ax, list):
-        # List of axes provided
-        if len(ax) != n_cell_types:
-            raise ValueError(f"Expected {n_cell_types} axes, got {len(ax)}")
-        axes = ax
-        fig = axes[0].get_figure()
-        return_fig = False
-    else:
-        # Single axis provided - create our own figure
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = False
-        if n_cell_types == 1:
-            axes = [axes]
-
-    # Plot each cell type
-    for cell_type_idx in range(n_cell_types):
-        ax = axes[cell_type_idx] if n_cell_types > 1 or ax is None else axes[0]
-
-        mean_fano_factors = []
-        std_fano_factors = []
-
-        # Get neurons of this cell type
-        cell_type_mask = cell_type_indices == cell_type_idx
-
-        for window_size in window_sizes:
-            fano_factors = compute_spike_train_fano_factor(spike_trains, window_size)
-            # Extract fano factors for this cell type across all batches
-            fano_cell_type = fano_factors[:, cell_type_mask].flatten()
-            fano_valid = fano_cell_type[~np.isnan(fano_cell_type)]
-
-            if len(fano_valid) > 0:
-                mean_fano_factors.append(float(fano_valid.mean()))
-                std_fano_factors.append(float(fano_valid.std()))
-            else:
-                mean_fano_factors.append(np.nan)
-                std_fano_factors.append(np.nan)
-
-        mean_fano_factors = np.array(mean_fano_factors)
-        std_fano_factors = np.array(std_fano_factors)
-
-        # Check if we have any valid data to plot
-        has_valid_data = np.any(~np.isnan(mean_fano_factors))
-
+    for cell_type_idx, panel in enumerate(axes):
+        mean, std = _mean_std_fano(fano_per_window, cell_type_indices == cell_type_idx)
+        has_valid_data = np.any(~np.isnan(mean))
         if has_valid_data:
-            # Plot mean line with colored dashed line
-            ax.plot(
-                window_sizes_s,
-                mean_fano_factors,
-                linestyle="--",
-                linewidth=2,
-                color=colors_map[cell_type_idx],
-                alpha=0.8,
-                zorder=2,
-            )
-
-            # Plot points and error bars in black
-            ax.errorbar(
-                window_sizes_s,
-                mean_fano_factors,
-                yerr=std_fano_factors,
-                fmt="o",
-                capsize=5,
-                markersize=8,
-                color="black",
-                ecolor="black",
-                capthick=1.5,
-                elinewidth=1.5,
-                alpha=0.6,
-                zorder=3,
-            )
-
-            # Fill between mean +/- std with transparent color
-            ax.fill_between(
-                window_sizes_s,
-                mean_fano_factors - std_fano_factors,
-                mean_fano_factors + std_fano_factors,
-                color=colors_map[cell_type_idx],
-                alpha=0.2,
-                zorder=1,
-            )
-
-            ax.set_xlabel("Window Size (s)")
-            ax.set_ylabel("Mean Fano Factor")
-            ax.set_title(f"{cell_type_names[cell_type_idx].capitalize()}")
-            ax.tick_params()
-            # Only set log scale if we have positive window sizes
+            _plot_fano_panel(panel, window_sizes_s, mean, std, colors[cell_type_idx])
+        else:
+            centered_message(panel, "No spikes detected")
+        panel.set_xlabel("Window Size (s)")
+        panel.set_ylabel("Mean Fano Factor")
+        panel.set_title(f"{cell_type_names[cell_type_idx].capitalize()}")
+        panel.tick_params()
+        if has_valid_data:
             if len(window_sizes_s) > 0 and np.all(np.array(window_sizes_s) > 0):
-                ax.set_xscale("log")
-            ax.axhline(
+                panel.set_xscale("log")
+            panel.axhline(
                 1.0, color="black", linestyle="-", linewidth=1.5, alpha=0.7, zorder=1
             )
-            ax.grid(True, alpha=0.3, which="both")
-        else:
-            # No valid data - display message
-            ax.text(
-                0.5,
-                0.5,
-                "No spikes detected",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
-            ax.set_xlabel("Window Size (s)")
-            ax.set_ylabel("Mean Fano Factor")
-            ax.set_title(f"{cell_type_names[cell_type_idx].capitalize()}")
-            ax.tick_params()
+            panel.grid(True, alpha=0.3, which="both")
 
-    # Ensure shared y-axis range across all subplots
+    # Shared y range across cell types
     if n_cell_types > 1:
-        all_ylims = [ax.get_ylim() for ax in axes]
+        all_ylims = [panel.get_ylim() for panel in axes]
         global_ymin = min(ylim[0] for ylim in all_ylims)
         global_ymax = max(ylim[1] for ylim in all_ylims)
-        for ax in axes:
-            ax.set_ylim(global_ymin, global_ymax)
+        for panel in axes:
+            panel.set_ylim(global_ymin, global_ymax)
 
-    if return_fig:
-        plt.tight_layout()
+    return finish_figure(fig, owns_figure)
 
-    return fig if return_fig else None
+
+# ── CV and ISI histograms ────────────────────────────────────────────────────
+
+
+def _valid_cv_for_type(cv_values: NDArray, mask: NDArray) -> NDArray:
+    """Non-NaN CVs of the neurons in ``mask`` (``cv_values`` is 1-D or 2-D)."""
+    if cv_values.ndim == 1:
+        cv_cell_type = cv_values[mask]
+    else:
+        cv_cell_type = cv_values[:, mask].flatten()
+    return cv_cell_type[~np.isnan(cv_cell_type)]
 
 
 def plot_cv_histogram(
@@ -206,128 +235,66 @@ def plot_cv_histogram(
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
+    colors = cell_type_palette(n_cell_types)
 
-    # Define colors: red, blue, then tab10 colormap for additional types
-    from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
-
-    base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-    if n_cell_types <= 2:
-        colors_map = base_colors[:n_cell_types]
-    else:
-        cmap = plt.cm.get_cmap("tab10")
-        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-        colors_map = base_colors + additional_colors
-
-    # Compute CV for all neurons (convert dt from ms to s)
-    # Returns (neurons,) or (patterns, neurons) - no batch dimension
+    # (neurons,) or (patterns, neurons); dt converted from ms to s
     cv_values = compute_spike_train_cv(spike_trains, dt=dt * 1e-3)
+    cv_by_type = [
+        _valid_cv_for_type(cv_values, cell_type_indices == i)
+        for i in range(n_cell_types)
+    ]
 
-    # Collect all CV values to determine global x-axis range and shared bins
-    all_cv_valid = []
-    for i in range(n_cell_types):
-        cell_type_mask = cell_type_indices == i
-        # Handle both 1D (neurons,) and 2D (patterns, neurons) shapes
-        if cv_values.ndim == 1:
-            cv_cell_type = cv_values[cell_type_mask]
-        else:
-            cv_cell_type = cv_values[:, cell_type_mask].flatten()
-        cv_valid = cv_cell_type[~np.isnan(cv_cell_type)]
-        if len(cv_valid) > 0:
-            all_cv_valid.extend(cv_valid)
-
-    # Determine shared x-axis range and bins
-    if len(all_cv_valid) > 0:
-        x_min = min(all_cv_valid)
-        x_max = max(all_cv_valid)
-        # Add 5% padding
+    # Shared x range (5% padding, floored at 0) and bins across cell types
+    all_cv_valid = [cv for cv in cv_by_type if len(cv) > 0]
+    if all_cv_valid:
+        all_cv_valid = np.concatenate(all_cv_valid)
+        x_min, x_max = all_cv_valid.min(), all_cv_valid.max()
         x_range = x_max - x_min
         x_min = max(0, x_min - 0.05 * x_range)
         x_max = x_max + 0.05 * x_range
         bin_edges = np.linspace(x_min, x_max, bins + 1)
     else:
-        bin_edges = bins  # Fallback to automatic binning if no data
+        bin_edges = bins  # automatic binning if there is no data
         x_min, x_max = 0, 2
 
-    # Handle axes parameter
-    if ax is None:
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = True
-        if n_cell_types == 1:
-            axes = [axes]
-    elif isinstance(ax, list):
-        # List of axes provided
-        if len(ax) != n_cell_types:
-            raise ValueError(f"Expected {n_cell_types} axes, got {len(ax)}")
-        axes = ax
-        fig = axes[0].get_figure()
-        return_fig = False
-    else:
-        # Single axis provided - create our own figure
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = False
-        if n_cell_types == 1:
-            axes = [axes]
-
-    # Plot each cell type
-    for i in range(n_cell_types):
-        ax_i = axes[i]
-
-        # Get CV values for this cell type
-        cell_type_mask = cell_type_indices == i
-        # Handle both 1D (neurons,) and 2D (patterns, neurons) shapes
-        if cv_values.ndim == 1:
-            cv_cell_type = cv_values[cell_type_mask]
+    fig, axes, owns_figure = _cell_type_row(ax, n_cell_types)
+    for i, panel in enumerate(axes):
+        title = f"{cell_type_names[i].capitalize()}"
+        if len(cv_by_type[i]) > 0:
+            _plot_count_histogram(
+                panel,
+                cv_by_type[i],
+                bin_edges,
+                colors[i],
+                title=title,
+                xlabel="Coefficient of Variation (CV)",
+                mean_fmt="Mean: {:.2f}",
+                xlim=(x_min, x_max),
+            )
         else:
-            cv_cell_type = cv_values[:, cell_type_mask].flatten()
-        cv_valid = cv_cell_type[~np.isnan(cv_cell_type)]
+            centered_message(panel, "No valid CV values")
+            panel.tick_params()
+            panel.set_title(title)
+            panel.set_xlim(x_min, x_max)
 
-        if len(cv_valid) > 0:
-            # Plot histogram with shared bins
-            ax_i.hist(
-                cv_valid,
-                bins=bin_edges,
-                alpha=0.6,
-                edgecolor="black",
-                linewidth=1.2,
-                color=colors_map[i],
-                label=f"n={len(cv_valid)}",
-            )
-            ax_i.axvline(
-                cv_valid.mean(),
-                color="gray",
-                linestyle="--",
-                linewidth=2,
-                alpha=0.6,
-                label=f"Mean: {cv_valid.mean():.2f}",
-            )
-            ax_i.set_xlabel("Coefficient of Variation (CV)")
-            ax_i.set_ylabel("Count")
-            ax_i.set_title(f"{cell_type_names[i].capitalize()}")
-            ax_i.tick_params()
-            ax_i.set_xlim(x_min, x_max)
-            ax_i.legend()
-            ax_i.grid(True, alpha=0.3, axis="y")
-        else:
-            ax_i.text(
-                0.5,
-                0.5,
-                "No valid CV values",
-                ha="center",
-                va="center",
-                transform=ax_i.transAxes,
-            )
-            ax_i.tick_params()
-            ax_i.set_title(f"{cell_type_names[i].capitalize()}")
-            ax_i.set_xlim(x_min, x_max)
+    return finish_figure(fig, owns_figure)
 
-    if return_fig:
-        plt.tight_layout()
 
-    return fig if return_fig else None
+def _isis_by_cell_type(
+    spike_trains: NDArray, cell_type_indices: NDArray, n_cell_types: int, dt: float
+) -> list[list[NDArray]]:
+    """Per cell type, a list of ISI arrays (s), one per neuron/batch with >= 2 spikes."""
+    batch_size = spike_trains.shape[0]
+    time_step = dt * 1e-3
+    isis_by_type = [[] for _ in range(n_cell_types)]
+    for cell_type_idx in range(n_cell_types):
+        for neuron_idx in np.where(cell_type_indices == cell_type_idx)[0]:
+            for batch_idx in range(batch_size):
+                spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
+                if len(spike_indices) >= 2:
+                    isis = np.diff(spike_indices.astype(np.float32)) * time_step
+                    isis_by_type[cell_type_idx].append(isis)
+    return isis_by_type
 
 
 def plot_isi_histogram(
@@ -341,6 +308,8 @@ def plot_isi_histogram(
     """
     Plot histogram of inter-spike intervals (ISIs) split by cell type.
 
+    The shared x range runs from 0 to the 99.5th percentile of all ISIs.
+
     Args:
         spike_trains (NDArray[np.int32]): Spike trains of shape (batch_size, n_steps, n_neurons).
         cell_type_indices (NDArray[np.int32]): Array of cell type indices for each neuron.
@@ -348,143 +317,47 @@ def plot_isi_histogram(
         dt (float): Time step duration in milliseconds for converting time steps to seconds.
             Defaults to 1.0.
         bins (int): Number of histogram bins.
-        ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
+        ax (plt.Axes | list[plt.Axes] | None): Matplotlib axes to plot on: None to
+            create a new figure, or a list of axes (one per cell type).
 
     Returns:
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
+    colors = cell_type_palette(n_cell_types)
+    isis_by_type = _isis_by_cell_type(spike_trains, cell_type_indices, n_cell_types, dt)
 
-    # Define colors: red, blue, then tab10 colormap for additional types
-    from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
-
-    base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-    if n_cell_types <= 2:
-        colors_map = base_colors[:n_cell_types]
-    else:
-        cmap = plt.cm.get_cmap("tab10")
-        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-        colors_map = base_colors + additional_colors
-
-    batch_size, n_steps, n_neurons = spike_trains.shape
-
-    # Create time indices in seconds (dt is in milliseconds)
-    time_step = dt * 1e-3
-
-    # Vectorized ISI computation - collect ISIs for each cell type
-    isis_by_type = [[] for _ in range(n_cell_types)]
-
-    # Process all neurons and batches - vectorized over batches where possible
-    for cell_type_idx in range(n_cell_types):
-        cell_type_mask = cell_type_indices == cell_type_idx
-        neuron_indices = np.where(cell_type_mask)[0]
-
-        for neuron_idx in neuron_indices:
-            # Process all batches for this neuron
-            for batch_idx in range(batch_size):
-                # Find spike indices for this neuron in this batch
-                spike_indices = np.where(spike_trains[batch_idx, :, neuron_idx] > 0)[0]
-
-                # Need at least 2 spikes to compute ISIs
-                if len(spike_indices) >= 2:
-                    # Compute ISIs directly from indices (more efficient)
-                    isis = np.diff(spike_indices.astype(np.float32)) * time_step
-                    isis_by_type[cell_type_idx].append(isis)
-
-    # Collect all ISIs across cell types to determine global x-axis limit and shared bins
-    all_isis_combined = []
-    for i in range(n_cell_types):
-        if len(isis_by_type[i]) > 0:
-            all_isis_array = np.concatenate(isis_by_type[i])
-            all_isis_combined.append(all_isis_array)
-
-    # Compute 99.5th percentile for x-axis limit and create shared bin edges
-    if len(all_isis_combined) > 0:
-        all_isis_flat = np.concatenate(all_isis_combined)
-        x_limit = np.percentile(all_isis_flat, 99.5)
-        # Create shared bin edges from 0 to x_limit
+    all_isis_combined = [np.concatenate(isis) for isis in isis_by_type if isis]
+    if all_isis_combined:
+        x_limit = np.percentile(np.concatenate(all_isis_combined), 99.5)
         bin_edges = np.linspace(0, x_limit, bins + 1)
     else:
         x_limit = None
-        bin_edges = bins  # Fallback to automatic binning if no data
+        bin_edges = bins  # automatic binning if there is no data
 
-    # Handle axes parameter
-    if ax is None:
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = True
-        if n_cell_types == 1:
-            axes = [axes]
-    elif isinstance(ax, list):
-        # List of axes provided
-        if len(ax) != n_cell_types:
-            raise ValueError(f"Expected {n_cell_types} axes, got {len(ax)}")
-        axes = ax
-        fig = axes[0].get_figure()
-        return_fig = False
-    else:
-        # Single axis provided - create our own figure
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = False
-        if n_cell_types == 1:
-            axes = [axes]
-
-    # Plot each cell type
-    for i in range(n_cell_types):
-        ax_i = axes[i]
-
-        if len(isis_by_type[i]) > 0:
-            # Concatenate all ISIs for this cell type
-            isis_np = np.concatenate(isis_by_type[i])
-
-            # Plot histogram with shared bin edges
-            ax_i.hist(
-                isis_np,
-                bins=bin_edges,
-                alpha=0.6,
-                edgecolor="black",
-                linewidth=1.2,
-                color=colors_map[i],
-                label=f"n={len(isis_np)}",
+    fig, axes, owns_figure = _cell_type_row(ax, n_cell_types)
+    for i, panel in enumerate(axes):
+        title = f"{cell_type_names[i].capitalize()}"
+        if isis_by_type[i]:
+            _plot_count_histogram(
+                panel,
+                np.concatenate(isis_by_type[i]),
+                bin_edges,
+                colors[i],
+                title=title,
+                xlabel="Inter-Spike Interval (s)",
+                mean_fmt="Mean: {:.4f} s",
+                xlim=(0, x_limit) if x_limit is not None else None,
             )
-            ax_i.axvline(
-                isis_np.mean(),
-                color="gray",
-                linestyle="--",
-                linewidth=2,
-                alpha=0.6,
-                label=f"Mean: {isis_np.mean():.4f} s",
-            )
-            ax_i.set_xlabel("Inter-Spike Interval (s)")
-            ax_i.set_ylabel("Count")
-            ax_i.set_title(f"{cell_type_names[i].capitalize()}")
-            ax_i.tick_params()
-
-            # Set x-axis limit to 98th percentile for better resolution
-            if x_limit is not None:
-                ax_i.set_xlim(0, x_limit)
-
-            ax_i.legend()
-            ax_i.grid(True, alpha=0.3, axis="y")
         else:
-            ax_i.text(
-                0.5,
-                0.5,
-                "No ISIs found",
-                ha="center",
-                va="center",
-                transform=ax_i.transAxes,
-            )
-            ax_i.tick_params()
-            ax_i.set_title(f"{cell_type_names[i].capitalize()}")
+            centered_message(panel, "No ISIs found")
+            panel.tick_params()
+            panel.set_title(title)
 
-    if return_fig:
-        plt.tight_layout()
+    return finish_figure(fig, owns_figure)
 
-    return fig if return_fig else None
+
+# ── Population activity ──────────────────────────────────────────────────────
 
 
 def plot_psth(
@@ -513,110 +386,127 @@ def plot_psth(
     Returns:
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    batch_size, n_steps, n_neurons = spike_trains.shape
-    n_cell_types = len(cell_type_names)
+    batch_size, n_steps, _ = spike_trains.shape
+    colors = cell_type_palette(len(cell_type_names))
+    time_s = np.arange(n_steps) * dt * 1e-3  # one bin centre per time step
+    fig, ax, owns_figure = figure_and_axes(ax, figsize=(12, 6))
 
-    # Define colors: red, blue, then tab10 colormap for additional types
-    from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
-
-    base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-    if n_cell_types <= 2:
-        colors_map = base_colors[:n_cell_types]
-    else:
-        cmap = plt.cm.get_cmap("tab10")
-        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-        colors_map = base_colors + additional_colors
-
-    # Convert window size to timesteps
-    window_steps = int(np.round(window_size / dt))
-
-    # Create time array for bin centers (one bin per timestep)
-    time_centers = np.arange(n_steps) * dt * 1e-3  # Convert to seconds
-
-    # Create figure
-    if ax is None:
-        fig, ax_to_use = plt.subplots(figsize=(12, 6))
-        return_fig = True
-    else:
-        fig = ax.get_figure()
-        ax_to_use = ax
-        return_fig = False
-
-    # Calculate PSTH for each cell type using vectorized convolution
-    for cell_type_idx in range(n_cell_types):
-        cell_type_mask = cell_type_indices == cell_type_idx
-        n_neurons_type = cell_type_mask.sum()
-
+    for cell_type_idx, cell_type_name in enumerate(cell_type_names):
+        mask = cell_type_indices == cell_type_idx
+        n_neurons_type = mask.sum()
         if n_neurons_type == 0:
             continue
-
-        # Sum spikes across neurons of this type and all batches
-        spike_counts = spike_trains[:, :, cell_type_mask].sum(
-            axis=(0, 2)
-        )  # Shape: (n_steps,)
-
-        # Use convolution for efficient sliding window operation
-        # Create uniform kernel that sums over the window (not averages)
-        kernel = np.ones(window_steps)
-
-        # Apply convolution with 'same' mode to keep same length
-        # This gives us the total spike count in each overlapping window
-        convolved = np.convolve(spike_counts, kernel, mode="same")
-
-        # Convert to firing rate: spikes per window -> Hz
-        # Normalize by window duration (in seconds), number of neurons, and number of batches
-        firing_rates = convolved / (window_size * 1e-3) / n_neurons_type / batch_size
-
-        # Plot PSTH
-        cell_name_capitalized = cell_type_names[cell_type_idx].capitalize()
-        ax_to_use.plot(
-            time_centers,
-            firing_rates,
-            color=colors_map[cell_type_idx],
+        spike_counts = spike_trains[:, :, mask].sum(axis=(0, 2))  # (n_steps,)
+        ax.plot(
+            time_s,
+            _population_rate(spike_counts, window_size, dt, n_neurons_type, batch_size),
+            color=colors[cell_type_idx],
             linewidth=1,
             alpha=0.6,
-            label=f"{cell_name_capitalized} (n={n_neurons_type})",
+            label=f"{cell_type_name.capitalize()} (n={n_neurons_type})",
         )
 
-    # Plot feedforward input if provided
     if input_spike_trains is not None:
         n_inputs = input_spike_trains.shape[2]
-        spike_counts_ff = input_spike_trains.sum(
-            axis=(0, 2)
-        )  # Sum across batches and inputs
-        kernel = np.ones(window_steps)
-        convolved_ff = np.convolve(spike_counts_ff, kernel, mode="same")
-        firing_rates_ff = convolved_ff / (window_size * 1e-3) / n_inputs / batch_size
-        ax_to_use.plot(
-            time_centers,
-            firing_rates_ff,
-            color="#808080",  # Gray
+        spike_counts_ff = input_spike_trains.sum(axis=(0, 2))
+        ax.plot(
+            time_s,
+            _population_rate(spike_counts_ff, window_size, dt, n_inputs, batch_size),
+            color=FEEDFORWARD_COLOR,
             linewidth=1,
             alpha=0.6,
             label=f"Feedforward (n={n_inputs})",
         )
 
-    ax_to_use.set_xlabel("Time (s)")
-    ax_to_use.set_ylabel("Firing Rate (Hz)")
-    ax_to_use.tick_params()
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Firing Rate (Hz)")
+    ax.tick_params()
+    ax.set_title(title if title is not None else "Population Activity")
+    set_time_xlim([ax], 0, (n_steps - 1) * dt * 1e-3)
+    ax.legend(loc="upper right")
+    ax.grid(True, alpha=0.3)
+    return finish_figure(fig, owns_figure)
 
-    if title is None:
-        title = "Population Activity"
-    ax_to_use.set_title(title)
 
-    # Set xlim to span full time range with no margins
-    # Set tight xlim with minimal extension for last tick
-    start_time_s = 0
-    end_time_s = (n_steps - 1) * dt * 1e-3
-    ax_to_use.set_xlim(start_time_s, end_time_s + 0.01)  # Add 0.01s for tick visibility
-    ax_to_use.margins(x=0)
+# ── Firing-rate distribution ─────────────────────────────────────────────────
 
-    ax_to_use.legend(loc="upper right")
-    ax_to_use.grid(True, alpha=0.3)
-    if return_fig:
-        plt.tight_layout()
 
-    return fig if return_fig else None
+def _set_log_decade_ticks(ax: plt.Axes, x_min: float, x_max: float) -> None:
+    """Ticks at the powers of ten within ``[0.9 * x_min, x_max]``, nicely labelled."""
+    log_min = np.floor(np.log10(x_min))
+    log_max = np.ceil(np.log10(x_max))
+    xticks = []
+    for exponent in range(int(log_min), int(log_max) + 1):
+        tick_val = 10**exponent
+        if tick_val > 0 and tick_val >= x_min * 0.9 and tick_val <= x_max:
+            xticks.append(tick_val)
+    ax.set_xticks(xticks)
+
+    xticklabels = []
+    for tick in xticks:
+        if tick < 1:
+            xticklabels.append(f"{tick:.2f}")
+        elif tick < 10:
+            xticklabels.append(f"{tick:.0f}")
+        else:
+            xticklabels.append(f"{int(tick)}")
+    ax.set_xticklabels(xticklabels)
+
+
+def _plot_rate_histogram_panel(
+    ax: plt.Axes, rates: NDArray, log_bins: NDArray, x_min: float, x_max: float, color
+) -> None:
+    """Log-binned rate histogram, mean line and a hatched bar counting silent neurons."""
+    rates_nonzero = rates[rates > 0]
+    n_silent = (rates == 0).sum()
+    legend_handles, legend_labels = [], []
+
+    hist_patches = ax.hist(
+        rates_nonzero, bins=log_bins, alpha=0.6, color=color, edgecolor="black"
+    )
+    legend_handles.append(hist_patches[2][0])
+    legend_labels.append(f"n={len(rates)}")
+
+    if len(rates) > 0:  # the mean includes silent neurons
+        mean_rate = rates.mean()
+        mean_line = ax.axvline(
+            mean_rate, alpha=0.6, color="gray", linestyle="--", linewidth=2
+        )
+        legend_handles.append(mean_line)
+        legend_labels.append(f"Mean = {mean_rate:.2f} Hz")
+
+    if n_silent > 0:
+        # Bar just left of the visible (log) range, annotated "0" underneath
+        bar_position = x_min * 0.6
+        bar_width = x_min * 0.2
+        silent_bar = ax.bar(
+            bar_position,
+            n_silent,
+            width=bar_width / 2,
+            alpha=0.6,
+            color=color,
+            edgecolor="black",
+            linewidth=1.0,
+            hatch="//",
+        )
+        ax.text(bar_position, -ax.get_ylim()[1] * 0.05, "0", ha="center", va="top")
+        legend_handles.append(silent_bar)
+        legend_labels.append(f"Silent: {n_silent}")
+    else:
+        legend_handles.append(ax.plot([], [], " ")[0])
+        legend_labels.append("Silent: 0")
+
+    ax.set_xlabel("Firing Rate (Hz)")
+    ax.set_ylabel("Count")
+    ax.tick_params()
+    if len(rates_nonzero) > 0 and x_min > 0:
+        ax.set_xscale("log")
+        ax.set_xlim(x_min * 0.5, x_max)
+        _set_log_decade_ticks(ax, x_min, x_max)
+    else:
+        ax.set_xlim(0, 1)
+    ax.legend(legend_handles, legend_labels)
+    ax.grid(True, alpha=0.3)
 
 
 def plot_firing_rate_distribution(
@@ -626,7 +516,10 @@ def plot_firing_rate_distribution(
     dt: float,
     ax: plt.Axes | list[plt.Axes] | None = None,
 ) -> plt.Figure | None:
-    """Plot distribution of firing rates in the Dp network by cell type.
+    """Plot distribution of firing rates in the recurrent network by cell type.
+
+    Rates are binned logarithmically over the range of nonzero rates shared by all
+    cell types; silent neurons are counted in a separate hatched bar.
 
     Args:
         output_spikes (NDArray[np.int32]): Spike array with shape (batch, time, neurons).
@@ -640,178 +533,32 @@ def plot_firing_rate_distribution(
         plt.Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
     n_cell_types = len(cell_type_names)
+    colors = cell_type_palette(n_cell_types)
 
-    # Define colors: red, blue, then tab10 colormap for additional types
-    from connectome_snns.visualization import EXCITATORY_COLOR, INHIBITORY_COLOR
-
-    base_colors = [EXCITATORY_COLOR, INHIBITORY_COLOR]
-    if n_cell_types <= 2:
-        colors_map = base_colors[:n_cell_types]
-    else:
-        cmap = plt.cm.get_cmap("tab10")
-        additional_colors = [cmap(i) for i in range(n_cell_types - 2)]
-        colors_map = base_colors + additional_colors
-
-    # Calculate duration from data shape
-    n_timesteps = output_spikes.shape[1]
-    duration_s = n_timesteps * dt * 1e-3  # Duration in seconds
-
-    # Calculate firing rates (spikes per second)
-    spike_counts = output_spikes[0].sum(axis=0)  # Total spikes per neuron
-    firing_rates = spike_counts / duration_s
-
-    # Filter out zero firing rates for log scale
+    duration_s = output_spikes.shape[1] * dt * 1e-3
+    firing_rates = output_spikes[0].sum(axis=0) / duration_s
     firing_rates_nonzero = firing_rates[firing_rates > 0]
 
-    # Handle axes parameter
-    if ax is None:
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = True
-        if n_cell_types == 1:
-            axes = [axes]
-    elif isinstance(ax, list):
-        # List of axes provided
-        if len(ax) != n_cell_types:
-            raise ValueError(f"Expected {n_cell_types} axes, got {len(ax)}")
-        axes = ax
-        fig = axes[0].get_figure()
-        return_fig = False
-    else:
-        # Single axis provided - create our own figure
-        fig, axes = plt.subplots(
-            1, n_cell_types, figsize=(6 * n_cell_types, 5), sharey=True
-        )
-        return_fig = False
-        if n_cell_types == 1:
-            axes = [axes]
+    fig, axes, owns_figure = _cell_type_row(ax, n_cell_types)
 
-    # Calculate global x-axis limits
     if len(firing_rates_nonzero) > 0:
-        global_x_min = firing_rates_nonzero.min()
-        global_x_max = firing_rates_nonzero.max()
+        x_min, x_max = firing_rates_nonzero.min(), firing_rates_nonzero.max()
     else:
-        global_x_min = 0.1
-        global_x_max = 10.0
+        x_min, x_max = 0.1, 10.0
+    log_bins = np.logspace(np.log10(x_min), np.log10(x_max), 30)
 
-    # Create logarithmically-spaced bins
-    log_bins = np.logspace(np.log10(global_x_min), np.log10(global_x_max), 30)
-
-    # Plot each cell type
-    for i in range(n_cell_types):
-        ax = axes[i]
-        cell_type_rates = firing_rates[cell_type_indices == i]
-        cell_type_rates_nonzero = cell_type_rates[cell_type_rates > 0]
-        n_silent = (cell_type_rates == 0).sum()
-
-        # Build legend handles and labels in the correct order
-        legend_handles = []
-        legend_labels = []
-
-        # 1. Plot histogram for non-zero rates (color)
-        hist_patches = ax.hist(
-            cell_type_rates_nonzero,
-            bins=log_bins,
-            alpha=0.6,
-            color=colors_map[i],
-            edgecolor="black",
+    for i, panel in enumerate(axes):
+        _plot_rate_histogram_panel(
+            panel,
+            firing_rates[cell_type_indices == i],
+            log_bins,
+            x_min,
+            x_max,
+            colors[i],
         )
-        legend_handles.append(hist_patches[2][0])  # Get first patch as handle
-        legend_labels.append(f"n={len(cell_type_rates)}")
+        panel.set_title(cell_type_names[i].capitalize())
 
-        # 2. Add mean line (includes silent neurons in mean)
-        if len(cell_type_rates) > 0:
-            mean_rate = cell_type_rates.mean()
-            mean_line = ax.axvline(
-                mean_rate,
-                alpha=0.6,
-                color="gray",
-                linestyle="--",
-                linewidth=2,
-            )
-            legend_handles.append(mean_line)
-            legend_labels.append(f"Mean = {mean_rate:.2f} Hz")
-
-        # 3. Add silent neurons
-        if n_silent > 0:
-            # Place bar just to the left of the visible range with annotation
-            bar_position = global_x_min * 0.6
-            bar_width = global_x_min * 0.2
-            silent_bar = ax.bar(
-                bar_position,
-                n_silent,
-                width=bar_width / 2,
-                alpha=0.6,
-                color=colors_map[i],
-                edgecolor="black",
-                linewidth=1.0,
-                hatch="//",
-            )
-            # Add text annotation below the bar
-            ax.text(
-                bar_position,
-                -ax.get_ylim()[1] * 0.05,
-                "0",
-                ha="center",
-                va="top",
-            )
-            legend_handles.append(silent_bar)
-            legend_labels.append(f"Silent: {n_silent}")
-        else:
-            # Add legend entry for zero silent neurons
-            empty_handle = ax.plot([], [], " ")[0]
-            legend_handles.append(empty_handle)
-            legend_labels.append("Silent: 0")
-
-        ax.set_xlabel("Firing Rate (Hz)")
-        ax.set_ylabel("Count")
-        ax.set_title(cell_type_names[i].capitalize())
-        ax.tick_params()
-
-        # Use regular log scale - bar at 0 will be handled separately
-        # Only set log scale if we have positive values
-        if len(cell_type_rates_nonzero) > 0 and global_x_min > 0:
-            ax.set_xscale("log")
-            ax.set_xlim(global_x_min * 0.5, global_x_max)
-
-            # Set nice round x-ticks: 0.01, 0.1, 1, 10, 100, etc. (excluding 0)
-            log_min = np.floor(np.log10(global_x_min))
-            log_max = np.ceil(np.log10(global_x_max))
-
-            xticks = []
-            for i_tick in range(int(log_min), int(log_max) + 1):
-                tick_val = 10**i_tick
-                # Exclude tick at 0 or below 0
-                if (
-                    tick_val > 0
-                    and tick_val >= global_x_min * 0.9
-                    and tick_val <= global_x_max
-                ):
-                    xticks.append(tick_val)
-
-            ax.set_xticks(xticks)
-
-            # Format tick labels nicely
-            xticklabels = []
-            for tick in xticks:
-                if tick < 1:
-                    xticklabels.append(f"{tick:.2f}")
-                elif tick < 10:
-                    xticklabels.append(f"{tick:.0f}")
-                else:
-                    xticklabels.append(f"{int(tick)}")
-            ax.set_xticklabels(xticklabels)
-        else:
-            ax.set_xlim(0, 1)
-
-        ax.legend(legend_handles, legend_labels)
-        ax.grid(True, alpha=0.3)
-
-    if return_fig:
-        plt.tight_layout()
-
-    return fig if return_fig else None
+    return finish_figure(fig, owns_figure)
 
 
 def plot_assembly_population_activity(
@@ -840,98 +587,68 @@ def plot_assembly_population_activity(
         excitatory_idx (int): Index of excitatory cell type. Defaults to 0.
         ax (plt.Axes | None): Matplotlib axes to plot on. If None, creates new figure.
         title (str | None): Optional custom title. If None, uses default title.
+        colors (list | None): One colour per assembly. Defaults to ``tab10``.
 
     Returns:
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    batch_size, n_steps, n_neurons = spike_trains.shape
+    batch_size, n_steps, _ = spike_trains.shape
 
-    # Filter for excitatory neurons only
     excitatory_mask = cell_type_indices == excitatory_idx
     excitatory_spikes = spike_trains[:, :, excitatory_mask]
     excitatory_assembly_ids = assembly_ids[excitatory_mask]
 
-    # Get unique assembly IDs (excluding -1 for unassigned neurons)
     unique_assemblies = np.unique(excitatory_assembly_ids)
-    unique_assemblies = unique_assemblies[unique_assemblies >= 0]  # Remove -1
+    unique_assemblies = unique_assemblies[unique_assemblies >= 0]  # drop unassigned
     n_assemblies = len(unique_assemblies)
-
     if n_assemblies == 0:
         raise ValueError("No assemblies found with assigned neurons")
 
-    # Generate colors for assemblies
     if colors is None:
-        cmap = plt.cm.get_cmap("tab10")
+        cmap = plt.colormaps["tab10"]
         colors = [cmap(i % 10) for i in range(n_assemblies)]
 
-    # Convert window size to timesteps
-    window_steps = int(np.round(window_size / dt))
+    time_s = np.arange(n_steps) * dt * 1e-3
+    fig, ax, owns_figure = figure_and_axes(ax, figsize=(12, 6))
 
-    # Create time array for bin centers (one bin per timestep)
-    time_centers = np.arange(n_steps) * dt * 1e-3  # Convert to seconds
-
-    # Create figure
-    if ax is None:
-        fig, ax_to_use = plt.subplots(figsize=(12, 6))
-        return_fig = True
-    else:
-        fig = ax.get_figure()
-        ax_to_use = ax
-        return_fig = False
-
-    # Calculate smoothed activity for each assembly
     for assembly_idx, assembly_id in enumerate(unique_assemblies):
-        # Get mask for neurons in this assembly
         assembly_mask = excitatory_assembly_ids == assembly_id
         n_neurons_assembly = assembly_mask.sum()
-
         if n_neurons_assembly == 0:
             continue
-
-        # Sum spikes across neurons in this assembly and all batches
-        spike_counts = excitatory_spikes[:, :, assembly_mask].sum(
-            axis=(0, 2)
-        )  # Shape: (n_steps,)
-
-        # Use convolution for efficient sliding window smoothing
-        kernel = np.ones(window_steps)
-        convolved = np.convolve(spike_counts, kernel, mode="same")
-
-        # Convert to firing rate: spikes per window -> Hz
-        firing_rates = (
-            convolved / (window_size * 1e-3) / n_neurons_assembly / batch_size
-        )
-
-        # Plot assembly activity
-        ax_to_use.plot(
-            time_centers,
-            firing_rates,
+        spike_counts = excitatory_spikes[:, :, assembly_mask].sum(axis=(0, 2))
+        ax.plot(
+            time_s,
+            _population_rate(
+                spike_counts, window_size, dt, n_neurons_assembly, batch_size
+            ),
             color=colors[assembly_idx],
             linewidth=1.5,
             alpha=0.7,
             label=f"Assembly {assembly_id}",
         )
 
-    ax_to_use.set_xlabel("Time (s)")
-    ax_to_use.set_ylabel("Firing Rate (Hz)")
-    ax_to_use.tick_params()
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Firing Rate (Hz)")
+    ax.tick_params()
+    ax.set_title(
+        title if title is not None else "Excitatory Assembly Population Activity"
+    )
+    set_time_xlim([ax], 0, (n_steps - 1) * dt * 1e-3)
+    ax.grid(True, alpha=0.3)
+    return finish_figure(fig, owns_figure)
 
-    if title is None:
-        title = "Excitatory Assembly Population Activity"
-    ax_to_use.set_title(title)
 
-    # Set xlim to span full time range
-    start_time_s = 0
-    end_time_s = (n_steps - 1) * dt * 1e-3
-    ax_to_use.set_xlim(start_time_s, end_time_s + 0.01)
-    ax_to_use.margins(x=0)
+# ── Trial-to-trial comparison ────────────────────────────────────────────────
 
-    ax_to_use.grid(True, alpha=0.3)
 
-    if return_fig:
-        plt.tight_layout()
-
-    return fig if return_fig else None
+def _windowed_rates(spikes: NDArray, window_steps: int, n_windows: int, dt: float):
+    """Rates (Hz) in consecutive non-overlapping windows, shape (n_windows, n_neurons)."""
+    n_neurons = spikes.shape[1]
+    windowed = spikes[: n_windows * window_steps, :].reshape(
+        n_windows, window_steps, n_neurons
+    )
+    return windowed.sum(axis=1) / (window_steps * dt * 1e-3)
 
 
 def plot_cross_correlation_scatter(
@@ -962,140 +679,78 @@ def plot_cross_correlation_scatter(
         title (str | None): Optional custom title. If None, uses default title.
         x_label (str | None): Custom label for x-axis. If None, uses default "Trial 1 Firing Rate (Hz)".
         y_label (str | None): Custom label for y-axis. If None, uses default "Trial 2 Firing Rate (Hz)".
+        max_rate (float | None): Axis limit for both axes. Defaults to the data maximum.
 
     Returns:
         Figure | None: Matplotlib figure object if ax is None, otherwise None.
     """
-    batch_size1, n_steps, n_neurons = spike_trains_trial1.shape
-    batch_size2, n_steps2, n_neurons2 = spike_trains_trial2.shape
-
+    _, n_steps, n_neurons = spike_trains_trial1.shape
+    _, n_steps2, n_neurons2 = spike_trains_trial2.shape
     if n_steps != n_steps2 or n_neurons != n_neurons2:
         raise ValueError(
             f"Spike train dimensions must match. Got trial1: ({n_steps}, {n_neurons}), "
             f"trial2: ({n_steps2}, {n_neurons2})"
         )
 
-    # Filter cells if specified
     if cell_indices is not None:
         spike_trains_trial1 = spike_trains_trial1[:, :, cell_indices]
         spike_trains_trial2 = spike_trains_trial2[:, :, cell_indices]
         n_neurons = len(cell_indices)
 
-    # Average over batches
-    spike_trains_trial1 = spike_trains_trial1.mean(
-        axis=0
-    )  # Shape: (n_steps, n_neurons)
-    spike_trains_trial2 = spike_trains_trial2.mean(
-        axis=0
-    )  # Shape: (n_steps, n_neurons)
-
-    # Convert window size from seconds to steps
-    window_steps = int(window_size * 1000 / dt)  # Convert s to ms, then to steps
-
-    # Calculate number of windows
+    window_steps = int(window_size * 1000 / dt)  # s -> ms -> steps
     n_windows = n_steps // window_steps
-
     if n_windows == 0:
         raise ValueError(
             f"Window size ({window_size}s = {window_steps} steps) is larger than "
             f"simulation duration ({n_steps} steps = {n_steps * dt / 1000}s)"
         )
 
-    # Reshape data into windows
-    # Truncate to fit complete windows
-    truncated_steps = n_windows * window_steps
-    spikes_trial1_windowed = spike_trains_trial1[:truncated_steps, :].reshape(
-        n_windows, window_steps, n_neurons
+    # Batch-averaged, windowed rates, flattened over (window, neuron) pairs
+    rates1 = _windowed_rates(
+        spike_trains_trial1.mean(axis=0), window_steps, n_windows, dt
     )
-    spikes_trial2_windowed = spike_trains_trial2[:truncated_steps, :].reshape(
-        n_windows, window_steps, n_neurons
+    rates2 = _windowed_rates(
+        spike_trains_trial2.mean(axis=0), window_steps, n_windows, dt
     )
+    rates1, rates2 = rates1.flatten(), rates2.flatten()
 
-    # Sum spikes within each window for each neuron
-    # Shape: (n_windows, n_neurons)
-    spike_counts_trial1 = spikes_trial1_windowed.sum(axis=1)
-    spike_counts_trial2 = spikes_trial2_windowed.sum(axis=1)
+    fig, ax, owns_figure = figure_and_axes(ax, figsize=(8, 8))
+    ax.scatter(rates1, rates2, alpha=0.3, s=10, color="steelblue", edgecolors="none")
 
-    # Convert to firing rates (Hz)
-    window_duration_s = window_steps * dt * 1e-3  # Convert to seconds
-    firing_rates_trial1 = spike_counts_trial1 / window_duration_s
-    firing_rates_trial2 = spike_counts_trial2 / window_duration_s
-
-    # Flatten to get all (neuron, window) pairs
-    firing_rates_trial1_flat = firing_rates_trial1.flatten()
-    firing_rates_trial2_flat = firing_rates_trial2.flatten()
-
-    # Create figure
-    if ax is None:
-        fig, ax_to_use = plt.subplots(figsize=(8, 8))
-        return_fig = True
-    else:
-        fig = ax.get_figure()
-        ax_to_use = ax
-        return_fig = False
-
-    # Create scatter plot
-    ax_to_use.scatter(
-        firing_rates_trial1_flat,
-        firing_rates_trial2_flat,
-        alpha=0.3,
-        s=10,
-        color="steelblue",
-        edgecolors="none",
-    )
-
-    # Add diagonal line (perfect correlation)
-    data_max = max(firing_rates_trial1_flat.max(), firing_rates_trial2_flat.max())
-    plot_max = max_rate if max_rate is not None else data_max
-    ax_to_use.plot(
+    plot_max = max_rate if max_rate is not None else max(rates1.max(), rates2.max())
+    ax.plot(
         [0, plot_max], [0, plot_max], "k--", alpha=0.5, linewidth=1.5, label="Unity"
     )
-    ax_to_use.set_xlim(0, plot_max)
-    ax_to_use.set_ylim(0, plot_max)
+    ax.set_xlim(0, plot_max)
+    ax.set_ylim(0, plot_max)
 
-    # Calculate correlation coefficient
-    corr_coef = np.corrcoef(firing_rates_trial1_flat, firing_rates_trial2_flat)[0, 1]
-
-    # Set axis labels with custom or default values
-    x_axis_label = x_label if x_label is not None else "Trial 1 Firing Rate (Hz)"
-    y_axis_label = y_label if y_label is not None else "Trial 2 Firing Rate (Hz)"
-
-    ax_to_use.set_xlabel(x_axis_label)
-    ax_to_use.set_ylabel(y_axis_label)
-    ax_to_use.tick_params(labelsize=10)
-
+    corr_coef = np.corrcoef(rates1, rates2)[0, 1]
+    ax.set_xlabel(x_label if x_label is not None else "Trial 1 Firing Rate (Hz)")
+    ax.set_ylabel(y_label if y_label is not None else "Trial 2 Firing Rate (Hz)")
+    ax.tick_params(labelsize=10)
     if title is None:
-        title = f"Cross-Correlation Scatter Plot (r={corr_coef:.3f})"
-    else:
-        title = f"{title} (r={corr_coef:.3f})"
-    ax_to_use.set_title(title, fontsize=12)
+        title = "Cross-Correlation Scatter Plot"
+    ax.set_title(f"{title} (r={corr_coef:.3f})", fontsize=12)
+    ax.legend(loc="upper left")
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect("equal", adjustable="box")
 
-    ax_to_use.legend(loc="upper left")
-    ax_to_use.grid(True, alpha=0.3)
-    ax_to_use.set_aspect("equal", adjustable="box")
-
-    # Add text box with stats
-    n_points = len(firing_rates_trial1_flat)
     stats_text = (
         f"Windows: {n_windows}\n"
         f"Cells: {n_neurons}\n"
-        f"Points: {n_points}\n"
+        f"Points: {len(rates1)}\n"
         f"Window: {window_size}s"
     )
-    ax_to_use.text(
+    ax.text(
         0.98,
         0.02,
         stats_text,
-        transform=ax_to_use.transAxes,
+        transform=ax.transAxes,
         verticalalignment="bottom",
         horizontalalignment="right",
         bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
     )
-
-    if return_fig:
-        plt.tight_layout()
-
-    return fig if return_fig else None
+    return finish_figure(fig, owns_figure)
 
 
 def plot_ou_process_weights(
@@ -1111,7 +766,7 @@ def plot_ou_process_weights(
 ) -> plt.Axes:
     """Plot latent mixing-weight trajectories driving the input rate process.
 
-    Each column of *weights* is one latent dimension (e.g. one odourant
+    Each column of *weights* is one latent dimension (e.g. one input pattern
     pattern) whose value evolves over time according to an OU process.
     The resulting plot shows how strongly each pattern contributes to the
     instantaneous feedforward firing rates.

@@ -18,9 +18,7 @@ class SurrGradSpike(torch.autograd.Function):
 
     @staticmethod
     def forward(input, scale):
-        out = torch.zeros_like(input)
-        out[input > 0] = 1.0
-        return out
+        return (input > 0).to(input.dtype)
 
     @staticmethod
     def setup_context(ctx, inputs, output):

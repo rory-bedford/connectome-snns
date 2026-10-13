@@ -1,5 +1,5 @@
 # Project-wide matplotlib style for connectome-SNN analysis notebooks.
-# Usage: from visualization import use_project_style; use_project_style()
+# Usage: from connectome_snns.visualization import use_project_style; use_project_style()
 
 figure.dpi: 120
 figure.figsize: 10, 6
